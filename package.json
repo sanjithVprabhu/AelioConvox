@@ -1,0 +1,35 @@
+{
+  "name": "aelio",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build --filter=@aelio/web-widget && turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test:e2e": "node scripts/test-phase2-widget.mjs",
+    "test:phase2": "node scripts/test-phase2-widget.mjs",
+    "test:phase3": "node scripts/test-phase3-whatsapp.mjs",
+    "test:phase4": "node scripts/test-phase4-confirmation.mjs && node scripts/test-phase4-magic-link.mjs && node scripts/test-phase4-whatsapp-identity.mjs",
+    "test:phase4:confirmation": "node scripts/test-phase4-confirmation.mjs",
+    "test:phase4:magic-link": "node scripts/test-phase4-magic-link.mjs",
+    "test:phase4:identity": "node scripts/test-phase4-whatsapp-identity.mjs",
+    "test:phase5": "tsx scripts/test-phase5-memory.mjs",
+    "test:all": "node scripts/run-tests.mjs",
+    "diagnostic": "node scripts/diagnostic.mjs",
+    "docker:build": "docker build -f docker/Dockerfile -t aelio/server:latest .",
+    "docker:up": "docker compose -f docker/docker-compose.yml up --build",
+    "docker:verify": "node scripts/docker-verify.mjs"
+  },
+  "devDependencies": {
+    "@aelio/core": "workspace:*",
+    "@aelio/db": "workspace:*",
+    "tsx": "^4.20.3",
+    "turbo": "^2.5.4",
+    "typescript": "^5.8.3",
+    "ws": "^8.18.2"
+  }
+}

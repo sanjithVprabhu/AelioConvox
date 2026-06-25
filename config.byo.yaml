@@ -1,0 +1,45 @@
+name: aelio-byo
+secret: ${AELIO_SDK_SECRET}
+
+llm:
+  provider: mock
+  model: mock-model
+  max_tokens: 4096
+
+channels:
+  whatsapp:
+    enabled: true
+    provider: sdk          # bring-your-own: inbound via ingest(), delivery via onSend
+    webhook_path: /wa/webhook
+  web:
+    enabled: true
+    allowed_origins:
+      - "*"
+
+safety:
+  default_mode: full
+  require_confirmation_for: [write, destructive]
+
+identity:
+  mapping_function: phone
+  allow_anonymous: true
+
+session:
+  idle_timeout_minutes: 60
+  history_window: 20
+  summarize_after: 50
+
+memory:
+  enabled: true
+  recall_limit: 5
+
+storage:
+  database_path: ./data/aelio-byo.db
+
+logging:
+  level: info
+  format: json
+
+server:
+  host: 0.0.0.0
+  port: 3000

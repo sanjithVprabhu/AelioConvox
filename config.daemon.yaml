@@ -1,0 +1,49 @@
+name: aelio-daemon
+secret: ${AELIO_SDK_SECRET}
+
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  api_key: ${OPENAI_API_KEY}
+  max_tokens: 512
+
+channels:
+  whatsapp:
+    enabled: false
+  web:
+    enabled: true
+    allowed_origins:
+      - "*"
+
+safety:
+  default_mode: full
+
+identity:
+  mapping_function: phone
+  allow_anonymous: true
+
+session:
+  idle_timeout_minutes: 60
+  history_window: 20
+  summarize_after: 50
+
+memory:
+  enabled: true
+  recall_limit: 5
+
+daemon:
+  enabled: true
+  interval_minutes: 1
+  max_per_cycle: 5
+  reflect_min_messages: 2
+
+storage:
+  database_path: ./data/aelio-daemon.db
+
+logging:
+  level: info
+  format: json
+
+server:
+  host: 0.0.0.0
+  port: 3000

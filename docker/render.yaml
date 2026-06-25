@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: aelio-server
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: AELIO_CONFIG
+        value: /app/config.yaml
+      - key: AELIO_SDK_SECRET
+        generateValue: true
+      - key: ANTHROPIC_API_KEY
+        sync: false
+    disk:
+      name: aelio-data
+      mountPath: /data
+      sizeGB: 1

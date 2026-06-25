@@ -1,0 +1,60 @@
+{
+  "name": "@aelio/sdk",
+  "version": "0.1.0",
+  "description": "Aelio SDK — expose your backend functions to the Aelio conversational runtime over a single outbound WebSocket. Your auth, DB, and business logic stay in your process.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "aelio",
+    "sdk",
+    "conversational",
+    "ai",
+    "agent",
+    "whatsapp",
+    "chatbot",
+    "llm",
+    "websocket"
+  ],
+  "homepage": "https://github.com/aelio-dev/aelio#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aelio-dev/aelio.git",
+    "directory": "packages/sdk-node"
+  },
+  "bugs": {
+    "url": "https://github.com/aelio-dev/aelio/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsup --watch"
+  },
+  "dependencies": {
+    "ws": "^8.18.2",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@aelio/protocol": "workspace:*",
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3"
+  }
+}

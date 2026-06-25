@@ -1,0 +1,350 @@
+import {
+  DEFAULT_SDK_PATH,
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_TIMEOUT_MS,
+  type Channel,
+  type FunctionDefinition,
+  type IngestMessage,
+  type InvocationContext,
+  type InvokeMessage,
+  type PingMessage,
+  type RegisterMessage,
+  type ResultMessage,
+  type SafetyLevel,
+  type SendInvokeMessage,
+  SdkToServerMessageSchema,
+  ServerToSdkMessageSchema,
+} from '@aelio/protocol';
+import WebSocket from 'ws';
+
+export type { Channel, InvocationContext, SafetyLevel };
+
+/** A reply Aelio is asking the SDK to deliver via the dev's own provider. */
+export type OutboundDelivery = {
+  channel: Channel;
+  to: string;
+  content: string;
+  metadata?: Record<string, unknown>;
+};
+
+/** An inbound message the dev received on their own channel webhook. */
+export type InboundIngest = {
+  channel: Channel;
+  from: string;
+  text: string;
+  messageId?: string;
+  metadata?: Record<string, unknown>;
+};
+
+type SendHandler = (delivery: OutboundDelivery) => Promise<void>;
+
+/** JSON-schema-ish primitive types a parameter can declare. */
+export type ParamType = 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object';
+
+/**
+ * How a single parameter is declared. Three interchangeable forms:
+ *   - `'string'`             → required string
+ *   - `'string?'`            → optional string (trailing `?`)
+ *   - `{ type, description?, optional?, enum?, format?, items? }` → full control
+ */
+export type ParamSpec =
+  | ParamType
+  | `${ParamType}?`
+  | {
+      type: ParamType;
+      description?: string;
+      optional?: boolean;
+      enum?: Array<string | number>;
+      format?: string;
+      items?: ParamSpec;
+      properties?: Record<string, ParamSpec>;
+    };
+
+export type FunctionSchema = {
+  description: string;
+  params: Record<string, ParamSpec>;
+  safety: SafetyLevel;
+};
+
+type ExposedHandler = (args: Record<string, unknown>, ctx: InvocationContext) => Promise<unknown>;
+
+type ListenOptions = {
+  secret: string;
+  url?: string;
+  sdkVersion?: string;
+};
+
+export class Aelio {
+  private readonly handlers = new Map<string, { handler: ExposedHandler; schema: FunctionSchema }>();
+  private sendHandler: SendHandler | null = null;
+  private ws: WebSocket | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private lastPongAt = 0;
+  private reconnectAttempt = 0;
+  private listenOptions: ListenOptions | null = null;
+  private shouldReconnect = false;
+
+  expose<T extends Record<string, unknown>, R>(
+    name: string,
+    handler: (args: T, ctx: InvocationContext) => Promise<R>,
+    schema: FunctionSchema,
+  ): void {
+    this.handlers.set(name, {
+      handler: handler as ExposedHandler,
+      schema,
+    });
+  }
+
+  /**
+   * Register a delivery handler so Aelio can send outbound messages through your
+   * own messaging provider (bring-your-own WhatsApp/SMS/etc.). Aelio invokes this
+   * automatically after each turn — it is NOT an LLM tool.
+   */
+  onSend(handler: SendHandler): void {
+    this.sendHandler = handler;
+  }
+
+  /**
+   * Hand Aelio an inbound message you received on your own channel webhook.
+   * You own the webhook + signature verification + provider parsing; Aelio takes
+   * over identity, memory, the LLM turn, safety, and the reply (via onSend).
+   */
+  ingest(message: InboundIngest): void {
+    this.send({
+      type: 'ingest',
+      channel: message.channel,
+      from: message.from,
+      text: message.text,
+      ...(message.messageId ? { messageId: message.messageId } : {}),
+      ...(message.metadata ? { metadata: message.metadata } : {}),
+    } satisfies IngestMessage);
+  }
+
+  async listen(opts: ListenOptions): Promise<void> {
+    this.listenOptions = opts;
+    this.shouldReconnect = true;
+    await this.connect();
+  }
+
+  async disconnect(): Promise<void> {
+    this.shouldReconnect = false;
+    this.clearHeartbeat();
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+  }
+
+  private async connect(): Promise<void> {
+    if (!this.listenOptions) {
+      throw new Error('listen() must be called before connecting');
+    }
+
+    const baseUrl = this.listenOptions.url ?? 'ws://127.0.0.1:3000';
+    const url = new URL(DEFAULT_SDK_PATH, baseUrl);
+    url.searchParams.set('secret', this.listenOptions.secret);
+
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(url);
+
+      ws.once('open', () => {
+        this.ws = ws;
+        this.reconnectAttempt = 0;
+        this.lastPongAt = Date.now();
+        this.sendRegister();
+        this.startHeartbeat();
+        resolve();
+      });
+
+      ws.once('error', (error) => {
+        reject(error);
+      });
+
+      ws.on('message', (raw) => {
+        void this.handleMessage(raw.toString());
+      });
+
+      ws.on('close', () => {
+        this.clearHeartbeat();
+        this.ws = null;
+        if (this.shouldReconnect) {
+          void this.scheduleReconnect();
+        }
+      });
+    });
+  }
+
+  private sendRegister(): void {
+    const functions: FunctionDefinition[] = [...this.handlers.entries()].map(([name, entry]) => ({
+      name,
+      description: entry.schema.description,
+      params: entry.schema.params,
+      safety: entry.schema.safety,
+    }));
+
+    const message: RegisterMessage = {
+      type: 'register',
+      sdkVersion: this.listenOptions?.sdkVersion ?? '0.1.0',
+      language: 'node',
+      functions,
+      canSend: this.sendHandler != null,
+    };
+
+    this.send(message);
+  }
+
+  private async handleMessage(raw: string): Promise<void> {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    const result = ServerToSdkMessageSchema.safeParse(parsed);
+    if (!result.success) {
+      return;
+    }
+
+    const message = result.data;
+    if (message.type === 'ping') {
+      this.handlePing(message);
+      return;
+    }
+
+    if (message.type === 'invoke') {
+      await this.handleInvoke(message);
+      return;
+    }
+
+    if (message.type === 'send') {
+      await this.handleSend(message);
+    }
+  }
+
+  private handlePing(message: PingMessage): void {
+    this.lastPongAt = Date.now();
+    this.send({ type: 'pong', ts: message.ts });
+  }
+
+  private async handleSend(message: SendInvokeMessage): Promise<void> {
+    const started = Date.now();
+
+    if (!this.sendHandler) {
+      this.send({
+        type: 'result',
+        id: message.id,
+        ok: false,
+        error: { code: 'NO_SEND_HANDLER', message: 'No onSend handler is registered' },
+        durationMs: Date.now() - started,
+      });
+      return;
+    }
+
+    try {
+      await this.sendHandler({
+        channel: message.channel,
+        to: message.to,
+        content: message.content,
+        ...(message.metadata ? { metadata: message.metadata } : {}),
+      });
+      this.send({ type: 'result', id: message.id, ok: true, durationMs: Date.now() - started });
+    } catch (error) {
+      this.send({
+        type: 'result',
+        id: message.id,
+        ok: false,
+        error: {
+          code: 'SEND_FAILED',
+          message: error instanceof Error ? error.message : 'Send handler failed',
+          retryable: true,
+        },
+        durationMs: Date.now() - started,
+      });
+    }
+  }
+
+  private async handleInvoke(message: InvokeMessage): Promise<void> {
+    const started = Date.now();
+    const entry = this.handlers.get(message.function);
+
+    if (!entry) {
+      this.send({
+        type: 'result',
+        id: message.id,
+        ok: false,
+        error: {
+          code: 'FUNCTION_NOT_FOUND',
+          message: `Function "${message.function}" is not registered`,
+        },
+        durationMs: Date.now() - started,
+      });
+      return;
+    }
+
+    try {
+      const data = await entry.handler(message.args, message.context);
+      const response: ResultMessage = {
+        type: 'result',
+        id: message.id,
+        ok: true,
+        data,
+        durationMs: Date.now() - started,
+      };
+      this.send(response);
+    } catch (error) {
+      const response: ResultMessage = {
+        type: 'result',
+        id: message.id,
+        ok: false,
+        error: {
+          code: 'HANDLER_ERROR',
+          message: error instanceof Error ? error.message : 'Unknown handler error',
+          retryable: false,
+        },
+        durationMs: Date.now() - started,
+      };
+      this.send(response);
+    }
+  }
+
+  private send(message: Parameters<typeof SdkToServerMessageSchema.parse>[0]): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    this.ws.send(JSON.stringify(message));
+  }
+
+  private startHeartbeat(): void {
+    this.clearHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      if (Date.now() - this.lastPongAt > HEARTBEAT_TIMEOUT_MS) {
+        this.ws?.terminate();
+        return;
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  private async scheduleReconnect(): Promise<void> {
+    const delay = Math.min(30_000, 1_000 * 2 ** this.reconnectAttempt);
+    this.reconnectAttempt += 1;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    if (!this.shouldReconnect) {
+      return;
+    }
+    try {
+      await this.connect();
+    } catch {
+      void this.scheduleReconnect();
+    }
+  }
+}
+
+export const aelio = new Aelio();

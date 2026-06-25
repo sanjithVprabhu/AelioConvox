@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aelio Widget Demo</title>
+    <style>
+      body {
+        font-family: Inter, system-ui, sans-serif;
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(180deg, #f8fafc, #e2e8f0);
+        color: #0f172a;
+      }
+      main {
+        max-width: 560px;
+        padding: 32px;
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 20px 50px rgba(15, 23, 42, 0.08);
+      }
+      code {
+        background: #f1f5f9;
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Aelio Web Widget Demo</h1>
+      <p>
+        Open the chat bubble and ask <code>what is my order status?</code> to trigger the SDK
+        function call through the full runtime loop.
+      </p>
+    </main>
+    <script
+      src="/widget.js"
+      data-customer-id="demo-user-123"
+      data-server-url="http://localhost:3000"
+    ></script>
+  </body>
+</html>

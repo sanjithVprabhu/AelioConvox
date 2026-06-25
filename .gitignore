@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.turbo/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+data/
+.DS_Store
+secrets.md
+*.pem
+*.key

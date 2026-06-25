@@ -1,0 +1,47 @@
+name: aelio-cache
+secret: ${AELIO_SDK_SECRET}
+
+llm:
+  provider: mock
+  model: mock-model
+  max_tokens: 4096
+
+channels:
+  whatsapp:
+    enabled: false
+  web:
+    enabled: true
+    allowed_origins:
+      - "*"
+
+safety:
+  default_mode: full
+
+identity:
+  mapping_function: phone
+  allow_anonymous: true
+
+session:
+  idle_timeout_minutes: 60
+  history_window: 20
+  summarize_after: 50
+
+memory:
+  enabled: true
+  recall_limit: 5
+
+cache:
+  enabled: true
+  similarity_threshold: 0.92
+  ttl_minutes: 60
+
+storage:
+  database_path: ./data/aelio-cache.db
+
+logging:
+  level: warn
+  format: json
+
+server:
+  host: 0.0.0.0
+  port: 3000

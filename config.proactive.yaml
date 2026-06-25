@@ -1,0 +1,51 @@
+name: aelio-proactive
+secret: ${AELIO_SDK_SECRET}
+
+llm:
+  provider: mock
+  model: mock-model
+  max_tokens: 4096
+
+channels:
+  whatsapp:
+    enabled: true
+    mock_mode: true
+    verify_token: test-verify-token
+    webhook_path: /wa/webhook
+  web:
+    enabled: true
+    allowed_origins:
+      - "*"
+
+safety:
+  default_mode: full
+
+identity:
+  mapping_function: phone
+  allow_anonymous: true
+
+session:
+  idle_timeout_minutes: 60
+  history_window: 20
+  summarize_after: 50
+
+memory:
+  enabled: true
+  recall_limit: 5
+
+proactive:
+  enabled: true
+  require_opt_in: true
+  max_per_customer_per_day: 2
+  window_hours: 24
+
+storage:
+  database_path: ./data/aelio-proactive.db
+
+logging:
+  level: warn
+  format: json
+
+server:
+  host: 0.0.0.0
+  port: 3000
