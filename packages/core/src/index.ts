@@ -1,4 +1,20 @@
-export { processTurn, type ProcessTurnInput } from './runtime/turn.js';
+export {
+  processTurn,
+  type ProcessTurnInput,
+  type ProcessTurnResult,
+} from './runtime/turn.js';
+export {
+  buildLlmPromptSummary,
+  createInstrumentedLlm,
+  getTurnContext,
+  listTurnApiCalls,
+  recordTurnApiCall,
+  runWithTurnContext,
+  summarizeTurnApiCalls,
+  type TurnApiCallPurpose,
+  type TurnApiCallRecord,
+  type TurnContext,
+} from './telemetry/index.js';
 export { runToolLoop, type ToolLoopResult } from './runtime/tool-loop.js';
 export {
   buildInputSchema,
@@ -28,7 +44,22 @@ export {
   ensureCustomer,
   findOrCreateSession,
   loadHistory,
+  touchSessionActivity,
 } from './session/lifecycle.js';
+export {
+  appendConversationRecord,
+  bootstrapSunjetTables,
+  buildConversationContext,
+  ConvoxMessageStore,
+  createConvoxMessageStore,
+  listConversationTelemetry,
+  type ConversationTelemetryEvent,
+  type ConversationTurnContext,
+  type MessageStoreAppendInput,
+  type MessageStoreHistoryRow,
+  type SunjetStorageConfig,
+  type SunjetTableNames,
+} from './storage/index.js';
 export { loadSessionSummary, maybeSummarizeSession } from './session/summary.js';
 export {
   getPendingConfirmation,
@@ -49,6 +80,26 @@ export {
   type PendingConfirmation,
 } from './safety/confirmations.js';
 export type { SdkBridge, SdkInvokeResult } from './sdk-bridge/types.js';
+export {
+  buildIntentStackPrompt,
+  expireIntentStack,
+  loadIntentStack,
+  saveIntentStack,
+  updateIntentStack,
+  type IntentFrame,
+  type IntentStack,
+  type IntentStackConfig,
+} from './intent/index.js';
+export {
+  buildLifecycleSystemPrompt,
+  filterFunctionsByState,
+  getCustomerLifecycleMetadata,
+  readLifecycleMetadata,
+  upsertCustomerFlowProgress,
+  upsertCustomerLifecycleState,
+  type CustomerLifecycleMetadata,
+  type FlowProgressRecord,
+} from './lifecycle/index.js';
 export { enqueueJob, claimJob, completeJob, failJob, type JobRecord } from './job-queue/index.js';
 export {
   embedText,

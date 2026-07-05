@@ -24,6 +24,15 @@ export type ToolDefinition = {
   input_schema: Record<string, unknown>;
 };
 
+export type LLMTelemetryMeta = {
+  purpose:
+    | 'chat_completion'
+    | 'tool_synthesis'
+    | 'session_summary'
+    | 'session_reflection';
+  iteration?: number;
+};
+
 export type LLMCompleteOptions = {
   messages: ChatMessage[];
   tools: ToolDefinition[];
@@ -31,6 +40,7 @@ export type LLMCompleteOptions = {
   model: string;
   maxTokens?: number;
   temperature?: number;
+  telemetry?: LLMTelemetryMeta;
 };
 
 export type LLMCompleteResult = {
@@ -44,7 +54,7 @@ export interface LLMProvider {
 }
 
 export type LLMProviderConfig = {
-  provider: 'anthropic' | 'openai' | 'groq' | 'ollama' | 'mock';
+  provider: 'anthropic' | 'openai' | 'gemini' | 'groq' | 'ollama' | 'mock';
   model: string;
   apiKey?: string;
   maxTokens?: number;

@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const tests = [
   { name: 'Phase 2 — Web widget', script: 'scripts/test-phase2-widget.mjs' },
@@ -24,8 +27,26 @@ function run(command, args, env = {}) {
   });
 }
 
-async function waitForHealth(url, attempts = 40) {
+async function getFreePort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  await new Promise((resolve) => server.close(resolve));
+  if (!port) {
+    throw new Error('Unable to allocate a local test port');
+  }
+  return port;
+}
+
+async function waitForHealth(url, child, getLogs, attempts = 40) {
   for (let i = 0; i < attempts; i += 1) {
+    if (child.exitCode !== null) {
+      throw new Error(`Server exited before becoming healthy:\n${getLogs()}`);
+    }
     try {
       const response = await fetch(`${url}/health`);
       if (response.ok) return;
@@ -57,23 +78,47 @@ async function waitForSdk(url, attempts = 40) {
 }
 
 const root = process.cwd();
-const baseUrl = 'http://127.0.0.1:3000';
+const tmpRoot = mkdtempSync(join(tmpdir(), 'aelio-test-run-'));
+const testPort = await getFreePort();
+const baseUrl = `http://127.0.0.1:${testPort}`;
+const wsUrl = `ws://127.0.0.1:${testPort}`;
+const configPath = join(tmpRoot, 'config.yaml');
+const dbPath = join(tmpRoot, 'aelio-test.db');
+
+const configTemplate = readFileSync(join(root, 'config.yaml'), 'utf8');
+const testConfig = configTemplate
+  .replace(/database_path:\s.*$/m, `database_path: ${dbPath}`)
+  .replace(/port:\s*\d+$/m, `port: ${testPort}`)
+  .replace(/- http:\/\/localhost:\d+$/m, `- ${baseUrl}`);
+writeFileSync(configPath, testConfig);
 
 const server = spawn('npx', ['tsx', 'src/main.ts'], {
   cwd: join(root, 'apps/server'),
-  stdio: 'inherit',
+  stdio: ['ignore', 'pipe', 'pipe'],
   env: {
     ...process.env,
-    AELIO_CONFIG: join(root, 'config.yaml'),
+    AELIO_CONFIG: configPath,
     AELIO_SDK_SECRET: process.env.AELIO_SDK_SECRET ?? 'change-me-in-production',
     AELIO_TEST_MODE: '1',
   },
 });
 
 let sdk = null;
+let serverOutput = '';
+server.stdout.on('data', (chunk) => {
+  const text = chunk.toString();
+  serverOutput += text;
+  process.stdout.write(text);
+});
+server.stderr.on('data', (chunk) => {
+  const text = chunk.toString();
+  serverOutput += text;
+  process.stderr.write(text);
+});
+const getServerLogs = () => serverOutput.slice(-8000);
 
 try {
-  await waitForHealth(baseUrl);
+  await waitForHealth(baseUrl, server, getServerLogs);
 
   sdk = spawn('npx', ['tsx', 'src/index.ts'], {
     cwd: join(root, 'examples/nodejs-express'),
@@ -81,7 +126,7 @@ try {
     env: {
       ...process.env,
       AELIO_SDK_SECRET: process.env.AELIO_SDK_SECRET ?? 'change-me-in-production',
-      AELIO_SERVER_URL: 'ws://127.0.0.1:3000',
+      AELIO_SERVER_URL: wsUrl,
     },
   });
 
@@ -91,7 +136,11 @@ try {
     console.log(`\n=== Running ${test.name} ===`);
     const runner = test.script.includes('phase5') ? 'npx' : 'node';
     const args = test.script.includes('phase5') ? ['tsx', test.script] : [test.script];
-    await run(runner, args, { AELIO_TEST_MODE: '1' });
+    await run(runner, args, {
+      AELIO_TEST_MODE: '1',
+      AELIO_SERVER_URL: baseUrl,
+      AELIO_WS_URL: wsUrl,
+    });
   }
 
   console.log('\nAll phase tests passed.');
@@ -102,4 +151,5 @@ try {
 } finally {
   server.kill('SIGTERM');
   sdk?.kill('SIGTERM');
+  rmSync(tmpRoot, { recursive: true, force: true });
 }

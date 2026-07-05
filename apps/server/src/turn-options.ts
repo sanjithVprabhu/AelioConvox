@@ -20,6 +20,8 @@ export function baseTurnOptions(
   | 'summarizeAfter'
   | 'memoryRecallLimit'
   | 'cache'
+  | 'intent'
+  | 'messageStore'
 > {
   return {
     database: deps.database,
@@ -50,6 +52,12 @@ export function baseTurnOptions(
       similarityThreshold: deps.config.cache.similarity_threshold,
       ttlMinutes: deps.config.cache.ttl_minutes,
     },
+    intent: {
+      enabled: deps.config.intent.enabled,
+      ttlMinutes: deps.config.intent.ttl_minutes,
+      maxDepth: deps.config.intent.max_depth,
+    },
+    messageStore: deps.messageStore ?? undefined,
   };
 }
 

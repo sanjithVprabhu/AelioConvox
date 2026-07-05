@@ -1,4 +1,10 @@
-import type { FunctionDefinition, InvocationContext } from '@aelio/protocol';
+import type {
+  FlowDefinition,
+  FunctionDefinition,
+  InvocationContext,
+  PolicyDefinition,
+  StateDefinition,
+} from '@aelio/protocol';
 
 export type SdkInvokeResult = {
   ok: boolean;
@@ -9,6 +15,9 @@ export type SdkInvokeResult = {
 
 export interface SdkBridge {
   getFunctions(): FunctionDefinition[];
+  getStates(): StateDefinition[];
+  getPolicies(): PolicyDefinition[];
+  getFlows(): FlowDefinition[];
   invoke(
     functionName: string,
     args: Record<string, unknown>,

@@ -1,5 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { z } from 'zod';
 
@@ -29,14 +30,14 @@ export const ConfigSchema = z.object({
   secret: z.string().min(1),
   llm: z
     .object({
-      provider: z.enum(['anthropic', 'openai', 'groq', 'ollama', 'mock']),
+      provider: z.enum(['anthropic', 'openai', 'gemini', 'groq', 'ollama', 'mock']),
       model: z.string().min(1),
       api_key: z.string().optional(),
       base_url: z.string().url().optional(),
       max_tokens: z.number().int().positive().default(4096),
       fallback: z
         .object({
-          provider: z.enum(['anthropic', 'openai', 'groq', 'ollama', 'mock']),
+          provider: z.enum(['anthropic', 'openai', 'gemini', 'groq', 'ollama', 'mock']),
           model: z.string().min(1),
           api_key: z.string().optional(),
           base_url: z.string().url().optional(),
@@ -44,10 +45,10 @@ export const ConfigSchema = z.object({
         .optional(),
     })
     .superRefine((value, ctx) => {
-      if (value.provider !== 'mock' && !value.api_key) {
+      if (!['mock', 'ollama'].includes(value.provider) && !value.api_key) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'api_key is required unless provider is mock',
+          message: 'api_key is required unless provider is mock or ollama',
           path: ['api_key'],
         });
       }
@@ -117,6 +118,13 @@ export const ConfigSchema = z.object({
       summarize_after: z.number().int().positive().default(50),
     })
     .default({}),
+  intent: z
+    .object({
+      enabled: z.boolean().default(true),
+      ttl_minutes: z.number().int().positive().default(20),
+      max_depth: z.number().int().positive().default(5),
+    })
+    .default({ enabled: true, ttl_minutes: 20, max_depth: 5 }),
   memory: z
     .object({
       enabled: z.boolean().default(true),
@@ -150,14 +158,24 @@ export const ConfigSchema = z.object({
     .default({ enabled: false, require_opt_in: true, max_per_customer_per_day: 5, window_hours: 24 }),
   embeddings: z
     .object({
-      // 'hash' = built-in local embedding (no deps, matches near-identical wording).
-      // 'openai'/'ollama' = a real semantic embedding model.
-      provider: z.enum(['hash', 'openai', 'ollama']).default('hash'),
+      // hash = built-in local (no API). openai | gemini | anthropic (Voyage) | ollama.
+      provider: z.enum(['hash', 'openai', 'anthropic', 'gemini', 'ollama']).default('hash'),
       model: z.string().default('text-embedding-3-small'),
       api_key: z.string().optional(),
       base_url: z.string().url().optional(),
+      // Match sunjet.embed_dim when using Sunjet vector columns (e.g. 1536 openai, 768 gemini).
+      output_dimension: z.number().int().positive().optional(),
     })
-    .default({ provider: 'hash', model: 'text-embedding-3-small' }),
+    .default({ provider: 'hash', model: 'text-embedding-3-small' })
+    .superRefine((value, ctx) => {
+      if (!['hash', 'ollama'].includes(value.provider) && !value.api_key) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'embeddings.api_key is required unless provider is hash or ollama',
+          path: ['api_key'],
+        });
+      }
+    }),
   cache: z
     .object({
       enabled: z.boolean().default(false),
@@ -167,6 +185,26 @@ export const ConfigSchema = z.object({
       ttl_minutes: z.number().int().positive().default(60),
     })
     .default({ enabled: false, similarity_threshold: 0.92, ttl_minutes: 60 }),
+  sunjet: z
+    .object({
+      enabled: z.boolean().default(false),
+      url: z.string().url().default('http://127.0.0.1:8080'),
+      api_key: z.string().optional(),
+      embed_dim: z.number().int().positive().default(1536),
+      timeout_ms: z.number().int().positive().default(30_000),
+      dual_write_sqlite: z.boolean().default(true),
+      fallback_sqlite_on_error: z.boolean().default(true),
+      tables: z
+        .object({
+          messages: z.string().min(1).default('convox_messages'),
+          conversations: z.string().min(1).default('convox_conversations'),
+          memories: z.string().min(1).default('convox_memories'),
+          compactions: z.string().min(1).default('convox_compactions'),
+          runtime_state: z.string().min(1).default('runtime_state'),
+        })
+        .default({}),
+    })
+    .default({}),
   storage: z.object({
     database_path: z.string().min(1),
     backup: z
@@ -193,8 +231,27 @@ export const ConfigSchema = z.object({
 
 export type AelioConfig = z.infer<typeof ConfigSchema>;
 
+const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+function resolveConfigPath(configPath: string): string {
+  const candidates = [
+    resolve(configPath),
+    resolve(process.cwd(), configPath),
+    resolve(serverRoot, configPath),
+    resolve(serverRoot, '../..', configPath),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return resolve(configPath);
+}
+
 export function loadConfig(configPath = process.env.AELIO_CONFIG ?? './config.yaml'): AelioConfig {
-  const absolutePath = resolve(configPath);
+  const absolutePath = resolveConfigPath(configPath);
   const raw = parse(readFileSync(absolutePath, 'utf8')) as unknown;
   const resolved = resolveEnvDeep(raw);
   const result = ConfigSchema.safeParse(resolved);

@@ -21,6 +21,7 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
       database: false,
       migrations: false,
       widget: false,
+      sunjet: !deps.config.sunjet.enabled,
     };
 
     try {
@@ -33,13 +34,29 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
     checks.migrations = existsSync(resolveMigrationsFolder());
     checks.widget = existsSync(resolvePublicDir() + '/widget.js');
 
-    const ready = checks.database && checks.migrations && checks.widget;
+    if (deps.config.sunjet.enabled) {
+      try {
+        if (deps.sunjetClient) {
+          const health = await deps.sunjetClient.health();
+          checks.sunjet = health.status === 'ok';
+        } else {
+          checks.sunjet = false;
+        }
+      } catch {
+        checks.sunjet = false;
+      }
+    }
+
+    const ready = checks.database && checks.migrations && checks.widget && checks.sunjet;
     const body = {
       ready,
       checks,
       sdk: {
         connected: deps.sdkBridge.getFunctions().length > 0,
         functions: deps.sdkBridge.getFunctions().map((fn) => fn.name),
+        states: deps.sdkBridge.getStates().map((state) => state.id),
+        policies: deps.sdkBridge.getPolicies().map((policy) => policy.id),
+        flows: deps.sdkBridge.getFlows().map((flow) => flow.id),
       },
       memory: {
         enabled: deps.config.memory.enabled,
@@ -50,6 +67,12 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
         whatsapp: deps.config.channels.whatsapp.enabled,
       },
       llm: deps.config.llm.provider,
+      sunjet: {
+        enabled: deps.config.sunjet.enabled,
+        url: deps.config.sunjet.url,
+        dualWriteSqlite: deps.config.sunjet.dual_write_sqlite,
+        messageBackend: deps.messageStore ? 'sunjet' : 'sqlite',
+      },
     };
 
     return reply.status(ready ? 200 : 503).send(body);

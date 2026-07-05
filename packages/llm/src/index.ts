@@ -1,5 +1,6 @@
 import { AnthropicProvider } from './anthropic.js';
 import { FallbackProvider } from './fallback.js';
+import { GeminiProvider } from './gemini.js';
 import { GroqProvider } from './groq.js';
 import { MockProvider } from './mock.js';
 import { OllamaProvider } from './ollama.js';
@@ -28,6 +29,11 @@ export function createLLMProvider(config: LLMProviderConfig): LLMProvider {
         throw new Error('OpenAI provider requires api_key');
       }
       return new OpenAIProvider(config.apiKey, config.maxTokens, config.baseUrl);
+    case 'gemini':
+      if (!config.apiKey) {
+        throw new Error('Gemini provider requires api_key');
+      }
+      return new GeminiProvider(config.apiKey, config.maxTokens, config.baseUrl);
     case 'groq':
       if (!config.apiKey) {
         throw new Error('Groq provider requires api_key');

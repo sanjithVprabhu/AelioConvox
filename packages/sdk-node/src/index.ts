@@ -3,15 +3,18 @@ import {
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_TIMEOUT_MS,
   type Channel,
+  type FlowDefinition,
   type FunctionDefinition,
   type IngestMessage,
   type InvocationContext,
   type InvokeMessage,
   type PingMessage,
+  type PolicyDefinition,
   type RegisterMessage,
   type ResultMessage,
   type SafetyLevel,
   type SendInvokeMessage,
+  type StateDefinition,
   SdkToServerMessageSchema,
   ServerToSdkMessageSchema,
 } from '@aelio/protocol';
@@ -66,6 +69,28 @@ export type FunctionSchema = {
   safety: SafetyLevel;
 };
 
+export type StateSchema = {
+  description: string;
+  allowedTools?: string[];
+  blockedTools?: string[];
+};
+
+export type PolicySchema = {
+  description: string;
+  severity?: 'hard' | 'soft';
+};
+
+export type FlowStepSchema = {
+  goal: string;
+  tool?: string;
+};
+
+export type FlowSchema = {
+  state: string;
+  description: string;
+  steps: Record<string, FlowStepSchema>;
+};
+
 type ExposedHandler = (args: Record<string, unknown>, ctx: InvocationContext) => Promise<unknown>;
 
 type ListenOptions = {
@@ -76,6 +101,9 @@ type ListenOptions = {
 
 export class Aelio {
   private readonly handlers = new Map<string, { handler: ExposedHandler; schema: FunctionSchema }>();
+  private readonly states = new Map<string, StateSchema>();
+  private readonly policies = new Map<string, PolicySchema>();
+  private readonly flows = new Map<string, FlowSchema>();
   private sendHandler: SendHandler | null = null;
   private ws: WebSocket | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -92,6 +120,54 @@ export class Aelio {
     this.handlers.set(name, {
       handler: handler as ExposedHandler,
       schema,
+    });
+  }
+
+  /**
+   * Declare a customer lifecycle state. The SaaS backend sets the active state
+   * per customer via setCustomerState(); Aelio keeps conversations within the
+   * state's boundaries until the stage changes.
+   */
+  state(id: string, schema: StateSchema): void {
+    this.states.set(id, schema);
+  }
+
+  /** Register a conversation policy enforced on every turn. */
+  policy(id: string, schema: PolicySchema): void {
+    this.policies.set(id, schema);
+  }
+
+  /**
+   * Register a guided multi-step flow scoped to a lifecycle state.
+   * steps is keyed by step id, e.g. { connect: { goal: '...' }, invite: { goal: '...' } }
+   */
+  flow(id: string, schema: FlowSchema): void {
+    this.flows.set(id, schema);
+  }
+
+  /** Push the current lifecycle state for a customer (your DB is source of truth). */
+  setCustomerState(customerId: string, stateId: string, reason?: string): void {
+    this.send({
+      type: 'set_state',
+      customerId,
+      stateId,
+      ...(reason ? { reason } : {}),
+    });
+  }
+
+  /** Update guided-flow progress for a customer. */
+  setFlowProgress(
+    customerId: string,
+    flowId: string,
+    stepIndex: number,
+    completedSteps?: string[],
+  ): void {
+    this.send({
+      type: 'set_flow_progress',
+      customerId,
+      flowId,
+      stepIndex,
+      ...(completedSteps ? { completedSteps } : {}),
     });
   }
 
@@ -182,11 +258,38 @@ export class Aelio {
       safety: entry.schema.safety,
     }));
 
+    const states: StateDefinition[] = [...this.states.entries()].map(([id, entry]) => ({
+      id,
+      description: entry.description,
+      ...(entry.allowedTools ? { allowedTools: entry.allowedTools } : {}),
+      ...(entry.blockedTools ? { blockedTools: entry.blockedTools } : {}),
+    }));
+
+    const policies: PolicyDefinition[] = [...this.policies.entries()].map(([id, entry]) => ({
+      id,
+      description: entry.description,
+      severity: entry.severity ?? 'soft',
+    }));
+
+    const flows: FlowDefinition[] = [...this.flows.entries()].map(([id, entry]) => ({
+      id,
+      state: entry.state,
+      description: entry.description,
+      steps: Object.entries(entry.steps).map(([stepId, step]) => ({
+        id: stepId,
+        goal: step.goal,
+        ...(step.tool ? { tool: step.tool } : {}),
+      })),
+    }));
+
     const message: RegisterMessage = {
       type: 'register',
       sdkVersion: this.listenOptions?.sdkVersion ?? '0.1.0',
       language: 'node',
       functions,
+      ...(states.length > 0 ? { states } : {}),
+      ...(policies.length > 0 ? { policies } : {}),
+      ...(flows.length > 0 ? { flows } : {}),
       canSend: this.sendHandler != null,
     };
 

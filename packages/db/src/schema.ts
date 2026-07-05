@@ -153,6 +153,37 @@ export const reflections = sqliteTable(
   ],
 );
 
+export const turnApiCalls = sqliteTable(
+  'turn_api_calls',
+  {
+    id: text('id').primaryKey(),
+    turnId: text('turn_id').notNull(),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id),
+    customerId: text('customer_id')
+      .notNull()
+      .references(() => customers.id),
+    sequence: integer('sequence').notNull(),
+    callType: text('call_type').notNull(), // 'llm' | 'embed'
+    purpose: text('purpose').notNull(),
+    model: text('model'),
+    iteration: integer('iteration'),
+    promptSummary: text('prompt_summary').notNull(),
+    inputPreview: text('input_preview'),
+    messageCount: integer('message_count'),
+    toolCount: integer('tool_count'),
+    toolNames: text('tool_names', { mode: 'json' }).$type<string[]>(),
+    stopReason: text('stop_reason'),
+    durationMs: integer('duration_ms'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('idx_turn_api_calls_turn').on(table.turnId, table.sequence),
+    index('idx_turn_api_calls_session').on(table.sessionId, table.createdAt),
+  ],
+);
+
 export const responseCache = sqliteTable(
   'response_cache',
   {
@@ -216,6 +247,7 @@ export const schema = {
   reflections,
   proactiveMessages,
   responseCache,
+  turnApiCalls,
 };
 
 export type DatabaseSchema = typeof schema;

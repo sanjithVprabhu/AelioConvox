@@ -1,5 +1,6 @@
 import type { AelioDatabase } from '@aelio/db';
 import { memory } from '@aelio/db';
+import { and, eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { embed } from './embeddings.js';
 
@@ -9,6 +10,7 @@ export type ExtractInput = {
   sessionId: string;
   userMessage: string;
   assistantReply: string;
+  turnId?: string;
 };
 
 function detectFacts(userMessage: string, assistantReply: string): Array<{ content: string; category: string }> {
@@ -63,8 +65,25 @@ export async function extractMemories(input: ExtractInput): Promise<string[]> {
   const stored: string[] = [];
 
   for (const fact of facts) {
+    // Dedup: the same durable fact (e.g. "frequently asks about order status")
+    // re-triggers on many turns — one row per customer per fact is enough.
+    const existing = await input.database.db
+      .select({ id: memory.id })
+      .from(memory)
+      .where(and(eq(memory.customerId, input.customerId), eq(memory.content, fact.content)))
+      .limit(1);
+    if (existing[0]) {
+      continue;
+    }
+
     const id = randomUUID();
-    const embedding = await embed(fact.content);
+    const embedding = await embed(fact.content, {
+      purpose: 'memory_extract',
+      turnId: input.turnId,
+      sessionId: input.sessionId,
+      customerId: input.customerId,
+      database: input.database,
+    });
     await input.database.db.insert(memory).values({
       id,
       customerId: input.customerId,

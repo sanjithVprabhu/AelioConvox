@@ -23,6 +23,7 @@ function toToolDefinitions(functions: FunctionDefinition[]): ToolDefinition[] {
 export type ToolLoopResult = {
   reply: string;
   toolCallsExecuted: number;
+  executedToolNames: string[];
   pendingConfirmation?: PendingConfirmation;
 };
 
@@ -31,6 +32,7 @@ export async function runToolLoop(input: {
   internalCustomerId?: string;
   llm: LLMProvider;
   sdk: SdkBridge;
+  functions?: FunctionDefinition[];
   model: string;
   maxTokens: number;
   system: string;
@@ -39,7 +41,7 @@ export async function runToolLoop(input: {
   context: InvocationContext;
   safety: SafetyConfig;
 }): Promise<ToolLoopResult> {
-  const functions = input.sdk.getFunctions();
+  const functions = input.functions ?? input.sdk.getFunctions();
   const tools = toToolDefinitions(functions);
   const conversation: ChatMessage[] = [
     ...input.history,
@@ -47,6 +49,7 @@ export async function runToolLoop(input: {
   ];
 
   let toolCallsExecuted = 0;
+  const executedToolNames: string[] = [];
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
     const result = await input.llm.complete({
@@ -55,12 +58,17 @@ export async function runToolLoop(input: {
       system: input.system,
       messages: conversation,
       tools,
+      telemetry: {
+        purpose: iteration === 0 ? 'chat_completion' : 'tool_synthesis',
+        iteration,
+      },
     });
 
     if (result.toolCalls.length === 0) {
       return {
         reply: result.text || 'I could not generate a response right now.',
         toolCallsExecuted,
+        executedToolNames,
       };
     }
 
@@ -125,6 +133,7 @@ export async function runToolLoop(input: {
         return {
           reply: decision.reason,
           toolCallsExecuted,
+          executedToolNames,
         };
       }
 
@@ -143,6 +152,7 @@ export async function runToolLoop(input: {
         return {
           reply: buildConfirmationPrompt(fn, args),
           toolCallsExecuted,
+          executedToolNames,
           pendingConfirmation: {
             functionName: fn.name,
             args,
@@ -155,6 +165,7 @@ export async function runToolLoop(input: {
 
       const invokeResult = await input.sdk.invoke(toolCall.name, args, input.context);
       toolCallsExecuted += 1;
+      executedToolNames.push(toolCall.name);
 
       if (input.database && input.internalCustomerId) {
         await logFunctionCall(input.database.db, {
@@ -188,5 +199,6 @@ export async function runToolLoop(input: {
   return {
     reply: 'I need a moment — please try again with a simpler request.',
     toolCallsExecuted,
+    executedToolNames,
   };
 }

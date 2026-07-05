@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Aelio Widget Demo</title>
+    <title>AelioConvox — Live Demo (ShopCo)</title>
     <style>
       body {
         font-family: Inter, system-ui, sans-serif;
@@ -15,31 +15,49 @@
         color: #0f172a;
       }
       main {
-        max-width: 560px;
-        padding: 32px;
+        max-width: 620px;
+        padding: 36px;
         background: white;
         border-radius: 20px;
         box-shadow: 0 20px 50px rgba(15, 23, 42, 0.08);
       }
+      h1 { margin: 0 0 4px; }
+      .sub { color: #475569; margin-top: 0; }
+      ul { line-height: 1.9; padding-left: 18px; }
       code {
         background: #f1f5f9;
-        padding: 2px 6px;
+        padding: 2px 7px;
         border-radius: 6px;
+        font-size: 0.92em;
       }
+      .hint { margin-top: 24px; color: #64748b; font-size: 0.9em; }
     </style>
   </head>
   <body>
     <main>
-      <h1>Aelio Web Widget Demo</h1>
-      <p>
-        Open the chat bubble and ask <code>what is my order status?</code> to trigger the SDK
-        function call through the full runtime loop.
+      <h1>AelioConvox — live demo</h1>
+      <p class="sub">Talking to the <strong>ShopCo</strong> sample backend through the Aelio runtime.</p>
+      <p>Open the chat bubble (bottom-right) and try things like:</p>
+      <ul>
+        <li><code>show me my orders</code></li>
+        <li><code>which orders are still pending?</code></li>
+        <li><code>what's the status of order A-1002?</code></li>
+        <li><code>cancel order A-1002</code> &nbsp;→ it asks you to confirm first</li>
+        <li><code>then list my orders again</code> &nbsp;→ see it updated</li>
+        <li><code>what plan am I on?</code></li>
+        <li><code>upgrade me to pro</code> &nbsp;→ confirmation required</li>
+        <li><code>do I have any unpaid invoices?</code></li>
+      </ul>
+      <p class="hint">
+        The assistant decides which exposed function to call, asks for confirmation on
+        writes, and runs the actual code in the ShopCo backend. Use a real LLM provider
+        (e.g. OpenAI) for the smartest tool selection.
+        <br /><br />
+        <a href="/telemetry" style="color:#2563eb">Open telemetry</a> to watch intent, state,
+        and flow assignments live as messages land in Sunjet.
       </p>
     </main>
-    <script
-      src="/widget.js"
-      data-customer-id="demo-user-123"
-      data-server-url="http://localhost:3000"
-    ></script>
+    <!-- data-server-url defaults to this page's origin (same host/port as Aelio) -->
+    <script src="/widget.js" data-customer-id="demo-user-123"></script>
   </body>
 </html>

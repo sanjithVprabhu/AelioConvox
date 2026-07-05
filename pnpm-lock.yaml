@@ -14,6 +14,15 @@ importers:
       '@aelio/db':
         specifier: workspace:*
         version: link:packages/db
+      '@aelio/llm':
+        specifier: workspace:*
+        version: link:packages/llm
+      '@aelio/sunjet-client':
+        specifier: workspace:*
+        version: link:packages/sunjet-client
+      drizzle-orm:
+        specifier: ^0.44.2
+        version: 0.44.7(@types/better-sqlite3@7.6.13)(better-sqlite3@11.10.0)
       tsx:
         specifier: ^4.20.3
         version: 4.22.4
@@ -44,6 +53,9 @@ importers:
       '@aelio/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@aelio/sunjet-client':
+        specifier: workspace:*
+        version: link:../../packages/sunjet-client
       '@fastify/static':
         specifier: ^8.2.0
         version: 8.3.0
@@ -102,6 +114,19 @@ importers:
         specifier: ^4.20.3
         version: 4.22.4
 
+  examples/sample-saas:
+    dependencies:
+      '@aelio/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk-node
+      express:
+        specifier: ^5.1.0
+        version: 5.2.1
+    devDependencies:
+      tsx:
+        specifier: ^4.20.3
+        version: 4.22.4
+
   packages/channels:
     dependencies:
       '@aelio/protocol':
@@ -129,6 +154,9 @@ importers:
       '@aelio/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@aelio/sunjet-client':
+        specifier: workspace:*
+        version: link:../sunjet-client
       drizzle-orm:
         specifier: ^0.44.2
         version: 0.44.7(@types/better-sqlite3@7.6.13)(better-sqlite3@11.10.0)
@@ -205,6 +233,18 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
+  packages/sunjet-client:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.32
+        version: 22.19.21
       tsup:
         specifier: ^8.5.0
         version: 8.5.1(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)

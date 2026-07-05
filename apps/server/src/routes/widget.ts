@@ -91,7 +91,7 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
         socket.send(JSON.stringify({ type: 'typing', active: true }));
 
         try {
-          const replyText = await processTurn(
+          const { reply, turnId } = await processTurn(
             buildTurnInput(deps, {
               customerExternalId: customerId,
               channel: 'web',
@@ -104,7 +104,8 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
             JSON.stringify({
               type: 'message',
               role: 'assistant',
-              content: replyText,
+              content: reply,
+              turnId,
             }),
           );
         } catch (error) {

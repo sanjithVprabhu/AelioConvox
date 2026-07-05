@@ -17,7 +17,7 @@ export async function recallMemories(
   limit = 5,
   minScore = 0.05,
 ): Promise<RecalledMemory[]> {
-  const queryEmbedding = await embed(query);
+  const queryEmbedding = await embed(query, { purpose: 'memory_recall' });
   if (database.vectorEnabled) {
     const vectorRows = database.searchMemoryVectors({
       customerId,

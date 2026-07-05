@@ -33,7 +33,7 @@ export async function lookupCachedResponse(input: {
     return null;
   }
 
-  const queryEmbedding = await embed(input.message);
+  const queryEmbedding = await embed(input.message, { purpose: 'response_cache_lookup' });
   let best: (typeof rows)[number] | null = null;
   let bestScore = 0;
   for (const row of rows) {
@@ -68,7 +68,7 @@ export async function storeCachedResponse(input: {
     id: randomUUID(),
     customerId: input.customerId,
     query: input.message,
-    embedding: await embed(input.message),
+    embedding: await embed(input.message, { purpose: 'response_cache_store' }),
     reply: input.reply,
     hits: 0,
     createdAt: new Date(now),

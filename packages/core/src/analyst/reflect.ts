@@ -135,6 +135,7 @@ export async function reflectOnSession(input: {
           content: `Tool calls in this session: ${toolSummary}\n\nTranscript:\n${transcript}`,
         },
       ],
+      telemetry: { purpose: 'session_reflection' },
     });
     verdict = parseVerdict(result.text);
   } catch {
@@ -157,7 +158,7 @@ export async function reflectOnSession(input: {
   // Feed a durable insight back into long-term memory so future turns benefit.
   if (verdict.insight && verdict.insight.trim().length > 0) {
     const memId = randomUUID();
-    const embedding = await embed(verdict.insight);
+    const embedding = await embed(verdict.insight, { purpose: 'reflection_insight' });
     await db.insert(memory).values({
       id: memId,
       customerId: input.customerId,

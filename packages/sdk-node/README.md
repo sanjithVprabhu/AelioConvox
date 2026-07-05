@@ -121,9 +121,50 @@ Adding a new provider becomes ~20 lines in your codebase, with no Aelio changes.
 | `write` | Requires explicit user confirmation in the conversation before it runs. |
 | `destructive` | Blocked from chat in V1. |
 
+## Lifecycle states, policies, and flows
+
+Declare your customer lifecycle catalog in the SDK. **You** set each customer's
+current state from your backend; Aelio enforces boundaries in conversation and
+filters tools per state.
+
+```typescript
+aelio.state('onboarding', {
+  description: 'New user. Setup only — no billing or upgrade topics.',
+  allowedTools: ['listOrders', 'getSubscription'],
+  blockedTools: ['upgradePlan', 'cancelOrder'],
+})
+
+aelio.state('active', {
+  description: 'Fully onboarded customer. Full product support.',
+})
+
+aelio.policy('stay-in-lifecycle', {
+  description: 'Only discuss topics appropriate for the current lifecycle state.',
+  severity: 'hard',
+})
+
+aelio.flow('onboarding_setup', {
+  state: 'onboarding',
+  description: 'Guide setup: orders → subscription → invoices',
+  steps: {
+    review_orders: { goal: 'Review existing orders', tool: 'listOrders' },
+    check_plan: { goal: 'Check subscription plan', tool: 'getSubscription' },
+  },
+})
+
+// When your app knows the customer's stage (login, webhook, cron…):
+aelio.setCustomerState(userId, 'onboarding')
+aelio.setFlowProgress(userId, 'onboarding_setup', 1, ['review_orders'])
+```
+
 ## API
 
 - `aelio.expose(name, handler, schema)` — register a callable function.
+- `aelio.state(id, schema)` — declare a lifecycle state and its boundaries.
+- `aelio.policy(id, schema)` — declare a conversation policy.
+- `aelio.flow(id, schema)` — declare a guided multi-step flow for a state.
+- `aelio.setCustomerState(customerId, stateId, reason?)` — push current state to Aelio.
+- `aelio.setFlowProgress(customerId, flowId, stepIndex, completedSteps?)` — update flow progress.
 - `aelio.listen({ secret, url? })` — connect to the Aelio server (auto-reconnect + heartbeat).
 - `aelio.disconnect()` — drain and close.
 

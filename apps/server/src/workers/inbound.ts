@@ -33,7 +33,7 @@ export function startInboundWorker(deps: RuntimeDeps) {
             ? resolveWhatsAppIdentity(from)
             : { externalId: from, channelAddress: from };
 
-        const reply = await processTurn(
+        const { reply } = await processTurn(
           buildTurnInput(deps, {
             customerExternalId: identity.externalId,
             channel,

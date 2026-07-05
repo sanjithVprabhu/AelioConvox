@@ -2,9 +2,18 @@ name: aelio-local
 secret: ${AELIO_SDK_SECRET}
 
 llm:
+  # anthropic | openai | gemini | groq | ollama | mock
   provider: mock
   model: mock-model
   max_tokens: 4096
+
+# Semantic embeddings for memory + Sunjet vectors (hash = local, no API).
+# openai: text-embedding-3-small (1536d)
+# gemini: text-embedding-004 (768d — set sunjet.embed_dim: 768)
+# anthropic: voyage-3-lite via Voyage API (set VOYAGE_API_KEY)
+embeddings:
+  provider: hash
+  model: text-embedding-3-small
 
 channels:
   whatsapp:
@@ -37,9 +46,30 @@ session:
   history_window: 20
   summarize_after: 50
 
+intent:
+  enabled: true
+  ttl_minutes: 20
+  max_depth: 5
+
 memory:
   enabled: true
   recall_limit: 5
+
+# Sunjet (ll-server) — primary message store when enabled.
+# Start ll-server first: LL_DATA_DIR=./data/sunjet LL_API_KEYS=secret cargo run --release -p ll-server
+sunjet:
+  enabled: false
+  url: http://127.0.0.1:8080
+  api_key: ${SUNJET_API_KEY}
+  embed_dim: 1536
+  dual_write_sqlite: true
+  fallback_sqlite_on_error: true
+  tables:
+    messages: convox_messages
+    conversations: convox_conversations
+    memories: convox_memories
+    compactions: convox_compactions
+    runtime_state: runtime_state
 
 storage:
   database_path: ./data/aelio.db

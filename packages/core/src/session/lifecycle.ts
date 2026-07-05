@@ -140,10 +140,18 @@ export async function appendMessage(
     createdAt: now,
   });
 
+  await touchSessionActivity(db, input.sessionId, now);
+}
+
+export async function touchSessionActivity(
+  db: AelioDatabase['db'],
+  sessionId: string,
+  at: Date = new Date(),
+): Promise<void> {
   await db
     .update(sessions)
-    .set({ lastActivityAt: now })
-    .where(eq(sessions.id, input.sessionId));
+    .set({ lastActivityAt: at })
+    .where(eq(sessions.id, sessionId));
 }
 
 export async function loadHistory(

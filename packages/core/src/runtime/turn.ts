@@ -1,15 +1,22 @@
 import type { AelioDatabase } from '@aelio/db';
 import type { Channel } from '@aelio/protocol';
 import type { LLMProvider } from '@aelio/llm';
+import { randomUUID } from 'node:crypto';
 import { extractMemories, recallMemories, summarizeMemories } from '../analyst/index.js';
 import { logFunctionCall } from '../audit/function-calls.js';
 import { resolveCustomerExternalId, type IdentityConfig } from '../identity/resolve.js';
 import { assertWithinRateLimit, type RateLimitConfig } from './rate-limit.js';
+import type { ConvoxMessageStore } from '../storage/messages.js';
+import {
+  buildConversationContext,
+  type ConversationTurnContext,
+} from '../storage/context.js';
 import {
   appendMessage,
   ensureCustomer,
   findOrCreateSession,
   loadHistory,
+  touchSessionActivity,
 } from '../session/lifecycle.js';
 import { maybeSummarizeSession } from '../session/summary.js';
 import {
@@ -30,7 +37,27 @@ import {
   isDenialMessage,
 } from '../safety/confirmations.js';
 import type { SafetyConfig } from '../safety/policy.js';
+import {
+  buildIntentStackPrompt,
+  loadIntentStack,
+  saveIntentStack,
+  updateIntentStack,
+  type IntentStack,
+  type IntentStackConfig,
+} from '../intent/index.js';
+import {
+  buildLifecycleSystemPrompt,
+  filterFunctionsByState,
+  getCustomerLifecycleMetadata,
+  type CustomerLifecycleMetadata,
+} from '../lifecycle/index.js';
 import { runToolLoop } from './tool-loop.js';
+import { runWithTurnContext } from '../telemetry/turn-calls.js';
+
+export type ProcessTurnResult = {
+  reply: string;
+  turnId: string;
+};
 
 export type ProcessTurnInput = {
   database: AelioDatabase;
@@ -51,7 +78,106 @@ export type ProcessTurnInput = {
   message: string;
   memoryEnabled?: boolean;
   cache?: ResponseCacheConfig;
+  intent?: IntentStackConfig;
+  messageStore?: ConvoxMessageStore;
 };
+
+type PersistMessageInput = {
+  sessionId: string;
+  customerId: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  channel: Channel;
+  context?: ConversationTurnContext;
+};
+
+type TurnRuntimeSnapshot = {
+  intentStack: IntentStack;
+  lifecycle: CustomerLifecycleMetadata;
+};
+
+function buildTurnContext(
+  input: ProcessTurnInput,
+  snapshot: TurnRuntimeSnapshot,
+  extras?: {
+    toolsExecuted?: string[];
+    pendingConfirmation?: boolean;
+  },
+): ConversationTurnContext {
+  return buildConversationContext({
+    customerExternalId: resolveCustomerExternalId(
+      input.channel,
+      input.customerExternalId,
+      input.identity,
+    ),
+    channelAddress: input.channelAddress,
+    lifecycle: snapshot.lifecycle,
+    intentStack: snapshot.intentStack,
+    flows: input.sdk.getFlows(),
+    policies: input.sdk.getPolicies(),
+    toolsExecuted: extras?.toolsExecuted,
+    pendingConfirmation: extras?.pendingConfirmation,
+  });
+}
+
+async function loadTurnSnapshot(
+  input: ProcessTurnInput,
+  db: AelioDatabase['db'],
+  customerId: string,
+  sessionId: string,
+): Promise<TurnRuntimeSnapshot> {
+  const intentStack = input.intent?.enabled ? await loadIntentStack(db, sessionId) : [];
+  const lifecycle = await getCustomerLifecycleMetadata(db, customerId);
+  return { intentStack, lifecycle };
+}
+
+async function persistMessage(
+  input: ProcessTurnInput,
+  db: AelioDatabase['db'],
+  message: PersistMessageInput,
+): Promise<void> {
+  if (input.messageStore) {
+    await input.messageStore.appendMessage({
+      ...message,
+      channel: message.channel,
+    });
+    if (input.messageStore.dualWriteSqlite) {
+      await appendMessage(db, message);
+      return;
+    }
+    await touchSessionActivity(db, message.sessionId);
+    return;
+  }
+
+  await appendMessage(db, message);
+}
+
+async function loadTurnHistory(
+  input: ProcessTurnInput,
+  db: AelioDatabase['db'],
+  sessionId: string,
+): Promise<Awaited<ReturnType<typeof loadHistory>>> {
+  if (!input.messageStore) {
+    return loadHistory(db, sessionId, input.historyWindow);
+  }
+
+  // With dual-write on, SQLite holds identical history behind an indexed
+  // ORDER BY … LIMIT and no vector payloads — the Sunjet scan returns full rows
+  // (embeddings included) with no projection, which is megabytes per turn.
+  // Sunjet stays the read path only when it is the sole store.
+  if (input.messageStore.dualWriteSqlite) {
+    return loadHistory(db, sessionId, input.historyWindow);
+  }
+
+  try {
+    return await input.messageStore.loadHistory(sessionId, input.historyWindow);
+  } catch (error) {
+    if (!input.messageStore.fallbackSqliteOnError) {
+      throw error;
+    }
+    return loadHistory(db, sessionId, input.historyWindow);
+  }
+}
 
 const DEFAULT_SYSTEM = `You are Aelio, a helpful conversational assistant for a SaaS product.
 Answer clearly and concisely. Use available tools when you need account-specific data.
@@ -60,7 +186,7 @@ For write actions, do NOT ask the user to confirm yourself — once you have the
 arguments, call the tool directly. The platform automatically asks the user to confirm
 before any write executes, so a second confirmation question from you is redundant.`;
 
-export async function processTurn(input: ProcessTurnInput): Promise<string> {
+export async function processTurn(input: ProcessTurnInput): Promise<ProcessTurnResult> {
   const db = input.database.db;
   const externalId = resolveCustomerExternalId(
     input.channel,
@@ -83,13 +209,47 @@ export async function processTurn(input: ProcessTurnInput): Promise<string> {
     input.channel,
     input.idleTimeoutMinutes,
   );
-  await appendMessage(db, {
+  const turnId = randomUUID();
+  const preTurnSnapshot = await loadTurnSnapshot(input, db, customerId, session.id);
+  await persistMessage(input, db, {
     sessionId: session.id,
     customerId,
     role: 'user',
     content: input.message,
     channel: input.channel,
+    context: buildTurnContext(input, preTurnSnapshot),
   });
+
+  return runWithTurnContext(
+    {
+      turnId,
+      sessionId: session.id,
+      customerId,
+      database: input.database,
+    },
+    async () => executeTurn(input, {
+      db,
+      externalId,
+      customerId,
+      session,
+      turnId,
+      preTurnSnapshot,
+    }),
+  );
+}
+
+async function executeTurn(
+  input: ProcessTurnInput,
+  state: {
+    db: AelioDatabase['db'];
+    externalId: string;
+    customerId: string;
+    session: { id: string; customerId: string; channel: Channel };
+    turnId: string;
+    preTurnSnapshot: TurnRuntimeSnapshot;
+  },
+): Promise<ProcessTurnResult> {
+  const { db, externalId, customerId, session, turnId, preTurnSnapshot } = state;
 
   const context = {
     customerId: externalId,
@@ -130,28 +290,32 @@ export async function processTurn(input: ProcessTurnInput): Promise<string> {
           : 'The action completed successfully.'
         : `I couldn't complete that action: ${invokeResult.error ?? 'unknown error'}`;
 
-      await appendMessage(db, {
+      await persistMessage(input, db, {
         sessionId: session.id,
         customerId,
         role: 'assistant',
         content: reply,
         channel: input.channel,
+        context: buildTurnContext(input, preTurnSnapshot, {
+          toolsExecuted: [pending.functionName],
+        }),
       });
 
-      return reply;
+      return { reply, turnId };
     }
 
     if (isDenialMessage(input.message)) {
       await clearPendingConfirmation(db, session.id);
       const reply = buildCancellationReply();
-      await appendMessage(db, {
+      await persistMessage(input, db, {
         sessionId: session.id,
         customerId,
         role: 'assistant',
         content: reply,
         channel: input.channel,
+        context: buildTurnContext(input, preTurnSnapshot),
       });
-      return reply;
+      return { reply, turnId };
     }
   }
 
@@ -166,18 +330,19 @@ export async function processTurn(input: ProcessTurnInput): Promise<string> {
       threshold: input.cache.similarityThreshold,
     });
     if (cached) {
-      await appendMessage(db, {
+      await persistMessage(input, db, {
         sessionId: session.id,
         customerId,
         role: 'assistant',
         content: cached,
         channel: input.channel,
+        context: buildTurnContext(input, preTurnSnapshot),
       });
-      return cached;
+      return { reply: cached, turnId };
     }
   }
 
-  const history = await loadHistory(db, session.id, input.historyWindow);
+  const history = await loadTurnHistory(input, db, session.id);
   const summary = await maybeSummarizeSession({
     db,
     sessionId: session.id,
@@ -187,7 +352,29 @@ export async function processTurn(input: ProcessTurnInput): Promise<string> {
     maxTokens: input.maxTokens,
   });
 
+  const intentStack = preTurnSnapshot.intentStack;
+  const intentPrompt = input.intent?.enabled ? buildIntentStackPrompt(intentStack) : '';
+
+  const lifecycle = preTurnSnapshot.lifecycle;
+  const stateDef = lifecycle.lifecycleState
+    ? input.sdk.getStates().find((entry) => entry.id === lifecycle.lifecycleState)
+    : undefined;
+  const lifecyclePrompt = buildLifecycleSystemPrompt({
+    stateId: lifecycle.lifecycleState,
+    state: stateDef,
+    policies: input.sdk.getPolicies(),
+    flows: input.sdk.getFlows(),
+    flowProgress: lifecycle.flowProgress,
+  });
+  const scopedFunctions = filterFunctionsByState(input.sdk.getFunctions(), stateDef);
+
   let system = DEFAULT_SYSTEM;
+  if (intentPrompt) {
+    system += `\n\n${intentPrompt}`;
+  }
+  if (lifecyclePrompt) {
+    system += `\n\n${lifecyclePrompt}`;
+  }
   if (summary) {
     system += `\n\nRolling session summary:\n${summary}`;
   }
@@ -208,6 +395,7 @@ export async function processTurn(input: ProcessTurnInput): Promise<string> {
     internalCustomerId: customerId,
     llm: input.llm,
     sdk: input.sdk,
+    functions: scopedFunctions,
     model: input.model,
     maxTokens: input.maxTokens,
     system,
@@ -221,12 +409,29 @@ export async function processTurn(input: ProcessTurnInput): Promise<string> {
     await setPendingConfirmation(db, session.id, loopResult.pendingConfirmation);
   }
 
-  await appendMessage(db, {
+  let postTurnSnapshot = preTurnSnapshot;
+  if (input.intent?.enabled) {
+    const nextStack = updateIntentStack({
+      stack: intentStack,
+      userMessage: input.message,
+      assistantReply: loopResult.reply,
+      toolNames: loopResult.executedToolNames,
+      config: input.intent,
+    });
+    await saveIntentStack(db, session.id, nextStack);
+    postTurnSnapshot = { ...preTurnSnapshot, intentStack: nextStack };
+  }
+
+  await persistMessage(input, db, {
     sessionId: session.id,
     customerId,
     role: 'assistant',
     content: loopResult.reply,
     channel: input.channel,
+    context: buildTurnContext(input, postTurnSnapshot, {
+      toolsExecuted: loopResult.executedToolNames,
+      pendingConfirmation: Boolean(loopResult.pendingConfirmation),
+    }),
   });
 
   if (input.memoryEnabled !== false) {
@@ -236,6 +441,7 @@ export async function processTurn(input: ProcessTurnInput): Promise<string> {
       sessionId: session.id,
       userMessage: input.message,
       assistantReply: loopResult.reply,
+      turnId,
     });
   }
 
@@ -255,5 +461,5 @@ export async function processTurn(input: ProcessTurnInput): Promise<string> {
     });
   }
 
-  return loopResult.reply;
+  return { reply: loopResult.reply, turnId };
 }

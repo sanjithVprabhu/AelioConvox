@@ -8,6 +8,7 @@ dist/
 .env.*
 !.env.example
 data/
+lldata/
 .DS_Store
 secrets.md
 *.pem

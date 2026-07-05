@@ -1,7 +1,7 @@
 import { createDatabase } from '@aelio/db';
 import { MetaWhatsAppSender, MockWhatsAppSender } from '@aelio/channels';
 import { createLLMProviderChain, createEmbeddingProvider } from '@aelio/llm';
-import { configureEmbedder } from '@aelio/core';
+import { configureEmbedder, createInstrumentedLlm } from '@aelio/core';
 import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
@@ -14,8 +14,10 @@ import { registerWhatsAppRoutes } from './routes/whatsapp.js';
 import { registerTestRoutes } from './routes/test.js';
 import { registerWidgetRoutes } from './routes/widget.js';
 import { registerProactiveRoutes } from './routes/proactive.js';
+import { registerTelemetryRoutes } from './routes/telemetry.js';
 import type { RuntimeDeps } from './runtime-deps.js';
 import { ServerSdkBridge } from './sdk-bridge.js';
+import { initSunjet } from './sunjet.js';
 import { startBackupWorker } from './workers/backup.js';
 import { startDaemonWorker } from './workers/daemon.js';
 import { startInboundWorker } from './workers/inbound.js';
@@ -28,7 +30,7 @@ export async function createApp(config: AelioConfig) {
   const database = createDatabase(config.storage.database_path);
   database.migrate(migrationsFolder);
 
-  const llm = createLLMProviderChain([
+  const llm = createInstrumentedLlm(createLLMProviderChain([
     {
       provider: config.llm.provider,
       model: config.llm.model,
@@ -47,7 +49,7 @@ export async function createApp(config: AelioConfig) {
           },
         ]
       : []),
-  ]);
+  ]));
 
   // Wire a real embedding model if configured; otherwise the built-in hash
   // embedding stays in use. Failures at call time fall back to the hash.
@@ -57,11 +59,14 @@ export async function createApp(config: AelioConfig) {
       model: config.embeddings.model,
       apiKey: config.embeddings.api_key,
       baseUrl: config.embeddings.base_url,
+      outputDimension: config.embeddings.output_dimension ?? config.sunjet.embed_dim,
     });
     configureEmbedder((text) => embeddingProvider.embed(text));
   }
 
   const sdkBridge = new ServerSdkBridge(database);
+
+  const sunjet = await initSunjet(config);
 
   const whatsapp = config.channels.whatsapp;
   // provider: 'sdk' means the dev delivers outbound themselves via onSend, so we
@@ -84,6 +89,8 @@ export async function createApp(config: AelioConfig) {
     llm,
     sdkBridge,
     whatsappSender,
+    sunjetClient: sunjet?.client ?? null,
+    messageStore: sunjet?.messageStore ?? null,
   };
 
   const app = Fastify({
@@ -99,6 +106,7 @@ export async function createApp(config: AelioConfig) {
   await registerWidgetRoutes(app, deps);
   await registerWhatsAppRoutes(app, deps);
   await registerProactiveRoutes(app, deps);
+  await registerTelemetryRoutes(app, deps);
   await registerTestRoutes(app, sdkBridge);
   await app.register(fastifyStatic, {
     root: publicDir,

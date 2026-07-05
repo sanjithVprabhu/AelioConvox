@@ -1,0 +1,15 @@
+{
+  "name": "aelio-sample-saas",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@aelio/sdk": "workspace:*",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.3"
+  }
+}

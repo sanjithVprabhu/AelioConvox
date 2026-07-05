@@ -58,6 +58,7 @@ export async function maybeSummarizeSession(input: {
       system:
         'Summarize this customer session in 4-6 short bullets focusing on goals, facts, preferences, unresolved issues, and any promised follow-up.',
       messages: [{ role: 'user', content: transcript }],
+      telemetry: { purpose: 'session_summary' },
     });
     summary = result.text.trim();
   } catch {

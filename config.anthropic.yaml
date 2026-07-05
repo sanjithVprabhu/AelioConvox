@@ -1,0 +1,59 @@
+name: aelio-anthropic
+secret: ${AELIO_SDK_SECRET}
+
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-6
+  api_key: ${ANTHROPIC_API_KEY}
+  max_tokens: 4096
+  fallback:
+    provider: openai
+    model: gpt-4o-mini
+    api_key: ${OPENAI_API_KEY}
+
+# Anthropic has no native embedding API — uses Voyage AI (set VOYAGE_API_KEY).
+embeddings:
+  provider: anthropic
+  model: voyage-3-lite
+  api_key: ${VOYAGE_API_KEY}
+  output_dimension: 1536
+
+channels:
+  whatsapp:
+    enabled: false
+  web:
+    enabled: true
+    allowed_origins:
+      - "*"
+
+safety:
+  default_mode: full
+  require_confirmation_for: [write, destructive]
+
+identity:
+  mapping_function: phone
+  allow_anonymous: true
+
+session:
+  idle_timeout_minutes: 60
+  history_window: 20
+  summarize_after: 50
+
+memory:
+  enabled: true
+  recall_limit: 5
+
+sunjet:
+  enabled: false
+  embed_dim: 1536
+
+storage:
+  database_path: ./data/aelio-anthropic.db
+
+logging:
+  level: info
+  format: pretty
+
+server:
+  host: 0.0.0.0
+  port: 3000

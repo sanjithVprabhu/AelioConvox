@@ -22,15 +22,74 @@ class FunctionSchema:
     safety: str
 
 
+@dataclass
+class StateSchema:
+    description: str
+    allowed_tools: Optional[list[str]] = None
+    blocked_tools: Optional[list[str]] = None
+
+
+@dataclass
+class PolicySchema:
+    description: str
+    severity: str = "soft"
+
+
+@dataclass
+class FlowSchema:
+    state: str
+    description: str
+    steps: Dict[str, Dict[str, Any]]
+
+
 class Aelio:
     def __init__(self, secret: str, url: str = "ws://127.0.0.1:3000", sdk_version: str = "0.1.0") -> None:
         self.secret = secret
         self.url = url.rstrip("/")
         self.sdk_version = sdk_version
         self.handlers: Dict[str, tuple[Handler, FunctionSchema]] = {}
+        self.states: Dict[str, StateSchema] = {}
+        self.policies: Dict[str, PolicySchema] = {}
+        self.flows: Dict[str, FlowSchema] = {}
         self._send_handler: Optional[SendHandler] = None
         self._ws = None
         self._last_pong_at = int(time.time() * 1000)
+
+    def state(self, state_id: str, description: str, allowed_tools: Optional[list[str]] = None, blocked_tools: Optional[list[str]] = None) -> None:
+        self.states[state_id] = StateSchema(description=description, allowed_tools=allowed_tools, blocked_tools=blocked_tools)
+
+    def policy(self, policy_id: str, description: str, severity: str = "soft") -> None:
+        self.policies[policy_id] = PolicySchema(description=description, severity=severity)
+
+    def flow(self, flow_id: str, state: str, description: str, steps: Dict[str, Dict[str, Any]]) -> None:
+        self.flows[flow_id] = FlowSchema(state=state, description=description, steps=steps)
+
+    async def set_customer_state(self, customer_id: str, state_id: str, reason: Optional[str] = None) -> None:
+        if self._ws is None:
+            raise RuntimeError("Aelio SDK is not connected yet; call listen() first")
+        payload: Dict[str, Any] = {"type": "set_state", "customerId": customer_id, "stateId": state_id}
+        if reason is not None:
+            payload["reason"] = reason
+        await self._ws.send(json.dumps(payload))
+
+    async def set_flow_progress(
+        self,
+        customer_id: str,
+        flow_id: str,
+        step_index: int,
+        completed_steps: Optional[list[str]] = None,
+    ) -> None:
+        if self._ws is None:
+            raise RuntimeError("Aelio SDK is not connected yet; call listen() first")
+        payload: Dict[str, Any] = {
+            "type": "set_flow_progress",
+            "customerId": customer_id,
+            "flowId": flow_id,
+            "stepIndex": step_index,
+        }
+        if completed_steps is not None:
+            payload["completedSteps"] = completed_steps
+        await self._ws.send(json.dumps(payload))
 
     def expose(self, name: str, description: str, params: Dict[str, Any], safety: str):
         def decorator(func: Handler):
@@ -72,17 +131,53 @@ class Aelio:
             }
             for name, (_, schema) in self.handlers.items()
         ]
-        await websocket.send(
-            json.dumps(
-                {
-                    "type": "register",
-                    "sdkVersion": self.sdk_version,
-                    "language": "python",
-                    "functions": functions,
-                    "canSend": self._send_handler is not None,
-                }
-            )
-        )
+        states = [
+            {
+                "id": state_id,
+                "description": schema.description,
+                **({"allowedTools": schema.allowed_tools} if schema.allowed_tools else {}),
+                **({"blockedTools": schema.blocked_tools} if schema.blocked_tools else {}),
+            }
+            for state_id, schema in self.states.items()
+        ]
+        policies = [
+            {
+                "id": policy_id,
+                "description": schema.description,
+                "severity": schema.severity,
+            }
+            for policy_id, schema in self.policies.items()
+        ]
+        flows = [
+            {
+                "id": flow_id,
+                "state": schema.state,
+                "description": schema.description,
+                "steps": [
+                    {
+                        "id": step_id,
+                        "goal": step["goal"],
+                        **({"tool": step["tool"]} if step.get("tool") else {}),
+                    }
+                    for step_id, step in schema.steps.items()
+                ],
+            }
+            for flow_id, schema in self.flows.items()
+        ]
+        payload: Dict[str, Any] = {
+            "type": "register",
+            "sdkVersion": self.sdk_version,
+            "language": "python",
+            "functions": functions,
+            "canSend": self._send_handler is not None,
+        }
+        if states:
+            payload["states"] = states
+        if policies:
+            payload["policies"] = policies
+        if flows:
+            payload["flows"] = flows
+        await websocket.send(json.dumps(payload))
 
     async def _heartbeat(self, websocket) -> None:
         while True:

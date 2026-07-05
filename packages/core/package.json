@@ -18,6 +18,7 @@
     "@aelio/db": "workspace:*",
     "@aelio/llm": "workspace:*",
     "@aelio/protocol": "workspace:*",
+    "@aelio/sunjet-client": "workspace:*",
     "drizzle-orm": "^0.44.2"
   },
   "devDependencies": {

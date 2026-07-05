@@ -3,6 +3,15 @@ import express from 'express';
 
 const app = express();
 
+aelio.state('active', {
+  description: 'Standard customer with full access to order and subscription tools.',
+});
+
+aelio.policy('concise', {
+  description: 'Keep replies short and actionable.',
+  severity: 'soft',
+});
+
 aelio.expose(
   'getOrderStatus',
   async ({ orderId }, ctx) => {

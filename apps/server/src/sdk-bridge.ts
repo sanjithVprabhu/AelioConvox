@@ -1,11 +1,14 @@
 import {
   INVOKE_TIMEOUT_MS,
   type Channel,
+  type FlowDefinition,
   type FunctionDefinition,
   type InvocationContext,
   type InvokeMessage,
+  type PolicyDefinition,
   type ResultMessage,
   type SendInvokeMessage,
+  type StateDefinition,
 } from '@aelio/protocol';
 import type { SdkBridge, SdkInvokeResult } from '@aelio/core';
 import type { AelioDatabase } from '@aelio/db';
@@ -16,6 +19,9 @@ type ActiveConnection = {
   id: string;
   socket: WebSocket;
   functions: FunctionDefinition[];
+  states: StateDefinition[];
+  policies: PolicyDefinition[];
+  flows: FlowDefinition[];
   sdkVersion: string;
   language: string;
   canSend: boolean;
@@ -96,6 +102,36 @@ export class ServerSdkBridge implements SdkBridge {
     for (const connection of this.connections.values()) {
       for (const fn of connection.functions) {
         seen.set(fn.name, fn);
+      }
+    }
+    return [...seen.values()];
+  }
+
+  getStates(): StateDefinition[] {
+    const seen = new Map<string, StateDefinition>();
+    for (const connection of this.connections.values()) {
+      for (const state of connection.states) {
+        seen.set(state.id, state);
+      }
+    }
+    return [...seen.values()];
+  }
+
+  getPolicies(): PolicyDefinition[] {
+    const seen = new Map<string, PolicyDefinition>();
+    for (const connection of this.connections.values()) {
+      for (const policy of connection.policies) {
+        seen.set(policy.id, policy);
+      }
+    }
+    return [...seen.values()];
+  }
+
+  getFlows(): FlowDefinition[] {
+    const seen = new Map<string, FlowDefinition>();
+    for (const connection of this.connections.values()) {
+      for (const flow of connection.flows) {
+        seen.set(flow.id, flow);
       }
     }
     return [...seen.values()];

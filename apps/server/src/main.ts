@@ -1,4 +1,7 @@
+import { loadDotEnv } from './env.js';
 import { loadConfig } from './config.js';
+
+loadDotEnv();
 import { createApp } from './app.js';
 import { registerGracefulShutdown } from './shutdown.js';
 
@@ -17,6 +20,12 @@ try {
       port,
       database: config.storage.database_path,
       llm: config.llm.provider,
+      sunjet: config.sunjet.enabled
+        ? {
+            url: config.sunjet.url,
+            dualWriteSqlite: config.sunjet.dual_write_sqlite,
+          }
+        : { enabled: false },
       widget: `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/widget.js`,
       demo: `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/demo.html`,
     },

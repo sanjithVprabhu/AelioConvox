@@ -13,6 +13,7 @@ embeddings:
   provider: openai
   model: text-embedding-3-small
   api_key: ${OPENAI_API_KEY}
+  output_dimension: 1536
 
 channels:
   whatsapp:

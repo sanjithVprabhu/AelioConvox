@@ -21,6 +21,39 @@ export const FunctionDefinitionSchema = z.object({
 });
 export type FunctionDefinition = z.infer<typeof FunctionDefinitionSchema>;
 
+export const StateDefinitionSchema = z.object({
+  id: z.string().min(1),
+  description: z.string().min(1),
+  allowedTools: z.array(z.string().min(1)).optional(),
+  blockedTools: z.array(z.string().min(1)).optional(),
+});
+export type StateDefinition = z.infer<typeof StateDefinitionSchema>;
+
+export const PolicySeveritySchema = z.enum(['hard', 'soft']);
+export type PolicySeverity = z.infer<typeof PolicySeveritySchema>;
+
+export const PolicyDefinitionSchema = z.object({
+  id: z.string().min(1),
+  description: z.string().min(1),
+  severity: PolicySeveritySchema.default('soft'),
+});
+export type PolicyDefinition = z.infer<typeof PolicyDefinitionSchema>;
+
+export const FlowStepDefinitionSchema = z.object({
+  id: z.string().min(1),
+  goal: z.string().min(1),
+  tool: z.string().min(1).optional(),
+});
+export type FlowStepDefinition = z.infer<typeof FlowStepDefinitionSchema>;
+
+export const FlowDefinitionSchema = z.object({
+  id: z.string().min(1),
+  state: z.string().min(1),
+  description: z.string().min(1),
+  steps: z.array(FlowStepDefinitionSchema).min(1),
+});
+export type FlowDefinition = z.infer<typeof FlowDefinitionSchema>;
+
 export const InvocationContextSchema = z.object({
   customerId: z.string().min(1),
   sessionId: z.string().min(1),
@@ -36,11 +69,31 @@ export const RegisterMessageSchema = z.object({
   sdkVersion: z.string().min(1),
   language: SdkLanguageSchema,
   functions: z.array(FunctionDefinitionSchema),
+  states: z.array(StateDefinitionSchema).optional(),
+  policies: z.array(PolicyDefinitionSchema).optional(),
+  flows: z.array(FlowDefinitionSchema).optional(),
   // True when the SDK has registered an onSend handler — i.e. it can deliver
   // outbound channel messages itself (bring-your-own WhatsApp/SMS provider).
   canSend: z.boolean().optional(),
 });
 export type RegisterMessage = z.infer<typeof RegisterMessageSchema>;
+
+export const SetStateMessageSchema = z.object({
+  type: z.literal('set_state'),
+  customerId: z.string().min(1),
+  stateId: z.string().min(1),
+  reason: z.string().optional(),
+});
+export type SetStateMessage = z.infer<typeof SetStateMessageSchema>;
+
+export const SetFlowProgressMessageSchema = z.object({
+  type: z.literal('set_flow_progress'),
+  customerId: z.string().min(1),
+  flowId: z.string().min(1),
+  stepIndex: z.number().int().nonnegative(),
+  completedSteps: z.array(z.string().min(1)).optional(),
+});
+export type SetFlowProgressMessage = z.infer<typeof SetFlowProgressMessageSchema>;
 
 export const InvokeMessageSchema = z.object({
   type: z.literal('invoke'),
@@ -109,6 +162,8 @@ export const SdkToServerMessageSchema = z.discriminatedUnion('type', [
   ResultMessageSchema,
   PongMessageSchema,
   IngestMessageSchema,
+  SetStateMessageSchema,
+  SetFlowProgressMessageSchema,
 ]);
 export type SdkToServerMessage = z.infer<typeof SdkToServerMessageSchema>;
 

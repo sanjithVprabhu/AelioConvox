@@ -3,7 +3,7 @@ import {
   HEARTBEAT_INTERVAL_MS,
   SdkToServerMessageSchema,
 } from '@aelio/protocol';
-import { enqueueJob } from '@aelio/core';
+import { enqueueJob, upsertCustomerFlowProgress, upsertCustomerLifecycleState } from '@aelio/core';
 import type { WebSocket } from '@fastify/websocket';
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
@@ -58,6 +58,9 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           id: connectionId,
           socket: socket as WebSocket,
           functions: message.functions,
+          states: message.states ?? [],
+          policies: message.policies ?? [],
+          flows: message.flows ?? [],
           sdkVersion: message.sdkVersion,
           language: message.language,
           canSend: message.canSend ?? false,
@@ -71,10 +74,54 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
             sdkVersion: message.sdkVersion,
             language: message.language,
             functions: message.functions.map((fn) => fn.name),
+            states: (message.states ?? []).map((state) => state.id),
+            policies: (message.policies ?? []).map((policy) => policy.id),
+            flows: (message.flows ?? []).map((flow) => flow.id),
             canSend: message.canSend ?? false,
           },
-          'Aelio SDK connected and registered functions',
+          'Aelio SDK connected and registered catalog',
         );
+        return;
+      }
+
+      if (message.type === 'set_state') {
+        void upsertCustomerLifecycleState(
+          database.db,
+          message.customerId,
+          message.stateId,
+          message.reason,
+        ).then(() => {
+          app.log.info(
+            {
+              connectionId,
+              customerId: message.customerId,
+              stateId: message.stateId,
+              reason: message.reason,
+            },
+            'Customer lifecycle state updated from SDK',
+          );
+        });
+        return;
+      }
+
+      if (message.type === 'set_flow_progress') {
+        void upsertCustomerFlowProgress(
+          database.db,
+          message.customerId,
+          message.flowId,
+          message.stepIndex,
+          message.completedSteps,
+        ).then(() => {
+          app.log.info(
+            {
+              connectionId,
+              customerId: message.customerId,
+              flowId: message.flowId,
+              stepIndex: message.stepIndex,
+            },
+            'Customer flow progress updated from SDK',
+          );
+        });
         return;
       }
 
