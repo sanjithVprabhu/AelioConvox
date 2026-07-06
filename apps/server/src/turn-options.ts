@@ -22,6 +22,7 @@ export function baseTurnOptions(
   | 'cache'
   | 'intent'
   | 'messageStore'
+  | 'persona'
 > {
   return {
     database: deps.database,
@@ -58,6 +59,7 @@ export function baseTurnOptions(
       maxDepth: deps.config.intent.max_depth,
     },
     messageStore: deps.messageStore ?? undefined,
+    persona: deps.config.llm.system_prompt ?? null,
   };
 }
 

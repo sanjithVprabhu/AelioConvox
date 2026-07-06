@@ -66,7 +66,20 @@ export async function createApp(config: AelioConfig) {
 
   const sdkBridge = new ServerSdkBridge(database);
 
-  const sunjet = await initSunjet(config);
+  // A Sunjet outage at boot must not crash-loop the server when the config
+  // allows SQLite fallback — conversations keep working, archival degrades.
+  let sunjet: Awaited<ReturnType<typeof initSunjet>> = null;
+  try {
+    sunjet = await initSunjet(config);
+  } catch (error) {
+    if (!config.sunjet.enabled || !config.sunjet.fallback_sqlite_on_error) {
+      throw error;
+    }
+    console.error(
+      '[aelio] Sunjet unavailable at startup — continuing on SQLite only:',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 
   const whatsapp = config.channels.whatsapp;
   // provider: 'sdk' means the dev delivers outbound themselves via onSend, so we

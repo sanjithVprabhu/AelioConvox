@@ -1,5 +1,6 @@
 import type { AelioDatabase } from '@aelio/db';
 import { sessions } from '@aelio/db';
+import type { FunctionDefinition } from '@aelio/protocol';
 import { eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 
@@ -116,76 +117,45 @@ function popTop(stack: IntentStack): IntentStack {
   return stack.slice(1);
 }
 
+// Only two UNIVERSAL linguistic signals live in core: greetings and conversation
+// conclusions. Every domain topic comes from the tenant via tool `intent` labels
+// declared in the SDK — the core never hardcodes a business vocabulary.
 const CONCLUDE_RE =
   /\b(thanks|thank you|that's all|that is all|done|got it|perfect|no more questions|all good|cheers|resolved)\b/i;
 
-const TOPIC_RULES: Array<{ label: string; keywords: RegExp; summary: string }> = [
-  {
-    label: 'order_inquiry',
-    keywords: /\b(order|orders|ship|shipped|tracking|delivery|a-\d{4})\b/i,
-    summary: 'User is asking about order status, tracking, or order details.',
-  },
-  {
-    label: 'subscription',
-    keywords: /\b(plan|subscription|upgrade|downgrade|renew|billing cycle)\b/i,
-    summary: 'User is discussing their subscription plan or billing.',
-  },
-  {
-    label: 'invoice',
-    keywords: /\b(invoice|invoices|payment|unpaid|bill)\b/i,
-    summary: 'User is asking about invoices or payment status.',
-  },
-  {
-    label: 'cancellation',
-    keywords: /\b(cancel|cancellation|refund)\b/i,
-    summary: 'User wants to cancel something or get a refund.',
-  },
-  {
-    label: 'greeting',
-    keywords: /^(hi|hello|hey|good morning|good afternoon)\b/i,
-    summary: 'User is greeting or opening the conversation.',
-  },
-  {
-    label: 'general_support',
-    keywords: /./,
-    summary: 'General product support conversation.',
-  },
-];
+const GREETING_RE = /^(hi|hello|hey|good morning|good afternoon|good evening)\b/i;
 
+export type IntentSource = Pick<FunctionDefinition, 'name' | 'description' | 'intent'>;
+
+function toolIntent(tool: IntentSource): { label: string; summary: string } {
+  const label = tool.intent ?? tool.name;
+  return { label, summary: `User is engaged with: ${tool.description}` };
+}
+
+/**
+ * Classify the turn's intent from what actually happened, in the tenant's own
+ * vocabulary:
+ *   1. A tool executed → that tool's declared `intent` (fallback: its name).
+ *   2. No tool → greeting detection, else keep the current topic (`null` = no
+ *      opinion; the stack refreshes the top frame instead of guessing).
+ */
 function classifyIntent(
   userMessage: string,
-  assistantReply: string,
   toolNames: string[],
-): { label: string; summary: string } {
-  if (toolNames.includes('getOrderStatus') || toolNames.includes('listOrders')) {
-    return { label: 'order_inquiry', summary: 'User is asking about orders.' };
-  }
-  if (toolNames.includes('getSubscription') || toolNames.includes('upgradePlan')) {
-    return { label: 'subscription', summary: 'User is discussing subscription or plan changes.' };
-  }
-  if (toolNames.includes('listInvoices')) {
-    return { label: 'invoice', summary: 'User is asking about invoices.' };
-  }
-  if (toolNames.includes('cancelOrder')) {
-    return { label: 'cancellation', summary: 'User wants to cancel an order.' };
-  }
-
-  const text = `${userMessage} ${assistantReply}`;
-  for (const rule of TOPIC_RULES) {
-    if (rule.label === 'general_support') {
-      continue;
-    }
-    if (rule.keywords.test(userMessage) || rule.keywords.test(assistantReply)) {
-      return { label: rule.label, summary: rule.summary };
+  registeredTools: IntentSource[],
+): { label: string; summary: string } | null {
+  for (const name of toolNames) {
+    const tool = registeredTools.find((entry) => entry.name === name);
+    if (tool) {
+      return toolIntent(tool);
     }
   }
 
-  const orderRule = TOPIC_RULES.find((rule) => rule.label === 'order_inquiry');
-  if (orderRule?.keywords.test(text)) {
-    return { label: orderRule.label, summary: orderRule.summary };
+  if (GREETING_RE.test(userMessage.trim())) {
+    return { label: 'greeting', summary: 'User is greeting or opening the conversation.' };
   }
 
-  return { label: 'general_support', summary: 'General product support conversation.' };
+  return null;
 }
 
 function isConclusion(userMessage: string): boolean {
@@ -206,11 +176,11 @@ function isTopicShift(
   if (detected.label === 'greeting' && currentTop.label !== 'greeting') {
     return false;
   }
-  // General support is a weak signal — only shift if top was greeting or general.
+  // "general" is a weak signal — never displace a concrete tenant intent with it.
   if (
-    detected.label === 'general_support' &&
+    detected.label === 'general' &&
     currentTop.label !== 'greeting' &&
-    currentTop.label !== 'general_support'
+    currentTop.label !== 'general'
   ) {
     return false;
   }
@@ -229,6 +199,7 @@ export function updateIntentStack(input: {
   userMessage: string;
   assistantReply: string;
   toolNames?: string[];
+  registeredTools?: IntentSource[];
   config: IntentStackConfig;
   now?: number;
 }): IntentStack {
@@ -245,8 +216,21 @@ export function updateIntentStack(input: {
     return stack;
   }
 
-  const detected = classifyIntent(input.userMessage, input.assistantReply, toolNames);
+  const detected = classifyIntent(input.userMessage, toolNames, input.registeredTools ?? []);
   const top = stack[0];
+
+  // No signal this turn: keep the current focus alive rather than guessing.
+  if (!detected) {
+    if (!top) {
+      return pushIntent(
+        stack,
+        { label: 'general', summary: 'General conversation with the customer.' },
+        input.config,
+        now,
+      );
+    }
+    return refreshTop(stack, input.config, now);
+  }
 
   if (!top) {
     return pushIntent(stack, detected, input.config, now);

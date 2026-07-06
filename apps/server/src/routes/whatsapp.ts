@@ -36,7 +36,13 @@ export async function registerWhatsAppRoutes(app: FastifyInstance, deps: Runtime
 
     const messages = parseWhatsAppWebhook(request.body);
 
+    let queued = 0;
     for (const message of messages) {
+      // Meta redelivers webhooks on slow ACKs — drop ids we already claimed.
+      if (message.messageId && !deps.database.claimInboundMessage(`wa:${message.messageId}`)) {
+        app.log.info({ messageId: message.messageId }, 'Duplicate WhatsApp webhook dropped');
+        continue;
+      }
       await enqueueJob(deps.database, 'inbound', {
         channel: 'whatsapp',
         from: message.from,
@@ -44,8 +50,9 @@ export async function registerWhatsAppRoutes(app: FastifyInstance, deps: Runtime
         messageId: message.messageId,
         phoneNumberId: message.phoneNumberId,
       });
+      queued += 1;
     }
 
-    return reply.status(200).send({ success: true, queued: messages.length });
+    return reply.status(200).send({ success: true, queued });
   });
 }

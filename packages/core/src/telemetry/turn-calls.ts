@@ -109,6 +109,8 @@ export async function recordTurnApiCall(input: {
   toolNames?: string[];
   stopReason?: string;
   durationMs?: number;
+  tokensIn?: number;
+  tokensOut?: number;
   turnId?: string;
   sessionId?: string;
   customerId?: string;
@@ -145,6 +147,8 @@ export async function recordTurnApiCall(input: {
     toolNames: input.toolNames,
     stopReason: input.stopReason,
     durationMs: input.durationMs,
+    tokensIn: input.tokensIn,
+    tokensOut: input.tokensOut,
     createdAt: now,
   });
 
@@ -193,6 +197,8 @@ export function createInstrumentedLlm(provider: LLMProvider): LLMProvider {
         toolNames: opts.tools.map((tool) => tool.name),
         stopReason: result.stopReason,
         durationMs: Date.now() - started,
+        tokensIn: result.usage?.inputTokens,
+        tokensOut: result.usage?.outputTokens,
       });
 
       return result;

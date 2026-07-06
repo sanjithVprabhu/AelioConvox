@@ -67,6 +67,12 @@ export type FunctionSchema = {
   description: string;
   params: Record<string, ParamSpec>;
   safety: SafetyLevel;
+  /**
+   * Intent category this tool serves, in YOUR vocabulary (e.g. "order_inquiry").
+   * Drives the runtime's conversation-intent tracking and smart tool selection.
+   * Defaults to the function name.
+   */
+  intent?: string;
 };
 
 export type StateSchema = {
@@ -105,6 +111,7 @@ export class Aelio {
   private readonly policies = new Map<string, PolicySchema>();
   private readonly flows = new Map<string, FlowSchema>();
   private sendHandler: SendHandler | null = null;
+  private personaText: string | null = null;
   private ws: WebSocket | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastPongAt = 0;
@@ -121,6 +128,14 @@ export class Aelio {
       handler: handler as ExposedHandler,
       schema,
     });
+  }
+
+  /**
+   * Set the assistant's persona/voice for your product (brand tone, naming,
+   * standing instructions). Becomes the stable head of every system prompt.
+   */
+  persona(text: string): void {
+    this.personaText = text.trim();
   }
 
   /**
@@ -218,10 +233,13 @@ export class Aelio {
 
     const baseUrl = this.listenOptions.url ?? 'ws://127.0.0.1:3000';
     const url = new URL(DEFAULT_SDK_PATH, baseUrl);
-    url.searchParams.set('secret', this.listenOptions.secret);
 
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(url);
+      // The secret travels as an Authorization header, never in the URL —
+      // query strings end up in server request logs and proxies.
+      const ws = new WebSocket(url, {
+        headers: { authorization: `Bearer ${this.listenOptions!.secret}` },
+      });
 
       ws.once('open', () => {
         this.ws = ws;
@@ -256,6 +274,7 @@ export class Aelio {
       description: entry.schema.description,
       params: entry.schema.params,
       safety: entry.schema.safety,
+      ...(entry.schema.intent ? { intent: entry.schema.intent } : {}),
     }));
 
     const states: StateDefinition[] = [...this.states.entries()].map(([id, entry]) => ({
@@ -290,6 +309,7 @@ export class Aelio {
       ...(states.length > 0 ? { states } : {}),
       ...(policies.length > 0 ? { policies } : {}),
       ...(flows.length > 0 ? { flows } : {}),
+      ...(this.personaText ? { persona: this.personaText } : {}),
       canSend: this.sendHandler != null,
     };
 

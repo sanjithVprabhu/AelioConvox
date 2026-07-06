@@ -11,6 +11,17 @@ import { evaluateSafety, type SafetyConfig } from '../safety/policy.js';
 import { buildInputSchema, coerceArgs, findMissingRequiredArgs } from './tool-schema.js';
 
 const MAX_TOOL_ITERATIONS = 5;
+// A tool result enters the conversation and is re-sent on EVERY subsequent LLM
+// call in the window — one uncapped result inflates the whole session. Cap it
+// and tell the model explicitly, so it narrows the query instead of guessing.
+const MAX_TOOL_RESULT_CHARS = 4000;
+
+function capToolResult(payload: string): string {
+  if (payload.length <= MAX_TOOL_RESULT_CHARS) {
+    return payload;
+  }
+  return `${payload.slice(0, MAX_TOOL_RESULT_CHARS)}…[truncated ${payload.length - MAX_TOOL_RESULT_CHARS} of ${payload.length} chars — ask for a narrower query to see more]`;
+}
 
 function toToolDefinitions(functions: FunctionDefinition[]): ToolDefinition[] {
   return functions.map((fn) => ({
@@ -184,7 +195,7 @@ export async function runToolLoop(input: {
       toolResults.push({
         toolUseId: toolCall.id,
         content: invokeResult.ok
-          ? JSON.stringify(invokeResult.data)
+          ? capToolResult(JSON.stringify(invokeResult.data))
           : JSON.stringify({ error: invokeResult.error ?? 'SDK invocation failed' }),
       });
     }

@@ -176,6 +176,8 @@ export const turnApiCalls = sqliteTable(
     toolNames: text('tool_names', { mode: 'json' }).$type<string[]>(),
     stopReason: text('stop_reason'),
     durationMs: integer('duration_ms'),
+    tokensIn: integer('tokens_in'),
+    tokensOut: integer('tokens_out'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [

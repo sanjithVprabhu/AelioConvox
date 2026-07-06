@@ -20,6 +20,7 @@ class FunctionSchema:
     description: str
     params: Dict[str, Any]
     safety: str
+    intent: Optional[str] = None
 
 
 @dataclass
@@ -52,6 +53,7 @@ class Aelio:
         self.policies: Dict[str, PolicySchema] = {}
         self.flows: Dict[str, FlowSchema] = {}
         self._send_handler: Optional[SendHandler] = None
+        self._persona: Optional[str] = None
         self._ws = None
         self._last_pong_at = int(time.time() * 1000)
 
@@ -91,12 +93,16 @@ class Aelio:
             payload["completedSteps"] = completed_steps
         await self._ws.send(json.dumps(payload))
 
-    def expose(self, name: str, description: str, params: Dict[str, Any], safety: str):
+    def expose(self, name: str, description: str, params: Dict[str, Any], safety: str, intent: Optional[str] = None):
         def decorator(func: Handler):
-            self.handlers[name] = (func, FunctionSchema(description=description, params=params, safety=safety))
+            self.handlers[name] = (func, FunctionSchema(description=description, params=params, safety=safety, intent=intent))
             return func
 
         return decorator
+
+    def persona(self, text: str) -> None:
+        """Set the assistant persona/voice; becomes the stable head of the system prompt."""
+        self._persona = text.strip()
 
     def on_send(self, handler: SendHandler) -> None:
         """Deliver outbound messages through your own provider (bring-your-own
@@ -128,6 +134,7 @@ class Aelio:
                 "description": schema.description,
                 "params": schema.params,
                 "safety": schema.safety,
+                **({"intent": schema.intent} if schema.intent else {}),
             }
             for name, (_, schema) in self.handlers.items()
         ]
@@ -171,6 +178,8 @@ class Aelio:
             "functions": functions,
             "canSend": self._send_handler is not None,
         }
+        if self._persona:
+            payload["persona"] = self._persona
         if states:
             payload["states"] = states
         if policies:
@@ -280,11 +289,16 @@ class Aelio:
             )
 
     async def listen(self) -> None:
-        endpoint = f"{self.url}{DEFAULT_SDK_PATH}?secret={self.secret}"
+        # Secret travels as an Authorization header, never in the URL.
+        endpoint = f"{self.url}{DEFAULT_SDK_PATH}"
         backoff = 1
         while True:
             try:
-                async with websockets.connect(endpoint, ping_interval=None) as websocket:
+                async with websockets.connect(
+                    endpoint,
+                    ping_interval=None,
+                    additional_headers={"Authorization": f"Bearer {self.secret}"},
+                ) as websocket:
                     self._ws = websocket
                     self._last_pong_at = int(time.time() * 1000)
                     await self._send_register(websocket)

@@ -99,28 +99,25 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 // 2) Lifecycle catalog — states, policies, and guided flows (SDK → Aelio server).
 //    Your backend decides each customer's current state via setCustomerState().
 // ---------------------------------------------------------------------------
+aelio.persona(
+  'You are the ShopCo assistant. Be friendly and efficient; refer to the product as ShopCo. Use tools for any account-specific data.',
+);
+
 aelio.state('onboarding', {
-  description: `
-    New customer setting up ShopCo for the first time.
-    Help with setup only: exploring orders, checking subscription, listing invoices.
-    Do NOT discuss plan upgrades, cancellations, or churn retention offers.
-  `,
+  description:
+    'New customer setting up ShopCo for the first time. Help with setup only: exploring orders, checking subscription, listing invoices. Do NOT discuss plan upgrades, cancellations, or churn retention offers.',
   allowedTools: ['listOrders', 'getOrderStatus', 'getSubscription', 'listInvoices'],
   blockedTools: ['cancelOrder', 'upgradePlan'],
 });
 
 aelio.state('active', {
-  description: `
-    Fully onboarded paying customer. Full product support: orders, subscription,
-    upgrades, and cancellations (with confirmation).
-  `,
+  description:
+    'Fully onboarded paying customer. Full product support: orders, subscription, upgrades, and cancellations (with confirmation).',
 });
 
 aelio.state('churn_risk', {
-  description: `
-    Customer may be leaving. Be empathetic and retention-focused.
-    Do NOT push new feature upsells. Focus on understanding issues and keeping them.
-  `,
+  description:
+    'Customer may be leaving. Be empathetic and retention-focused. Do NOT push new feature upsells. Focus on understanding issues and keeping them.',
   blockedTools: ['upgradePlan'],
 });
 
@@ -152,36 +149,42 @@ aelio.expose('listOrders', async ({ status }, ctx) => api.listOrders(ctx.custome
   description: "List the customer's orders, optionally filtered by status",
   params: { status: { type: 'string', enum: ['shipped', 'pending', 'cancelled'], optional: true } },
   safety: 'read',
+  intent: 'order_inquiry',
 });
 
 aelio.expose('getOrderStatus', async ({ orderId }, ctx) => api.getOrderStatus(ctx.customerId, orderId as string), {
   description: 'Get the status and tracking of a specific order by its id (e.g. A-1002)',
   params: { orderId: 'string' },
   safety: 'read',
+  intent: 'order_inquiry',
 });
 
 aelio.expose('getSubscription', async (_args, ctx) => api.getSubscription(ctx.customerId), {
   description: "Get the customer's current subscription plan and renewal date",
   params: {},
   safety: 'read',
+  intent: 'subscription',
 });
 
 aelio.expose('listInvoices', async (_args, ctx) => api.listInvoices(ctx.customerId), {
   description: "List the customer's invoices and whether they are paid",
   params: {},
   safety: 'read',
+  intent: 'billing',
 });
 
 aelio.expose('cancelOrder', async ({ orderId }, ctx) => api.cancelOrder(ctx.customerId, orderId as string), {
   description: 'Cancel a pending order by its id',
   params: { orderId: 'string' },
   safety: 'write', // Aelio asks the customer to confirm before this runs
+  intent: 'cancellation',
 });
 
 aelio.expose('upgradePlan', async ({ plan }, ctx) => api.upgradePlan(ctx.customerId, plan as 'starter' | 'pro' | 'enterprise'), {
   description: 'Upgrade or change the subscription plan',
   params: { plan: { type: 'string', enum: ['starter', 'pro', 'enterprise'], description: 'Target plan' } },
   safety: 'write',
+  intent: 'subscription',
 });
 
 const PORT = Number(process.env.PORT ?? 8081);

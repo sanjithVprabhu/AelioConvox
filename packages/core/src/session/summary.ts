@@ -1,7 +1,12 @@
 import type { AelioDatabase } from '@aelio/db';
 import { messages, sessions } from '@aelio/db';
 import type { LLMProvider } from '@aelio/llm';
-import { and, asc, count, eq } from 'drizzle-orm';
+import { asc, count, desc, eq } from 'drizzle-orm';
+
+type SessionSummaryMeta = {
+  summarizedAtCount?: number;
+  [key: string]: unknown;
+};
 
 export async function loadSessionSummary(
   db: AelioDatabase['db'],
@@ -29,25 +34,36 @@ export async function maybeSummarizeSession(input: {
     return null;
   }
 
-  const existing = await loadSessionSummary(input.db, input.sessionId);
-  if (existing) {
+  const sessionRows = await input.db
+    .select({ summary: sessions.summary, metadata: sessions.metadata })
+    .from(sessions)
+    .where(eq(sessions.id, input.sessionId))
+    .limit(1);
+  const existing = sessionRows[0]?.summary ?? null;
+  const metadata = (sessionRows[0]?.metadata ?? {}) as SessionSummaryMeta;
+  const summarizedAtCount = metadata.summarizedAtCount ?? 0;
+
+  // Refresh, don't freeze: a summary made at turn 50 is stale by turn 120.
+  // Re-summarize each time another `summarizeAfter` messages accumulate,
+  // folding the previous summary in so nothing already condensed is lost.
+  if (existing && messageCount < summarizedAtCount + input.summarizeAfter) {
     return existing;
   }
 
   const rows = await input.db
     .select({ role: messages.role, content: messages.content })
     .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, input.sessionId),
-      ),
-    )
-    .orderBy(asc(messages.createdAt))
+    .where(eq(messages.sessionId, input.sessionId))
+    .orderBy(desc(messages.createdAt))
     .limit(Math.min(input.summarizeAfter, 50));
+  rows.reverse();
 
   const transcript = rows
     .map((row) => `${row.role}: ${row.content ?? ''}`.trim())
     .join('\n');
+  const promptBody = existing
+    ? `Previous summary:\n${existing}\n\nNew messages since then:\n${transcript}`
+    : transcript;
 
   let summary = '';
   try {
@@ -56,22 +72,27 @@ export async function maybeSummarizeSession(input: {
       maxTokens: Math.min(input.maxTokens, 300),
       tools: [],
       system:
-        'Summarize this customer session in 4-6 short bullets focusing on goals, facts, preferences, unresolved issues, and any promised follow-up.',
-      messages: [{ role: 'user', content: transcript }],
+        'Summarize this customer session in 4-6 short bullets focusing on goals, facts, preferences, unresolved issues, and any promised follow-up. When a previous summary is provided, merge it with the new messages into one updated summary.',
+      messages: [{ role: 'user', content: promptBody }],
       telemetry: { purpose: 'session_summary' },
     });
     summary = result.text.trim();
   } catch {
-    summary = rows
-      .slice(-10)
-      .map((row) => `${row.role}: ${row.content ?? ''}`.trim())
-      .join('\n');
+    summary =
+      existing ??
+      rows
+        .slice(-10)
+        .map((row) => `${row.role}: ${row.content ?? ''}`.trim())
+        .join('\n');
   }
 
   if (!summary) {
     return null;
   }
 
-  await input.db.update(sessions).set({ summary }).where(eq(sessions.id, input.sessionId));
+  await input.db
+    .update(sessions)
+    .set({ summary, metadata: { ...metadata, summarizedAtCount: messageCount } })
+    .where(eq(sessions.id, input.sessionId));
   return summary;
 }

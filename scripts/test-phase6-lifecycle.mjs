@@ -7,9 +7,8 @@ import WebSocket from 'ws';
 const baseUrl = process.env.AELIO_SERVER_URL ?? 'http://127.0.0.1:3000';
 const secret = process.env.AELIO_SDK_SECRET ?? 'change-me-in-production';
 const wsUrl = new URL('/sdk', baseUrl.replace(/^http/, 'ws'));
-wsUrl.searchParams.set('secret', secret);
 
-const socket = new WebSocket(wsUrl);
+const socket = new WebSocket(wsUrl, { headers: { authorization: `Bearer ${secret}` } });
 
 socket.on('open', () => {
   socket.send(

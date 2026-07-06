@@ -7,4 +7,5 @@ export {
   type IntentFrame,
   type IntentStack,
   type IntentStackConfig,
+  type IntentSource,
 } from './stack.js';

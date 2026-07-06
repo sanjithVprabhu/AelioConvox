@@ -1,0 +1,77 @@
+/**
+ * Agent-grade tool selection. Below the threshold every registered tool ships to
+ * the model (zero overhead, maximum recall). Above it, only the top-K most
+ * relevant tools for THIS message are sent — models pick reliably from ~10–30
+ * tools, and token cost otherwise grows linearly with registry size, which a
+ * company-scale brain (50–200 tools across appendages) cannot afford per turn.
+ *
+ * Relevance = cosine similarity between the user message and each tool's
+ * `name + intent + description`. Both sides go through the memoized `embed()`,
+ * so tool vectors are computed once per process and the message vector is shared
+ * with memory recall / the response cache within the turn.
+ *
+ * Some tools must be present regardless of similarity ranking:
+ *  - tools already executed in the session's active intent frames (mid-task),
+ *  - the active flow step's tool,
+ *  - a pending-confirmation tool.
+ * Callers pass those as `forceInclude`.
+ */
+import type { FunctionDefinition } from '@aelio/protocol';
+import { cosineSimilarity, embed } from '../analyst/embeddings.js';
+
+export const TOOL_RETRIEVAL_THRESHOLD = 12;
+export const TOOL_RETRIEVAL_TOP_K = 8;
+
+export type ToolRetrievalOptions = {
+  /** Send everything when the registry is at or below this size. */
+  threshold?: number;
+  /** How many ranked tools to keep above the threshold. */
+  topK?: number;
+  /** Tool names that must survive selection regardless of ranking. */
+  forceInclude?: string[];
+};
+
+function toolDescriptor(tool: FunctionDefinition): string {
+  return [tool.name, tool.intent ?? '', tool.description].filter(Boolean).join(' — ');
+}
+
+export async function selectRelevantTools(
+  functions: FunctionDefinition[],
+  userMessage: string,
+  options?: ToolRetrievalOptions,
+): Promise<FunctionDefinition[]> {
+  const threshold = options?.threshold ?? TOOL_RETRIEVAL_THRESHOLD;
+  const topK = options?.topK ?? TOOL_RETRIEVAL_TOP_K;
+
+  if (functions.length <= threshold) {
+    return functions;
+  }
+
+  const forced = new Set(options?.forceInclude ?? []);
+  const queryEmbedding = await embed(userMessage);
+
+  const ranked = await Promise.all(
+    functions.map(async (fn) => {
+      const vector = await embed(toolDescriptor(fn));
+      return { fn, score: cosineSimilarity(queryEmbedding, vector) };
+    }),
+  );
+
+  ranked.sort((a, b) => b.score - a.score);
+
+  const selected = new Map<string, FunctionDefinition>();
+  for (const fn of functions) {
+    if (forced.has(fn.name)) {
+      selected.set(fn.name, fn);
+    }
+  }
+  for (const entry of ranked) {
+    if (selected.size >= Math.max(topK, forced.size)) {
+      break;
+    }
+    selected.set(entry.fn.name, entry.fn);
+  }
+
+  // Preserve the original registry order for prompt stability.
+  return functions.filter((fn) => selected.has(fn.name));
+}

@@ -31,10 +31,18 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
   }, HEARTBEAT_INTERVAL_MS).unref();
 
   app.get(DEFAULT_SDK_PATH, { websocket: true }, (socket, request) => {
-    const secret = new URL(request.url, 'http://localhost').searchParams.get('secret');
+    // Preferred: Authorization header (never logged). Query-param `?secret=`
+    // remains as a DEPRECATED fallback for older SDKs.
+    const header = request.headers.authorization;
+    const bearer = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
+    const secret =
+      bearer ?? new URL(request.url, 'http://localhost').searchParams.get('secret');
     if (!secret || secret !== config.secret) {
       socket.close(1008, 'Invalid SDK secret');
       return;
+    }
+    if (!bearer) {
+      app.log.warn('SDK connected with ?secret= in the URL — deprecated; upgrade the SDK to send an Authorization header');
     }
 
     const connectionId = randomUUID();
@@ -61,6 +69,7 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           states: message.states ?? [],
           policies: message.policies ?? [],
           flows: message.flows ?? [],
+          persona: message.persona?.trim() || null,
           sdkVersion: message.sdkVersion,
           language: message.language,
           canSend: message.canSend ?? false,
@@ -138,6 +147,16 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
       if (message.type === 'ingest') {
         // The dev's own channel webhook handed us an inbound message. Queue it
         // for the inbound worker exactly like a built-in channel would.
+        if (
+          message.messageId &&
+          !database.claimInboundMessage(`${message.channel}:${message.messageId}`)
+        ) {
+          app.log.info(
+            { connectionId, messageId: message.messageId },
+            'Duplicate ingest dropped',
+          );
+          return;
+        }
         void enqueueJob(database, 'inbound', {
           channel: message.channel,
           from: message.from,

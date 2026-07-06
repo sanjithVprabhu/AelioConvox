@@ -8,6 +8,10 @@ type AnthropicContentBlock =
 type AnthropicResponse = {
   content: AnthropicContentBlock[];
   stop_reason: 'end_turn' | 'tool_use' | 'max_tokens' | string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+  };
 };
 
 function toAnthropicMessages(messages: ChatMessage[]) {
@@ -106,6 +110,18 @@ export class AnthropicProvider implements LLMProvider {
           ? 'length'
           : 'stop';
 
-    return { text, toolCalls, stopReason };
+    return {
+      text,
+      toolCalls,
+      stopReason,
+      ...(data.usage
+        ? {
+            usage: {
+              inputTokens: data.usage.input_tokens ?? 0,
+              outputTokens: data.usage.output_tokens ?? 0,
+            },
+          }
+        : {}),
+    };
   }
 }

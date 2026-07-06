@@ -28,6 +28,11 @@ export type AelioDatabase = {
     category: string | null;
     embedding: number[];
   }) => void;
+  /**
+   * Atomically claim an inbound message id. Returns true the first time an id
+   * is seen, false on webhook redelivery — callers drop duplicates.
+   */
+  claimInboundMessage: (messageId: string) => boolean;
   searchMemoryVectors: (input: {
     customerId: string;
     embedding: number[];
@@ -176,6 +181,16 @@ export function createDatabase(databasePath: string): AelioDatabase {
     CREATE INDEX IF NOT EXISTS idx_proactive_customer ON proactive_messages(customer_id, created_at);
   `);
 
+  // Channel webhooks retry (Meta redelivers on slow ACKs); processing the same
+  // inbound message twice double-spends LLM calls and can re-run tools. Dedup by
+  // provider message id.
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS inbound_dedup (
+      message_id TEXT PRIMARY KEY NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `);
+
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS response_cache (
       id TEXT PRIMARY KEY NOT NULL,
@@ -220,6 +235,16 @@ export function createDatabase(databasePath: string): AelioDatabase {
     vectorEnabled,
     migrate(migrationsFolder: string) {
       migrate(db, { migrationsFolder });
+      // Additive columns for existing deployments (SQLite has no IF NOT EXISTS
+      // for columns; inspect the table instead).
+      const turnCallCols = sqlite
+        .prepare("SELECT name FROM pragma_table_info('turn_api_calls')")
+        .all() as Array<{ name: string }>;
+      const colNames = new Set(turnCallCols.map((c) => c.name));
+      if (colNames.size > 0 && !colNames.has('tokens_in')) {
+        sqlite.exec('ALTER TABLE turn_api_calls ADD COLUMN tokens_in INTEGER');
+        sqlite.exec('ALTER TABLE turn_api_calls ADD COLUMN tokens_out INTEGER');
+      }
       syncExistingMemoryRows(sqlite, vectorEnabled);
     },
     upsertMemoryVector(input) {
@@ -246,6 +271,18 @@ export function createDatabase(databasePath: string): AelioDatabase {
       });
 
       tx();
+    },
+    claimInboundMessage(messageId: string): boolean {
+      const inserted = sqlite
+        .prepare('INSERT OR IGNORE INTO inbound_dedup (message_id, created_at) VALUES (?, ?)')
+        .run(messageId, Date.now());
+      // Opportunistic prune (~1% of claims): entries older than 7 days.
+      if (Math.random() < 0.01) {
+        sqlite
+          .prepare('DELETE FROM inbound_dedup WHERE created_at < ?')
+          .run(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      }
+      return inserted.changes === 1;
     },
     searchMemoryVectors(input) {
       if (!vectorEnabled) {

@@ -1,6 +1,6 @@
 import type { AelioDatabase } from '@aelio/db';
 import { memory } from '@aelio/db';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, or } from 'drizzle-orm';
 import { cosineSimilarity, embed, embedText } from './embeddings.js';
 
 export type RecalledMemory = {
@@ -30,10 +30,16 @@ export async function recallMemories(
       return [];
     }
 
+    const now = new Date();
     const records = await database.db
       .select()
       .from(memory)
-      .where(inArray(memory.id, memoryIds));
+      .where(
+        and(
+          inArray(memory.id, memoryIds),
+          or(isNull(memory.expiresAt), gt(memory.expiresAt, now)),
+        ),
+      );
 
     const recordMap = new Map(records.map((row) => [row.id, row]));
 
@@ -61,7 +67,12 @@ export async function recallMemories(
   const rows = await database.db
     .select()
     .from(memory)
-    .where(eq(memory.customerId, customerId));
+    .where(
+      and(
+        eq(memory.customerId, customerId),
+        or(isNull(memory.expiresAt), gt(memory.expiresAt, new Date())),
+      ),
+    );
 
   const scored = rows
     .map((row) => {

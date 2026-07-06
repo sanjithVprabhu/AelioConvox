@@ -18,6 +18,8 @@ export interface SdkBridge {
   getStates(): StateDefinition[];
   getPolicies(): PolicyDefinition[];
   getFlows(): FlowDefinition[];
+  /** Client-declared assistant persona, when the SDK registered one. */
+  getPersona?(): string | null;
   invoke(
     functionName: string,
     args: Record<string, unknown>,

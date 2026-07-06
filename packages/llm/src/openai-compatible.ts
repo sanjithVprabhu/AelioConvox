@@ -44,6 +44,10 @@ type OpenAIResponse = {
   error?: {
     message?: string;
   };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+  };
 };
 
 type OpenAIToolCall = NonNullable<
@@ -183,6 +187,14 @@ export class OpenAICompatibleProvider implements LLMProvider {
           : finishReason === 'length'
             ? 'length'
             : 'stop',
+      ...(data.usage
+        ? {
+            usage: {
+              inputTokens: data.usage.prompt_tokens ?? 0,
+              outputTokens: data.usage.completion_tokens ?? 0,
+            },
+          }
+        : {}),
     };
   }
 }

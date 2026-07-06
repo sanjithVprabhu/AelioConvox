@@ -43,10 +43,17 @@ export type LLMCompleteOptions = {
   telemetry?: LLMTelemetryMeta;
 };
 
+export type LLMUsage = {
+  inputTokens: number;
+  outputTokens: number;
+};
+
 export type LLMCompleteResult = {
   text: string;
   toolCalls: LLMToolCall[];
   stopReason: 'stop' | 'tool_use' | 'length' | 'error';
+  /** Provider-reported token usage, when available. */
+  usage?: LLMUsage;
 };
 
 export interface LLMProvider {

@@ -26,6 +26,19 @@ export {
   type JsonSchemaType,
   type ArgCoercionResult,
 } from './runtime/tool-schema.js';
+export {
+  composeSystemPrompt,
+  normalizePromptText,
+  approxTokens,
+  type PromptSection,
+  type ComposeOptions,
+} from './runtime/prompt-composer.js';
+export {
+  selectRelevantTools,
+  TOOL_RETRIEVAL_THRESHOLD,
+  TOOL_RETRIEVAL_TOP_K,
+  type ToolRetrievalOptions,
+} from './runtime/tool-retrieval.js';
 export { assertWithinRateLimit, type RateLimitConfig } from './runtime/rate-limit.js';
 export {
   sendProactiveMessage,

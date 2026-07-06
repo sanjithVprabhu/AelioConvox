@@ -28,6 +28,10 @@ type GeminiResponse = {
     finishReason?: string;
   }>;
   error?: { message?: string };
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+  };
 };
 
 function toGeminiContents(messages: ChatMessage[]): GeminiContent[] {
@@ -166,6 +170,18 @@ export class GeminiProvider implements LLMProvider {
       throw new Error(data.error?.message ?? 'Gemini API returned no completion');
     }
 
-    return { text, toolCalls, stopReason };
+    return {
+      text,
+      toolCalls,
+      stopReason,
+      ...(data.usageMetadata
+        ? {
+            usage: {
+              inputTokens: data.usageMetadata.promptTokenCount ?? 0,
+              outputTokens: data.usageMetadata.candidatesTokenCount ?? 0,
+            },
+          }
+        : {}),
+    };
   }
 }

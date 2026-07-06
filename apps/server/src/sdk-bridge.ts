@@ -22,6 +22,7 @@ type ActiveConnection = {
   states: StateDefinition[];
   policies: PolicyDefinition[];
   flows: FlowDefinition[];
+  persona: string | null;
   sdkVersion: string;
   language: string;
   canSend: boolean;
@@ -125,6 +126,15 @@ export class ServerSdkBridge implements SdkBridge {
       }
     }
     return [...seen.values()];
+  }
+
+  getPersona(): string | null {
+    for (const connection of this.connections.values()) {
+      if (connection.persona) {
+        return connection.persona;
+      }
+    }
+    return null;
   }
 
   getFlows(): FlowDefinition[] {

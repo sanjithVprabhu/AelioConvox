@@ -127,7 +127,9 @@ export async function embed(text: string, options?: EmbedOptions): Promise<numbe
   if (options?.purpose) {
     const provider = cacheHit ? 'cache' : usedRemote ? 'remote' : 'hash';
     const { recordTurnApiCall } = await import('../telemetry/turn-calls.js');
-    await recordTurnApiCall({
+    // Fire-and-forget: telemetry must never add latency to the embed hot path
+    // (it runs several times per turn, including on cache hits).
+    void recordTurnApiCall({
       callType: 'embed',
       purpose: options.purpose,
       model: options.model ?? (cacheHit ? 'cache' : usedRemote ? 'configured' : 'hash'),
@@ -138,7 +140,7 @@ export async function embed(text: string, options?: EmbedOptions): Promise<numbe
       sessionId: options.sessionId,
       customerId: options.customerId,
       database: options.database,
-    });
+    }).catch(() => {});
   }
 
   return vector;

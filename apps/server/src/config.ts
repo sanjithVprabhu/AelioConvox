@@ -35,6 +35,9 @@ export const ConfigSchema = z.object({
       api_key: z.string().optional(),
       base_url: z.string().url().optional(),
       max_tokens: z.number().int().positive().default(4096),
+      // Assistant persona/voice. An SDK-registered persona (aelio.persona()) takes
+      // precedence; this is the config-level fallback.
+      system_prompt: z.string().optional(),
       fallback: z
         .object({
           provider: z.enum(['anthropic', 'openai', 'gemini', 'groq', 'ollama', 'mock']),

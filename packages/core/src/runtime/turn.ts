@@ -51,6 +51,8 @@ import {
   getCustomerLifecycleMetadata,
   type CustomerLifecycleMetadata,
 } from '../lifecycle/index.js';
+import { composeSystemPrompt } from './prompt-composer.js';
+import { selectRelevantTools } from './tool-retrieval.js';
 import { runToolLoop } from './tool-loop.js';
 import { runWithTurnContext } from '../telemetry/turn-calls.js';
 
@@ -80,6 +82,8 @@ export type ProcessTurnInput = {
   cache?: ResponseCacheConfig;
   intent?: IntentStackConfig;
   messageStore?: ConvoxMessageStore;
+  /** Config-level persona override (SDK-registered persona wins when present). */
+  persona?: string | null;
 };
 
 type PersistMessageInput = {
@@ -137,10 +141,25 @@ async function persistMessage(
   message: PersistMessageInput,
 ): Promise<void> {
   if (input.messageStore) {
-    await input.messageStore.appendMessage({
-      ...message,
-      channel: message.channel,
-    });
+    try {
+      await input.messageStore.appendMessage({
+        ...message,
+        channel: message.channel,
+      });
+    } catch (error) {
+      // A Sunjet outage must degrade archival, never conversations. With the
+      // fallback enabled the SQLite write below keeps the turn fully durable;
+      // archive rows can be reconciled later.
+      if (!input.messageStore.fallbackSqliteOnError) {
+        throw error;
+      }
+      console.error(
+        '[aelio] Sunjet append failed — continuing on SQLite:',
+        error instanceof Error ? error.message : String(error),
+      );
+      await appendMessage(db, message);
+      return;
+    }
     if (input.messageStore.dualWriteSqlite) {
       await appendMessage(db, message);
       return;
@@ -179,10 +198,11 @@ async function loadTurnHistory(
   }
 }
 
-const DEFAULT_SYSTEM = `You are Aelio, a helpful conversational assistant for a SaaS product.
+const DEFAULT_PERSONA = `You are Aelio, a helpful conversational assistant for a SaaS product.
 Answer clearly and concisely. Use available tools when you need account-specific data.
-Never invent order details — always use tools for factual lookups.
-For write actions, do NOT ask the user to confirm yourself — once you have the required
+Never invent account details — always use tools for factual lookups.`;
+
+const TOOL_GUIDANCE = `For write actions, do NOT ask the user to confirm yourself — once you have the required
 arguments, call the tool directly. The platform automatically asks the user to confirm
 before any write executes, so a second confirmation question from you is redundant.`;
 
@@ -366,18 +386,24 @@ async function executeTurn(
     flows: input.sdk.getFlows(),
     flowProgress: lifecycle.flowProgress,
   });
-  const scopedFunctions = filterFunctionsByState(input.sdk.getFunctions(), stateDef);
+  // Lifecycle scoping first (allowed/blocked per state), then relevance
+  // retrieval: above the registry-size threshold only the top-K tools for THIS
+  // message ship to the model. The active flow step's tool always survives.
+  const stateScopedFunctions = filterFunctionsByState(input.sdk.getFunctions(), stateDef);
+  const activeFlowTools: string[] = [];
+  for (const flow of input.sdk.getFlows()) {
+    const progress = lifecycle.flowProgress?.[flow.id];
+    if (!progress) continue;
+    const step = flow.steps[Math.min(progress.currentStepIndex, flow.steps.length - 1)];
+    if (step?.tool) {
+      activeFlowTools.push(step.tool);
+    }
+  }
+  const scopedFunctions = await selectRelevantTools(stateScopedFunctions, input.message, {
+    forceInclude: activeFlowTools,
+  });
 
-  let system = DEFAULT_SYSTEM;
-  if (intentPrompt) {
-    system += `\n\n${intentPrompt}`;
-  }
-  if (lifecyclePrompt) {
-    system += `\n\n${lifecyclePrompt}`;
-  }
-  if (summary) {
-    system += `\n\nRolling session summary:\n${summary}`;
-  }
+  let memoriesPrompt = '';
   if (input.memoryEnabled !== false) {
     const recalled = await recallMemories(
       input.database,
@@ -386,9 +412,21 @@ async function executeTurn(
       input.memoryRecallLimit,
     );
     if (recalled.length > 0) {
-      system += `\n\n${summarizeMemories(recalled)}`;
+      memoriesPrompt = summarizeMemories(recalled);
     }
   }
+
+  // Stable sections form a cache-friendly prefix; volatile context renders last
+  // and is trimmed first under budget pressure (see prompt-composer.ts).
+  const persona = input.sdk.getPersona?.() ?? input.persona ?? DEFAULT_PERSONA;
+  const system = composeSystemPrompt([
+    { id: 'persona', content: persona, stability: 'stable', priority: 100, maxTokens: 800 },
+    { id: 'guidance', content: TOOL_GUIDANCE, stability: 'stable', priority: 95 },
+    { id: 'lifecycle', content: lifecyclePrompt ?? '', stability: 'stable', priority: 90, maxTokens: 1200 },
+    { id: 'summary', content: summary ? `Rolling session summary:\n${summary}` : '', stability: 'volatile', priority: 60, maxTokens: 600 },
+    { id: 'memories', content: memoriesPrompt, stability: 'volatile', priority: 50, maxTokens: 600 },
+    { id: 'intent', content: intentPrompt, stability: 'volatile', priority: 40, maxTokens: 400 },
+  ]);
 
   const loopResult = await runToolLoop({
     database: input.database,
@@ -416,6 +454,7 @@ async function executeTurn(
       userMessage: input.message,
       assistantReply: loopResult.reply,
       toolNames: loopResult.executedToolNames,
+      registeredTools: input.sdk.getFunctions(),
       config: input.intent,
     });
     await saveIntentStack(db, session.id, nextStack);

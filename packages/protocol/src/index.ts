@@ -18,6 +18,10 @@ export const FunctionDefinitionSchema = z.object({
   description: z.string().min(1),
   params: z.record(z.unknown()),
   safety: SafetyLevelSchema,
+  // Client-declared intent category (e.g. "order_inquiry"). Drives the runtime's
+  // intent stack and tool retrieval using the TENANT's vocabulary — the core never
+  // hardcodes domain topics. Falls back to the function name when omitted.
+  intent: z.string().min(1).optional(),
 });
 export type FunctionDefinition = z.infer<typeof FunctionDefinitionSchema>;
 
@@ -72,6 +76,9 @@ export const RegisterMessageSchema = z.object({
   states: z.array(StateDefinitionSchema).optional(),
   policies: z.array(PolicyDefinitionSchema).optional(),
   flows: z.array(FlowDefinitionSchema).optional(),
+  // Client-supplied assistant persona/voice; becomes the stable head of the
+  // system prompt (see runtime/prompt-composer).
+  persona: z.string().optional(),
   // True when the SDK has registered an onSend handler — i.e. it can deliver
   // outbound channel messages itself (bring-your-own WhatsApp/SMS provider).
   canSend: z.boolean().optional(),

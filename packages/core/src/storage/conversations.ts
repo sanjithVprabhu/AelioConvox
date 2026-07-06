@@ -24,9 +24,22 @@ function optionalI64(value: number | undefined): ApiValue {
   return value === undefined ? { type: 'null' } : i64(value);
 }
 
+const warnedDims = new Set<string>();
+
 function normalizeEmbedding(vector: number[], dim: number): number[] {
   if (vector.length === dim) {
     return vector;
+  }
+  // A mismatch means the configured embeddings.output_dimension does not match
+  // sunjet.embed_dim — vectors are being silently reshaped, which degrades
+  // similarity search. Surface it once instead of hiding it.
+  const key = `${vector.length}->${dim}`;
+  if (!warnedDims.has(key)) {
+    warnedDims.add(key);
+    console.warn(
+      `[aelio] embedding dimension mismatch: provider returned ${vector.length}, table expects ${dim}. ` +
+        'Align embeddings.output_dimension with sunjet.embed_dim to avoid degraded semantic search.',
+    );
   }
   if (vector.length > dim) {
     return vector.slice(0, dim);
