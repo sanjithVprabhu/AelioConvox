@@ -1,0 +1,16 @@
+[package]
+name = "ll-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LL's runner for the shared filtered-vector benchmark (vs pgvector/Qdrant/etc.)."
+
+[[bin]]
+name = "ll-bench"
+path = "src/main.rs"
+
+[dependencies]
+ll-engine = { path = "../ll-engine" }
+ll-format = { path = "../ll-format" }
+ll-index = { path = "../ll-index" }
+ll-query = { path = "../ll-query" }

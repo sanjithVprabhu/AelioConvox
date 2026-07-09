@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ll-format",
+    "crates/ll-index",
+    "crates/ll-cost",
+    "crates/ll-text",
+    "crates/ll-graph",
+    "crates/ll-wal",
+    "crates/ll-engine",
+    "crates/ll-query",
+    "crates/ll-catalog",
+    "crates/ll-bench",
+    "crates/ll-server",
+    "crates/sunjet-daemon",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/sanjithVprabhu/Astrolobe"
+authors = ["LL contributors"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

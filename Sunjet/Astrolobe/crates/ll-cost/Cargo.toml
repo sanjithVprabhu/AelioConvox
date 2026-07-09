@@ -1,0 +1,13 @@
+[package]
+name = "ll-cost"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LL cost model: selectivity estimation + filtered-vector strategy selection."
+
+[dependencies]
+# Pure cost math + statistics; no runtime deps.
+
+[dev-dependencies]
+# Integration test validates the selector against the real index strategies.
+ll-index = { path = "../ll-index" }
