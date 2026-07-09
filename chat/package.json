@@ -1,0 +1,55 @@
+{
+  "name": "@aelio/chat",
+  "version": "0.1.0",
+  "description": "Embeddable Aelio chat widget for browser apps.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/widget.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/widget.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./widget.js": "./dist/widget.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "aelio",
+    "chat",
+    "widget",
+    "chatbot",
+    "ai",
+    "llm",
+    "websocket",
+    "customer-support"
+  ],
+  "homepage": "https://github.com/aelio-dev/aelio#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aelio-dev/aelio.git",
+    "directory": "chat"
+  },
+  "bugs": {
+    "url": "https://github.com/aelio-dev/aelio/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vite build && tsc --emitDeclarationOnly --declaration --outDir dist && node scripts/copy-server-widget.mjs",
+    "dev": "vite build --watch"
+  },
+  "dependencies": {
+    "preact": "^10.26.8"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.1",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

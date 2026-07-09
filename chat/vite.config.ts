@@ -8,11 +8,11 @@ export default defineConfig({
     lib: {
       entry: resolve(__dirname, 'src/widget.tsx'),
       name: 'AelioWidget',
-      formats: ['iife'],
-      fileName: () => 'widget.js',
+      formats: ['es', 'iife'],
+      fileName: (format) => (format === 'es' ? 'index.js' : 'widget.js'),
     },
-    outDir: resolve(__dirname, '../server/public'),
-    emptyOutDir: false,
+    outDir: resolve(__dirname, 'dist'),
+    emptyOutDir: true,
     rollupOptions: {
       output: {
         inlineDynamicImports: true,

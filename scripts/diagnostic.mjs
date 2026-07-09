@@ -84,12 +84,12 @@ const serverEnv = {
   AELIO_TEST_MODE: '1',
   AELIO_DIAGNOSTICS: '1',
   AELIO_MIGRATIONS_PATH: join(root, 'packages/db/drizzle'),
-  AELIO_PUBLIC_PATH: join(root, 'apps/server/public'),
+  AELIO_PUBLIC_PATH: join(root, 'server/public'),
 };
 
 function spawnServer(stdio = 'pipe') {
   return spawn('node', ['dist/main.js'], {
-    cwd: join(root, 'apps/server'),
+    cwd: join(root, 'server'),
     stdio,
     env: { ...process.env, ...serverEnv },
   });
@@ -143,15 +143,15 @@ try {
 
   await section('3. Artifact checks');
   const artifacts = [
-    'apps/server/dist/main.js',
-    'apps/server/public/widget.js',
-    'apps/server/public/demo.html',
+    'server/dist/main.js',
+    'server/public/widget.js',
+    'server/public/demo.html',
     'packages/core/dist/index.js',
     'packages/db/drizzle/meta/_journal.json',
     'packages/protocol/dist/index.js',
     'packages/llm/dist/index.js',
     'packages/channels/dist/index.js',
-    'packages/sdk-node/dist/index.js',
+    'sdk/node/dist/index.js',
   ];
   for (const artifact of artifacts) {
     if (existsSync(join(root, artifact))) {

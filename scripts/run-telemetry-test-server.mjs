@@ -13,7 +13,7 @@ const yaml = readFileSync(src, 'utf8').replace(/^(\s*port:\s*)\d+\s*$/m, '$13002
 writeFileSync(tmp, yaml);
 
 const child = spawn('npx', ['tsx', 'src/main.ts'], {
-  cwd: resolve(root, 'apps/server'),
+  cwd: resolve(root, 'server'),
   env: {
     ...process.env,
     AELIO_CONFIG: tmp,

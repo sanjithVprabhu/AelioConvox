@@ -7,7 +7,11 @@ WORKDIR /app
 RUN corepack enable
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json tsconfig.base.json ./
-COPY apps ./apps
+# The server workspace plus the widget (chat) — the root build compiles @aelio/chat
+# first and its postbuild copies widget.js into server/public, which pnpm deploy
+# bundles. The client SDKs (sdk/) are not needed to build or run the server.
+COPY server ./server
+COPY chat ./chat
 COPY packages ./packages
 COPY config.yaml ./config.yaml
 COPY config.docker.yaml ./config.docker.yaml

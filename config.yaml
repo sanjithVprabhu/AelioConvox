@@ -23,8 +23,16 @@ channels:
     webhook_path: /wa/webhook
   web:
     enabled: true
+    # Origins allowed to open the widget WebSocket. Matched exactly on
+    # scheme+host+port, so localhost and 127.0.0.1 are distinct. Use ["*"] to
+    # allow any origin, or leave empty to disable the origin check (dev only).
     allowed_origins:
       - http://localhost:3000
+      - http://127.0.0.1:3000
+      - http://localhost:5173
+      - http://127.0.0.1:5173
+      - http://localhost:4173
+      - http://127.0.0.1:4173
     magic_link:
       enabled: true
       ttl_minutes: 15

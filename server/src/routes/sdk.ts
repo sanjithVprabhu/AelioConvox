@@ -31,6 +31,7 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
   }, HEARTBEAT_INTERVAL_MS).unref();
 
   app.get(DEFAULT_SDK_PATH, { websocket: true }, (socket, request) => {
+    const remoteAddress = request.socket.remoteAddress ?? 'unknown';
     // Preferred: Authorization header (never logged). Query-param `?secret=`
     // remains as a DEPRECATED fallback for older SDKs.
     const header = request.headers.authorization;
@@ -38,6 +39,14 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
     const secret =
       bearer ?? new URL(request.url, 'http://localhost').searchParams.get('secret');
     if (!secret || secret !== config.secret) {
+      app.log.warn(
+        {
+          route: DEFAULT_SDK_PATH,
+          remoteAddress,
+          usedAuthorizationHeader: Boolean(bearer),
+        },
+        'Rejected SDK websocket connection with invalid secret',
+      );
       socket.close(1008, 'Invalid SDK secret');
       return;
     }
@@ -46,17 +55,45 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
     }
 
     const connectionId = randomUUID();
+    app.log.info(
+      {
+        connectionId,
+        route: DEFAULT_SDK_PATH,
+        remoteAddress,
+        usedAuthorizationHeader: Boolean(bearer),
+      },
+      'SDK websocket connection accepted',
+    );
 
     socket.on('message', (raw) => {
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw.toString());
       } catch {
+        app.log.warn(
+          {
+            connectionId,
+            remoteAddress,
+            payloadPreview: raw.toString().slice(0, 160),
+          },
+          'SDK sent invalid JSON payload',
+        );
         return;
       }
 
       const result = SdkToServerMessageSchema.safeParse(parsed);
       if (!result.success) {
+        app.log.warn(
+          {
+            connectionId,
+            remoteAddress,
+            issues: result.error.issues.map((issue) => ({
+              path: issue.path.join('.'),
+              message: issue.message,
+            })),
+          },
+          'SDK payload failed schema validation',
+        );
         return;
       }
 
@@ -94,6 +131,15 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
       }
 
       if (message.type === 'set_state') {
+        app.log.info(
+          {
+            connectionId,
+            customerId: message.customerId,
+            stateId: message.stateId,
+            reason: message.reason ?? null,
+          },
+          'SDK requested customer lifecycle state update',
+        );
         void upsertCustomerLifecycleState(
           database.db,
           message.customerId,
@@ -114,6 +160,16 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
       }
 
       if (message.type === 'set_flow_progress') {
+        app.log.info(
+          {
+            connectionId,
+            customerId: message.customerId,
+            flowId: message.flowId,
+            stepIndex: message.stepIndex,
+            completedSteps: message.completedSteps ?? [],
+          },
+          'SDK requested flow progress update',
+        );
         void upsertCustomerFlowProgress(
           database.db,
           message.customerId,
@@ -136,15 +192,37 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
 
       if (message.type === 'pong') {
         sdkBridge.touchHeartbeat(connectionId);
+        app.log.debug({ connectionId, remoteAddress, ts: message.ts }, 'SDK heartbeat acknowledged');
         return;
       }
 
       if (message.type === 'result') {
+        app.log.info(
+          {
+            connectionId,
+            requestId: message.id,
+            ok: message.ok,
+            durationMs: message.durationMs,
+            errorCode: message.error?.code ?? null,
+          },
+          'SDK function invocation completed',
+        );
         sdkBridge.handleResult(message);
         return;
       }
 
       if (message.type === 'ingest') {
+        app.log.info(
+          {
+            connectionId,
+            channel: message.channel,
+            from: message.from,
+            messageId: message.messageId ?? null,
+            textPreview: message.text.slice(0, 160),
+            textLength: message.text.length,
+          },
+          'SDK submitted inbound channel message',
+        );
         // The dev's own channel webhook handed us an inbound message. Queue it
         // for the inbound worker exactly like a built-in channel would.
         if (
@@ -173,7 +251,7 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
 
     socket.on('close', () => {
       sdkBridge.unregister(connectionId);
-      app.log.info({ connectionId }, 'Aelio SDK disconnected');
+      app.log.info({ connectionId, remoteAddress }, 'Aelio SDK disconnected');
     });
   });
 }
