@@ -56,8 +56,8 @@ function hasPnpm() {
 
 function needsBuild() {
   return (
-    !existsSync(join(root, 'apps/server/public/widget.js')) ||
-    !existsSync(join(root, 'packages/sdk-node/dist/index.js'))
+    !existsSync(join(root, 'server/public/widget.js')) ||
+    !existsSync(join(root, 'sdk/node/dist/index.js'))
   );
 }
 

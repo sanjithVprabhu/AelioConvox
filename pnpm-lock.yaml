@@ -36,56 +36,7 @@ importers:
         specifier: ^8.18.2
         version: 8.21.0
 
-  apps/server:
-    dependencies:
-      '@aelio/channels':
-        specifier: workspace:*
-        version: link:../../packages/channels
-      '@aelio/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      '@aelio/db':
-        specifier: workspace:*
-        version: link:../../packages/db
-      '@aelio/llm':
-        specifier: workspace:*
-        version: link:../../packages/llm
-      '@aelio/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
-      '@aelio/sunjet-client':
-        specifier: workspace:*
-        version: link:../../packages/sunjet-client
-      '@fastify/static':
-        specifier: ^8.2.0
-        version: 8.3.0
-      '@fastify/websocket':
-        specifier: ^11.1.0
-        version: 11.2.0
-      fastify:
-        specifier: ^5.4.0
-        version: 5.8.5
-      pino:
-        specifier: ^9.7.0
-        version: 9.14.0
-      yaml:
-        specifier: ^2.8.0
-        version: 2.9.0
-      zod:
-        specifier: ^3.25.67
-        version: 3.25.76
-    devDependencies:
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
-      tsx:
-        specifier: ^4.20.3
-        version: 4.22.4
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.3
-
-  apps/web-widget:
+  chat:
     dependencies:
       preact:
         specifier: ^10.26.8
@@ -105,7 +56,7 @@ importers:
     dependencies:
       '@aelio/sdk':
         specifier: workspace:*
-        version: link:../../packages/sdk-node
+        version: link:../../sdk/node
       express:
         specifier: ^5.1.0
         version: 5.2.1
@@ -118,7 +69,7 @@ importers:
     dependencies:
       '@aelio/sdk':
         specifier: workspace:*
-        version: link:../../packages/sdk-node
+        version: link:../../sdk/node
       express:
         specifier: ^5.1.0
         version: 5.2.1
@@ -218,7 +169,19 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
-  packages/sdk-node:
+  packages/sunjet-client:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.32
+        version: 22.19.21
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
+  sdk/node:
     dependencies:
       ws:
         specifier: ^8.18.2
@@ -229,7 +192,7 @@ importers:
     devDependencies:
       '@aelio/protocol':
         specifier: workspace:*
-        version: link:../protocol
+        version: link:../../packages/protocol
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -240,14 +203,51 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
-  packages/sunjet-client:
+  server:
+    dependencies:
+      '@aelio/channels':
+        specifier: workspace:*
+        version: link:../packages/channels
+      '@aelio/core':
+        specifier: workspace:*
+        version: link:../packages/core
+      '@aelio/db':
+        specifier: workspace:*
+        version: link:../packages/db
+      '@aelio/llm':
+        specifier: workspace:*
+        version: link:../packages/llm
+      '@aelio/protocol':
+        specifier: workspace:*
+        version: link:../packages/protocol
+      '@aelio/sunjet-client':
+        specifier: workspace:*
+        version: link:../packages/sunjet-client
+      '@fastify/static':
+        specifier: ^8.2.0
+        version: 8.3.0
+      '@fastify/websocket':
+        specifier: ^11.1.0
+        version: 11.2.0
+      fastify:
+        specifier: ^5.4.0
+        version: 5.8.5
+      pino:
+        specifier: ^9.7.0
+        version: 9.14.0
+      yaml:
+        specifier: ^2.8.0
+        version: 2.9.0
+      zod:
+        specifier: ^3.25.67
+        version: 3.25.76
     devDependencies:
-      '@types/node':
-        specifier: ^22.15.32
-        version: 22.19.21
       tsup:
         specifier: ^8.5.0
         version: 8.5.1(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
+      tsx:
+        specifier: ^4.20.3
+        version: 4.22.4
       typescript:
         specifier: ^5.8.3
         version: 5.9.3

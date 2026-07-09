@@ -2,7 +2,7 @@ app = "aelio-server"
 primary_region = "iad"
 
 [build]
-  dockerfile = "docker/Dockerfile"
+  dockerfile = "server/Dockerfile"
 
 [env]
   AELIO_CONFIG = "/app/config.yaml"

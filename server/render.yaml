@@ -2,7 +2,7 @@ services:
   - type: web
     name: aelio-server
     runtime: docker
-    dockerfilePath: ./docker/Dockerfile
+    dockerfilePath: ./server/Dockerfile
     dockerContext: .
     healthCheckPath: /health
     envVars:

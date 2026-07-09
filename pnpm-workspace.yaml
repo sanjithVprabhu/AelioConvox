@@ -1,4 +1,6 @@
 packages:
-  - "apps/*"
+  - "sdk/node"
+  - "chat"
+  - "server"
   - "packages/*"
   - "examples/*"

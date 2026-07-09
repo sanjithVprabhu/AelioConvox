@@ -93,7 +93,7 @@ const testConfig = configTemplate
 writeFileSync(configPath, testConfig);
 
 const server = spawn('npx', ['tsx', 'src/main.ts'], {
-  cwd: join(root, 'apps/server'),
+  cwd: join(root, 'server'),
   stdio: ['ignore', 'pipe', 'pipe'],
   env: {
     ...process.env,

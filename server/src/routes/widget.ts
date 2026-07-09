@@ -59,6 +59,15 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
         },
         'Widget websocket rejected by origin policy',
       );
+      // Send a diagnosable reason before closing so the widget can show *why*
+      // rather than sitting on "Connecting…". ws buffers this before the close.
+      socket.send(
+        JSON.stringify({
+          type: 'error',
+          code: 'origin_not_allowed',
+          message: `Origin ${origin} is not in channels.web.allowed_origins`,
+        }),
+      );
       socket.close(1008, 'Origin not allowed');
       return;
     }

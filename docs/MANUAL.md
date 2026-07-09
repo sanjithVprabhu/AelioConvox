@@ -561,7 +561,7 @@ ships a `HEALTHCHECK` on `/health`. Inside the container the config is
 ### docker-compose
 
 ```bash
-AELIO_SDK_SECRET=... docker compose -f docker/docker-compose.yml up --build
+AELIO_SDK_SECRET=... docker compose -f server/docker-compose.yml up --build
 ```
 
 (Volume-mounted `/data`, env-driven secret + `ANTHROPIC_API_KEY`.)
@@ -578,7 +578,7 @@ AELIO_SDK_SECRET=... docker compose -f docker/docker-compose.yml up --build
 
 ### One-click templates
 
-`docker/railway.toml`, `docker/render.yaml`, `docker/fly.toml`.
+`server/railway.toml`, `server/render.yaml`, `server/fly.toml`.
 
 ---
 
@@ -586,7 +586,7 @@ AELIO_SDK_SECRET=... docker compose -f docker/docker-compose.yml up --build
 
 - **Node** (`@aelio/sdk`): `pnpm --filter @aelio/sdk build` then `pnpm pack` /
   `npm publish` (the published tarball has no workspace deps — only `ws` + `zod`).
-- **Python** (`aelio-sdk`): build from `packages/sdk-python/pyproject.toml`
+- **Python** (`aelio-sdk`): build from `sdk/python/pyproject.toml`
   (`python -m build`) and publish to PyPI.
 
 ---
@@ -619,6 +619,8 @@ pnpm docker:verify             # build image, run container, run phases
 | Server exits on boot with a config error | Read the message — it names the exact invalid field. Check `${VARS}` are exported. |
 | `listen EADDRINUSE: 0.0.0.0:3000` | Another server holds the port. Stop it (or change `server.port`). |
 | SDK never appears / tools not called | Ensure `AELIO_SERVER_URL` and `AELIO_SDK_SECRET` match the server; check `/ready` shows `sdk.connected: true`. |
+| Widget shows **"Connection failed: Origin not allowed"** | The page's origin (scheme+host+port) isn't in `channels.web.allowed_origins`. Add it (e.g. `http://127.0.0.1:4173`), or use `"*"` for local dev. Origins are matched exactly — `localhost` and `127.0.0.1` are distinct. |
+| Widget stuck on **"Connecting…"** then **"Connection failed"** | The server didn't complete the handshake within ~8s. Check `data-server-url` points at the server, the server is up (`/health`), and `channels.web.enabled: true`. |
 | LLM `429 insufficient_quota` | Provider account has no credits/billing — add credits or switch provider. |
 | WhatsApp webhook verification fails | `verify_token` in config must match the one entered in Meta. |
 | Proactive `blocked: not opted in` | Call `/proactive/opt-in` for that customer first. |

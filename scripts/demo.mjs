@@ -75,7 +75,7 @@ const shutdown = () => { for (const p of procs) p.kill('SIGTERM'); process.exit(
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-run('server', 'npx', ['tsx', 'src/main.ts'], join(root, 'apps/server'));
+run('server', 'npx', ['tsx', 'src/main.ts'], join(root, 'server'));
 await waitFor('http://127.0.0.1:3000/health');
 run('shopco', 'npx', ['tsx', 'src/index.ts'], join(root, 'examples/sample-saas'));
 await waitFor('http://127.0.0.1:3000/__test__/sdk/functions');

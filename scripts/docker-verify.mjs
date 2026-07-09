@@ -77,7 +77,7 @@ let sdk = null;
 
 try {
   console.log('\n── Docker image build ──');
-  await run('docker', ['build', '-f', 'docker/Dockerfile', '-t', 'aelio/server:latest', '.'], {
+  await run('docker', ['build', '-f', 'server/Dockerfile', '-t', 'aelio/server:latest', '.'], {
     inherit: true,
     cwd: root,
   });
