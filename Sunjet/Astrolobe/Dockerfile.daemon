@@ -1,0 +1,15 @@
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release -p sunjet-daemon
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/sunjet-daemon /usr/local/bin/sunjet-daemon
+
+ENV SUNJET_DAEMON_BIND=0.0.0.0:8081
+EXPOSE 8081
+
+ENTRYPOINT ["sunjet-daemon"]

@@ -1,0 +1,13 @@
+[package]
+name = "ll-graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LL graph index: forward/reverse CSR adjacency, bloom-filtered reverse, traversal."
+
+[dependencies]
+# Dependency-free: CSR + bloom filter, std only.
+
+[dev-dependencies]
+# End-to-end test: embed an Edge section inside a real .vss file.
+ll-format = { path = "../ll-format" }

@@ -1,0 +1,9 @@
+target
+/lldata
+/data
+benchdata
+**/results
+.git
+TechSpec/claudeAITelemetry
+**/*.vss
+**/*.vss.tmp

@@ -1,0 +1,27 @@
+/target
+**/*.rs.bk
+*.vss
+*.vss.tmp
+# benchmark dataset artifacts
+/benchdata
+**/*.fvecs
+**/*.ivecs
+**/attr.u32
+**/results/*.json
+__pycache__/
+
+# Private brainstorm transcript — never publish
+TechSpec/claudeAITelemetry
+
+# ll-server local data dir
+/lldata
+
+# frontend/local build artifacts
+/frontend
+/frontend/.env.local
+/frontend/.next
+/frontend/node_modules
+/frontend/*.tsbuildinfo
+
+# daemon/cloud runtime output
+/llcloud

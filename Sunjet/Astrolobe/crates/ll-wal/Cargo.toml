@@ -1,0 +1,10 @@
+[package]
+name = "ll-wal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LL write-ahead log: one LSN-ordered, CRC'd, crash-safe log for all writes."
+
+[dependencies]
+# Reuse the file format's CRC32C so the checksum is identical across the system.
+ll-format = { path = "../ll-format" }

@@ -1,0 +1,49 @@
+// LL footer schema — canonical structure (format_version 1).
+//
+// NOTE: the v0 implementation serializes the footer with a hand-written little-endian
+// codec (see src/footer.rs), NOT FlatBuffers, to avoid a `flatc` toolchain dependency
+// while the spine is being built. This .fbs is the SOURCE OF TRUTH for the footer's
+// *structure*; the manual codec mirrors it field-for-field. When zero-copy footer reads
+// become worthwhile, generate Rust from this file and swap the codec — the on-disk
+// field set does not change.
+
+namespace ll.format;
+
+enum SectionType : ubyte { ColumnChunk, Hnsw, Text, Edge, OptimizerStats, TranslationTable }
+enum SectionEncoding : ubyte { Plain, Delta, Pfor }
+
+struct SectionEntry {
+  type:SectionType;
+  encoding:SectionEncoding;
+  column_id:uint;
+  offset:ulong;
+  length:ulong;
+  crc32:uint;
+}
+
+table ZoneMap {              // per column, per page (empty in v0)
+  column_id:uint; page_index:uint;
+  min:[ubyte]; max:[ubyte];
+  null_count:ulong; distinct_estimate:ulong; total:ulong;
+  centroid:[float]; max_radius:float;
+}
+
+table BloomEntry { column_id:uint; offset:ulong; length:ulong; }
+table CompressionDict { column_id:uint; offset:ulong; length:ulong; }
+table MvccSummary { min_xmin:ulong; max_xmax:ulong; tombstone_count:ulong; live_count:ulong; }
+
+table Footer {
+  file_uuid:[ubyte];                 // 16, mirrors preamble
+  format_version:ushort;
+  min_lsn:ulong; max_lsn:ulong;
+  row_count:ulong;
+  schema_fingerprint:ulong;
+  schema_blob:[ubyte];               // full serialized schema as-written (evolution)
+  sections:[SectionEntry];           // includes the TranslationTable section entry
+  zone_maps:[ZoneMap];
+  blooms:[BloomEntry];
+  compression_dicts:[CompressionDict];
+  mvcc_summary:MvccSummary;
+  writer_version:string;
+}
+root_type Footer;
