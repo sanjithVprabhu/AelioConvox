@@ -14,6 +14,7 @@ const ClientMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('init'),
     customerId: z.string().min(1),
     email: z.string().email().optional(),
+    authToken: z.string().min(1).optional(),
   }),
   z.object({
     type: z.literal('message'),
@@ -32,20 +33,38 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
   });
 
   app.get(WIDGET_WS_PATH, { websocket: true }, (socket, request) => {
+    const remoteAddress = request.socket.remoteAddress ?? 'unknown';
     const origin = request.headers.origin;
     const allowed = deps.config.channels.web.allowed_origins;
+    app.log.info(
+      {
+        route: WIDGET_WS_PATH,
+        remoteAddress,
+        origin: origin ?? null,
+      },
+      'Widget websocket connection opened',
+    );
     if (
       origin &&
       allowed.length > 0 &&
       !allowed.includes(origin) &&
       !allowed.includes('*')
     ) {
+      app.log.warn(
+        {
+          route: WIDGET_WS_PATH,
+          remoteAddress,
+          origin,
+          allowedOrigins: allowed,
+        },
+        'Widget websocket rejected by origin policy',
+      );
       socket.close(1008, 'Origin not allowed');
       return;
     }
 
     let customerId = 'anonymous';
-    let channelAddress = `web:${request.socket.remoteAddress ?? 'unknown'}`;
+    let channelAddress = `web:${remoteAddress}`;
     let initialized = false;
 
     socket.on('message', (raw) => {
@@ -67,6 +86,14 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
         const message = result.data;
         if (message.type === 'init') {
           if (!deps.config.identity.allow_anonymous && message.customerId === 'anonymous') {
+            app.log.warn(
+              {
+                route: WIDGET_WS_PATH,
+                remoteAddress,
+                customerId: message.customerId,
+              },
+              'Widget init rejected because anonymous access is disabled',
+            );
             socket.send(
               JSON.stringify({
                 type: 'error',
@@ -79,15 +106,44 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
           customerId = message.customerId;
           channelAddress = message.email ? `web:${message.email}` : `web:${customerId}`;
           initialized = true;
+          app.log.info(
+            {
+              route: WIDGET_WS_PATH,
+              remoteAddress,
+              customerId,
+              channelAddress,
+              email: message.email ?? null,
+              hasAuthToken: Boolean(message.authToken),
+            },
+            'Widget client initialized',
+          );
           socket.send(JSON.stringify({ type: 'ready', customerId }));
           return;
         }
 
         if (!initialized) {
+          app.log.warn(
+            {
+              route: WIDGET_WS_PATH,
+              remoteAddress,
+            },
+            'Widget message received before init',
+          );
           socket.send(JSON.stringify({ type: 'error', message: 'Send init before messaging' }));
           return;
         }
 
+        app.log.info(
+          {
+            route: WIDGET_WS_PATH,
+            remoteAddress,
+            customerId,
+            channelAddress,
+            contentPreview: message.content.slice(0, 160),
+            contentLength: message.content.length,
+          },
+          'Widget message received',
+        );
         socket.send(JSON.stringify({ type: 'typing', active: true }));
 
         try {
@@ -108,8 +164,27 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
               turnId,
             }),
           );
+          app.log.info(
+            {
+              route: WIDGET_WS_PATH,
+              remoteAddress,
+              customerId,
+              turnId,
+              replyPreview: reply.slice(0, 160),
+              replyLength: reply.length,
+            },
+            'Widget turn completed',
+          );
         } catch (error) {
-          app.log.error(error);
+          app.log.error(
+            {
+              err: error,
+              route: WIDGET_WS_PATH,
+              remoteAddress,
+              customerId,
+            },
+            'Widget turn failed',
+          );
           socket.send(
             JSON.stringify({
               type: 'error',
@@ -120,6 +195,18 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
           socket.send(JSON.stringify({ type: 'typing', active: false }));
         }
       })();
+    });
+
+    socket.on('close', () => {
+      app.log.info(
+        {
+          route: WIDGET_WS_PATH,
+          remoteAddress,
+          customerId,
+          initialized,
+        },
+        'Widget websocket disconnected',
+      );
     });
   });
 }
