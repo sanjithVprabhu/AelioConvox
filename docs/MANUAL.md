@@ -476,6 +476,34 @@ Every invocation — success, error, blocked, pending, confirmed — is written 
 
 ## 9. Intelligence features
 
+### The harness (the turn engine, `harness.enabled` — default on)
+
+Every deep turn runs through the harness: a deterministic **plan → bind →
+resolve → execute → synthesize** loop designed to guide the whole cycle with as
+few LLM calls as possible (shallow answer = 1 call, deep happy path = 2).
+
+- **Pass 1** decides, in one forced structured call, whether to answer directly
+  (shallow), refuse (with a reason, only after a feasibility check agrees), or
+  emit a capability-level **plan**.
+- The plan's tools are **bound** (semantic search over your registered tools,
+  with prerequisite-graph expansion), then a **dependency DAG is derived from
+  the tool schemas** — not guessed by the LLM. Independent steps run in
+  parallel; a step needing an earlier step's output waits for it.
+- Every tool call passes a deterministic **gate** (safety, state rules,
+  confirmation) on its concrete arguments, and is **idempotent** — a resumed or
+  retried turn never double-runs a completed write.
+- If a required value is missing, the harness **suspends** and asks for it
+  (recoil); your next message resumes the plan where it left off.
+- Lifecycle **state transitions** fire declaratively on tool success.
+
+Hard budgets (instructions, replans, tool calls, wall-clock, tokens) bound every
+turn — the LLM never controls loop exit. Set `harness.enabled: false` to fall
+back to the legacy single-loop tool calling. Full design:
+[`Blueprint/harness-spec.md`](../Blueprint/harness-spec.md).
+
+Ground the planner by describing your product with `aelio.describe("…")` (Node)
+/ `aelio.describe("…")` (Python) — see §4.
+
 ### Memory (always on when `memory.enabled`)
 
 After each turn Aelio extracts durable facts about the customer and stores them in

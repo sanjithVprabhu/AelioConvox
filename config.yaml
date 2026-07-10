@@ -63,6 +63,22 @@ memory:
   enabled: true
   recall_limit: 5
 
+# The harness — the plan-execute-replan turn engine. Enabled by default; set
+# enabled: false to fall back to the legacy single-loop tool calling.
+harness:
+  enabled: true
+  budgets:
+    max_instructions: 12
+    max_replans: 2
+    max_recoils_per_intent: 3
+    max_tool_calls: 15
+    wall_clock_ms: 60000
+    max_turn_tokens: 30000
+  binding:
+    score_min: 0.55      # min semantic score to bind a capability to a tool
+    ambiguity_gap: 0.08  # top hit must beat runner-up by this to auto-bind
+    cache_ttl_minutes: 1440
+
 # Sunjet (ll-server) — primary message store when enabled.
 # Start ll-server first: LL_DATA_DIR=./data/sunjet LL_API_KEYS=secret cargo run --release -p ll-server
 sunjet:
