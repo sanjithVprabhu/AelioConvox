@@ -6,6 +6,8 @@ import {
   executePlan,
   newExecutorState,
   evaluateGate,
+  toSuspensionPayload,
+  rehydrateSuspension,
 } from '@aelio/core';
 
 let failures = 0;
@@ -137,6 +139,51 @@ console.log('\n[7] Idempotency: a completed call is not re-invoked on a second e
   state.completed.delete('a'); // simulate a resume re-entering the wave
   await executePlan(res.plan, state, { sdk, context: ctx, safety: baseSafety, budgets: budgets() });
   assert(sdk.calls.length === 1, 'charge invoked exactly once across two passes');
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[8] Recoil round-trip: suspend on missing arg → resume with the answer');
+{
+  const refundTool = writeTool('issue_refund', { bill_id: 'string' });
+  const bound = [{ instruction: { id: 'a', capability: 'refund' }, tool: refundTool }];
+  const res = resolvePlan('refund', undefined, bound);
+
+  // First pass: no bill_id anywhere → suspend awaiting_info.
+  const sdk = fakeSdk({ issue_refund: (args) => ({ refunded: true, bill: args.bill_id }) });
+  const state = newExecutorState();
+  const outcome = await executePlan(res.plan, state, { sdk, context: ctx, safety: baseSafety, budgets: budgets() });
+  assert(outcome.kind === 'suspend' && outcome.reason === 'awaiting_info', 'suspends awaiting_info');
+  assert(sdk.calls.length === 0, 'nothing invoked while suspended');
+
+  // Persist, then resume with the user's answer.
+  const payload = toSuspensionPayload({
+    goal: 'refund',
+    userMessage: 'refund my order',
+    registryHash: 'h1',
+    plan: res.plan,
+    state,
+    pendingInstructionId: outcome.instruction.id,
+    ask: { field: 'bill_id', toolName: 'issue_refund', question: outcome.question },
+    recoilCount: 0,
+  });
+  const resumed = rehydrateSuspension(payload, 'B-9', [refundTool], 'h1');
+  assert(resumed.ok, 'rehydrates with the answer');
+  const outcome2 = await executePlan(resumed.plan, resumed.state, { sdk, context: ctx, safety: baseSafety, budgets: budgets() });
+  assert(outcome2.kind === 'complete', 'resumes to completion');
+  assert(sdk.calls.length === 1 && sdk.calls[0].args.bill_id === 'B-9', 'issue_refund ran once with the supplied bill_id');
+}
+
+console.log('\n[9] Resume guard: a changed registry hash discards the stale plan');
+{
+  const tool = writeTool('t', { x: 'string' });
+  const res = resolvePlan('g', undefined, [{ instruction: { id: 'a', capability: 'c' }, tool }]);
+  const payload = toSuspensionPayload({
+    goal: 'g', userMessage: 'm', registryHash: 'OLD', plan: res.plan,
+    state: newExecutorState(), pendingInstructionId: 'a',
+    ask: { field: 'x', toolName: 't', question: 'x?' }, recoilCount: 0,
+  });
+  const resumed = rehydrateSuspension(payload, 'v', [tool], 'NEW');
+  assert(!resumed.ok && resumed.reason === 'stale_registry', 'stale registry → discard');
 }
 
 // ---------------------------------------------------------------------------

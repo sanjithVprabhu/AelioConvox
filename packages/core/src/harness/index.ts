@@ -11,6 +11,8 @@ import { resolvePlan } from './resolver.js';
 import { executePlan, newExecutorState, hashArgs, type ExecOutcome } from './executor.js';
 import { runPlanner } from './planner.js';
 import { runSynthesis } from './synthesis.js';
+import { rehydrateSuspension, toSuspensionPayload } from './resume.js';
+import type { SuspensionStore } from './suspension.js';
 import type { HarnessTracer, TraceKind } from './traces.js';
 import {
   DEFAULT_BINDING,
@@ -18,6 +20,7 @@ import {
   type EmitTurn,
   type HarnessBindingConfig,
   type HarnessBudgets,
+  type ResolvedPlan,
 } from './schema.js';
 
 export { runPlanner } from './planner.js';
@@ -27,6 +30,7 @@ export { bindInstructions } from './binder.js';
 export { resolvePlan, nextWave } from './resolver.js';
 export { executePlan, newExecutorState, hashArgs } from './executor.js';
 export { evaluateGate } from './gates.js';
+export { rehydrateSuspension, toSuspensionPayload } from './resume.js';
 
 export type HarnessRunInput = {
   database?: AelioDatabase;
@@ -47,6 +51,7 @@ export type HarnessRunInput = {
   presentFields?: Set<string>;
   lighthouse?: LighthouseService;
   tracer?: HarnessTracer;
+  suspensionStore?: SuspensionStore;
   budgets?: HarnessBudgets;
   binding?: HarnessBindingConfig;
   turnId?: string;
@@ -72,6 +77,42 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
       kind,
       payload,
     });
+
+  // ---- Resume-first: a parked (recoil) plan intercepts this message ----
+  // Confirmation resume is handled upstream by the pending-confirmation path;
+  // here we only resume awaiting_info suspensions.
+  if (input.suspensionStore) {
+    const suspended = await input.suspensionStore.get(input.context.sessionId);
+    if (suspended && suspended.reason === 'awaiting_info') {
+      const resumed = rehydrateSuspension(
+        suspended.payload,
+        input.userMessage,
+        input.functions,
+        input.lighthouse?.getHash() ?? null,
+      );
+      if (resumed.ok) {
+        trace('resume', { pending: resumed.pendingInstructionId });
+        await input.suspensionStore.clear(input.context.sessionId);
+        const outcome = await executePlan(resumed.plan, resumed.state, buildExecutorDeps(input, budgets, trace));
+        return finishTurn(input, resumed.plan.goal, resumed.state, outcome, budgets, trace, {
+          recoilCount: suspended.payload.recoilCount + 1,
+          userMessage: suspended.payload.userMessage,
+          plan: resumed.plan,
+        });
+      }
+      if (resumed.reason === 'answer_rejected') {
+        // Keep the plan parked; re-ask the same question.
+        return {
+          reply: suspended.payload.ask.question,
+          toolCallsExecuted: 0,
+          executedToolNames: [],
+        };
+      }
+      // stale_registry / tool_gone → drop the suspension and plan fresh below.
+      await input.suspensionStore.clear(input.context.sessionId);
+      trace('resume', { discarded: resumed.reason });
+    }
+  }
 
   // ---- Pass 1: merged router + planner ----
   let planner = await runPlanner({
@@ -152,7 +193,21 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
 
   // ---- Execute (wavefront) ----
   const state = newExecutorState();
-  const outcome = await executePlan(resolveResult.plan, state, {
+  const outcome = await executePlan(resolveResult.plan, state, buildExecutorDeps(input, budgets, trace));
+
+  return finishTurn(input, plan.goal, state, outcome, budgets, trace, {
+    recoilCount: 0,
+    userMessage: input.userMessage,
+    plan: resolveResult.plan,
+  });
+}
+
+function buildExecutorDeps(
+  input: HarnessRunInput,
+  budgets: BudgetMeter,
+  trace: (kind: TraceKind, payload: unknown) => void,
+) {
+  return {
     sdk: input.sdk,
     context: input.context,
     safety: input.safety,
@@ -161,11 +216,8 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
     budgets,
     ...(input.database ? { database: input.database } : {}),
     ...(input.internalCustomerId ? { internalCustomerId: input.internalCustomerId } : {}),
-    trace: (kind, payload) => trace(kind, payload),
-  });
-
-  const result = await finishTurn(input, plan.goal, state, outcome, trace);
-  return result;
+    trace: (kind: 'wave' | 'gate' | 'repair', payload: unknown) => trace(kind, payload),
+  };
 }
 
 async function finishTurn(
@@ -173,12 +225,41 @@ async function finishTurn(
   goal: string,
   state: ReturnType<typeof newExecutorState>,
   outcome: ExecOutcome,
+  budgets: BudgetMeter,
   trace: (kind: TraceKind, payload: unknown) => void,
+  meta: { recoilCount: number; userMessage: string; plan?: ResolvedPlan },
 ): Promise<ToolLoopResult> {
-  // Suspension: end the turn with the pending question. Phase 5 persists the
-  // plan+ledger so a later message resumes instead of restarting.
   if (outcome.kind === 'suspend') {
     trace('suspend', { reason: outcome.reason, instruction: outcome.instruction.id });
+
+    // Recoil: persist the plan+ledger so the next message resumes instead of
+    // restarting. Guarded by the recoil budget so a user who can't supply the
+    // value isn't asked forever.
+    if (
+      outcome.reason === 'awaiting_info' &&
+      input.suspensionStore &&
+      meta.plan &&
+      meta.recoilCount < (input.budgets ?? DEFAULT_BUDGETS).maxRecoilsPerIntent
+    ) {
+      const payload = toSuspensionPayload({
+        goal,
+        userMessage: meta.userMessage,
+        registryHash: input.lighthouse?.getHash() ?? '',
+        plan: meta.plan,
+        state,
+        pendingInstructionId: outcome.instruction.id,
+        ask: {
+          ...(outcome.verdict.verdict === 'needs_info' && outcome.verdict.missing[0]
+            ? { field: outcome.verdict.missing[0] }
+            : {}),
+          toolName: outcome.instruction.tool.name,
+          question: outcome.question,
+        },
+        recoilCount: meta.recoilCount,
+      });
+      await input.suspensionStore.suspend(input.context.sessionId, 'awaiting_info', payload);
+    }
+
     return {
       reply: outcome.question,
       toolCallsExecuted: state.toolCallsExecuted,

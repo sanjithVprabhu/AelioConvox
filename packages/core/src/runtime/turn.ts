@@ -53,10 +53,12 @@ import {
 } from '../lifecycle/index.js';
 import { composeSystemPrompt } from './prompt-composer.js';
 import { selectRelevantTools } from './tool-retrieval.js';
+import { withSessionLock } from './session-lock.js';
 import { runToolLoop } from './tool-loop.js';
 import { runHarness } from '../harness/index.js';
 import type { HarnessBindingConfig, HarnessBudgets } from '../harness/schema.js';
 import type { HarnessTracer } from '../harness/traces.js';
+import type { SuspensionStore } from '../harness/suspension.js';
 import type { LighthouseService } from '../lighthouse/index.js';
 import { runWithTurnContext } from '../telemetry/turn-calls.js';
 
@@ -96,6 +98,7 @@ export type ProcessTurnInput = {
   };
   lighthouse?: LighthouseService;
   tracer?: HarnessTracer;
+  suspensionStore?: SuspensionStore;
 };
 
 type PersistMessageInput = {
@@ -219,12 +222,22 @@ arguments, call the tool directly. The platform automatically asks the user to c
 before any write executes, so a second confirmation question from you is redundant.`;
 
 export async function processTurn(input: ProcessTurnInput): Promise<ProcessTurnResult> {
-  const db = input.database.db;
   const externalId = resolveCustomerExternalId(
     input.channel,
     input.customerExternalId,
     input.identity,
   );
+  // Serialize turns for this customer+channel: a second message that arrives
+  // mid-turn queues behind the first, so intent stack / suspension / lifecycle
+  // never mutate concurrently.
+  return withSessionLock(`${input.channel}:${externalId}`, () => processTurnLocked(input, externalId));
+}
+
+async function processTurnLocked(
+  input: ProcessTurnInput,
+  externalId: string,
+): Promise<ProcessTurnResult> {
+  const db = input.database.db;
 
   const customerId = await ensureCustomer(
     db,
@@ -472,6 +485,7 @@ async function executeTurn(
         ...(stateDef ? { state: stateDef } : {}),
         lighthouse: input.lighthouse,
         tracer: input.tracer,
+        suspensionStore: input.suspensionStore,
         budgets: input.harness.budgets,
         binding: input.harness.binding,
         turnId,

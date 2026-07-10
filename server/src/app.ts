@@ -6,6 +6,7 @@ import {
   createInstrumentedLlm,
   HarnessTracer,
   LighthouseService,
+  SuspensionStore,
 } from '@aelio/core';
 import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
@@ -130,6 +131,15 @@ export async function createApp(config: AelioConfig) {
       })
     : null;
 
+  // Suspended-plan store: SQLite is authoritative (always present); Sunjet
+  // mirrors when available so parked plans are visible in Astrolobe too.
+  const suspensionStore = new SuspensionStore({
+    database,
+    ...(sunjet
+      ? { sunjet: { client: sunjet.client, table: sunjet.tables.harnessSuspensions, tenant: config.name } }
+      : {}),
+  });
+
   const deps: RuntimeDeps = {
     config,
     database,
@@ -137,6 +147,7 @@ export async function createApp(config: AelioConfig) {
     sdkBridge,
     lighthouse,
     tracer,
+    suspensionStore,
     whatsappSender,
     sunjetClient: sunjet?.client ?? null,
     messageStore: sunjet?.messageStore ?? null,

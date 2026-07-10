@@ -186,6 +186,8 @@ export {
   executePlan,
   newExecutorState,
   evaluateGate,
+  rehydrateSuspension,
+  toSuspensionPayload,
   hashArgs,
   type HarnessRunInput,
 } from './harness/index.js';

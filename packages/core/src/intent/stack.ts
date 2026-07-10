@@ -12,7 +12,16 @@ export type IntentFrame = {
   startedAt: number;
   lastActiveAt: number;
   expiresAt: number;
+  /**
+   * 'user' = a topic the customer raised; 'recoil' = a system sub-intent that
+   * exists only to collect a value the harness needs. Optional for backward
+   * compatibility with frames persisted before v2 (treated as 'user').
+   */
+  kind?: 'user' | 'recoil';
 };
+
+/** How many top frames form the always-alive spine (never TTL-evicted). */
+const SPINE_DEPTH = 3;
 
 export type IntentStack = IntentFrame[];
 
@@ -27,8 +36,14 @@ type SessionMetadata = {
   [key: string]: unknown;
 };
 
+/**
+ * Expire stale frames — but never evict the spine (the top {@link SPINE_DEPTH}
+ * frames). The root goal (order refund) must survive even when detours and
+ * clarifications pile on top of it; only non-spine frames time out. This fixes
+ * the positional-eviction bug where a buried-but-active goal would vanish.
+ */
 export function expireIntentStack(stack: IntentStack, now = Date.now()): IntentStack {
-  return stack.filter((frame) => frame.expiresAt > now);
+  return stack.filter((frame, index) => index < SPINE_DEPTH || frame.expiresAt > now);
 }
 
 export function buildIntentStackPrompt(stack: IntentStack): string {

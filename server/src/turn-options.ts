@@ -26,6 +26,7 @@ export function baseTurnOptions(
   | 'harness'
   | 'lighthouse'
   | 'tracer'
+  | 'suspensionStore'
 > {
   return {
     database: deps.database,
@@ -81,6 +82,7 @@ export function baseTurnOptions(
     },
     lighthouse: deps.lighthouse,
     tracer: deps.tracer ?? undefined,
+    suspensionStore: deps.suspensionStore,
   };
 }
 
