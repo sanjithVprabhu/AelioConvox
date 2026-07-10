@@ -120,8 +120,15 @@ export class GeminiProvider implements LLMProvider {
 
     if (opts.tools.length > 0) {
       body.tools = [{ functionDeclarations: toFunctionDeclarations(opts.tools) }];
+      // Gemini's forced-call mode is ANY + an allowlist of one function.
+      const choice = opts.toolChoice;
       body.toolConfig = {
-        functionCallingConfig: { mode: 'AUTO' },
+        functionCallingConfig:
+          choice?.type === 'tool'
+            ? { mode: 'ANY', allowedFunctionNames: [choice.name] }
+            : choice?.type === 'none'
+              ? { mode: 'NONE' }
+              : { mode: 'AUTO' },
       };
     }
 

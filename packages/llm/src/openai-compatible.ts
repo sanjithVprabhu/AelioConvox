@@ -5,7 +5,18 @@ import type {
   LLMCompleteResult,
   LLMProvider,
   LLMToolCall,
+  LLMToolChoice,
 } from './types.js';
+
+function toOpenAIToolChoice(choice: LLMToolChoice | undefined, toolCount: number) {
+  if (!choice) {
+    return toolCount > 0 ? 'auto' : 'none';
+  }
+  if (choice.type === 'tool') {
+    return { type: 'function' as const, function: { name: choice.name } };
+  }
+  return choice.type;
+}
 
 type OpenAIMessage =
   | {
@@ -159,7 +170,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
             parameters: tool.input_schema,
           },
         })),
-        tool_choice: opts.tools.length > 0 ? 'auto' : 'none',
+        tool_choice: toOpenAIToolChoice(opts.toolChoice, opts.tools.length),
       }),
     });
 

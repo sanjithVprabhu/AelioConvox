@@ -145,3 +145,41 @@ export {
   type VerifiedMagicLink,
 } from './identity/magic-link.js';
 export { logFunctionCall } from './audit/function-calls.js';
+export {
+  LighthouseService,
+  LighthouseMirror,
+  registryHash,
+  buildCapabilityBrief,
+  type LighthouseConfig,
+  type RegistrySnapshot,
+  type ToolSearchHit,
+} from './lighthouse/index.js';
+export {
+  EmitTurnSchema,
+  EMIT_TURN_INPUT_SCHEMA,
+  PlanInstructionSchema,
+  SuspendedPlanPayloadSchema,
+  DEFAULT_BUDGETS,
+  DEFAULT_BINDING,
+  type EmitTurn,
+  type PlanInstruction,
+  type ResolvedInstruction,
+  type ResolvedPlan,
+  type ArgSource,
+  type LedgerEntry,
+  type GateVerdict,
+  type SuspendedPlanPayload,
+  type SuspensionReason,
+  type HarnessBudgets,
+  type HarnessBindingConfig,
+} from './harness/schema.js';
+export { SuspensionStore, type SuspendedPlanRecord, type SuspensionStoreConfig } from './harness/suspension.js';
+export { HarnessTracer, type TraceKind, type HarnessTracerConfig } from './harness/traces.js';
+export {
+  runHarness,
+  runPlanner,
+  runSynthesis,
+  BudgetMeter,
+  hashArgs,
+  type HarnessRunInput,
+} from './harness/index.js';

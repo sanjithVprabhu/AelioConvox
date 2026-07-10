@@ -112,6 +112,7 @@ export class Aelio {
   private readonly flows = new Map<string, FlowSchema>();
   private sendHandler: SendHandler | null = null;
   private personaText: string | null = null;
+  private productBriefText: string | null = null;
   private ws: WebSocket | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastPongAt = 0;
@@ -136,6 +137,16 @@ export class Aelio {
    */
   persona(text: string): void {
     this.personaText = text.trim();
+  }
+
+  /**
+   * Describe what your product does, in your own words. Grounds the Aelio
+   * harness planner: plans are drawn against this brief plus your registered
+   * tools/flows, so a clear description improves both what the assistant
+   * attempts and how gracefully it declines the impossible.
+   */
+  describe(text: string): void {
+    this.productBriefText = text.trim();
   }
 
   /**
@@ -310,6 +321,7 @@ export class Aelio {
       ...(policies.length > 0 ? { policies } : {}),
       ...(flows.length > 0 ? { flows } : {}),
       ...(this.personaText ? { persona: this.personaText } : {}),
+      ...(this.productBriefText ? { productBrief: this.productBriefText } : {}),
       canSend: this.sendHandler != null,
     };
 

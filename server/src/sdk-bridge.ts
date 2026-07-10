@@ -23,6 +23,7 @@ type ActiveConnection = {
   policies: PolicyDefinition[];
   flows: FlowDefinition[];
   persona: string | null;
+  productBrief: string | null;
   sdkVersion: string;
   language: string;
   canSend: boolean;
@@ -41,6 +42,7 @@ export class ServerSdkBridge implements SdkBridge {
   private readonly pendingInvokes = new Map<string, PendingInvoke>();
   private readonly persistConnectionStmt;
   private readonly deleteConnectionStmt;
+  private readonly registryListeners = new Set<() => void>();
 
   constructor(private readonly database: AelioDatabase) {
     this.persistConnectionStmt = this.database.sqlite.prepare(
@@ -52,14 +54,36 @@ export class ServerSdkBridge implements SdkBridge {
     this.database.sqlite.prepare('DELETE FROM sdk_connections').run();
   }
 
+  /**
+   * Notify on any change to the merged registry (connect, disconnect, function
+   * update). Listeners (Lighthouse) re-hash and decide whether anything
+   * meaningful changed — a reconnect with an identical catalog is a no-op there.
+   */
+  onRegistryChange(listener: () => void): () => void {
+    this.registryListeners.add(listener);
+    return () => this.registryListeners.delete(listener);
+  }
+
+  private notifyRegistryChange(): void {
+    for (const listener of this.registryListeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.error('[aelio] registry-change listener failed:', error);
+      }
+    }
+  }
+
   register(connection: ActiveConnection): void {
     this.connections.set(connection.id, connection);
     this.persist(connection);
+    this.notifyRegistryChange();
   }
 
   unregister(connectionId: string): void {
     this.connections.delete(connectionId);
     this.deleteConnectionStmt.run(connectionId);
+    this.notifyRegistryChange();
   }
 
   touchHeartbeat(connectionId: string): void {
@@ -75,6 +99,7 @@ export class ServerSdkBridge implements SdkBridge {
     if (connection) {
       connection.functions = functions;
       this.persist(connection);
+      this.notifyRegistryChange();
     }
   }
 
@@ -132,6 +157,15 @@ export class ServerSdkBridge implements SdkBridge {
     for (const connection of this.connections.values()) {
       if (connection.persona) {
         return connection.persona;
+      }
+    }
+    return null;
+  }
+
+  getProductBrief(): string | null {
+    for (const connection of this.connections.values()) {
+      if (connection.productBrief) {
+        return connection.productBrief;
       }
     }
     return null;

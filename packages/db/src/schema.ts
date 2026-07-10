@@ -236,6 +236,41 @@ export const jobQueue = sqliteTable(
   (table) => [index('idx_jobs_pending').on(table.queue, table.status, table.nextRunAt)],
 );
 
+// Harness: a plan parked mid-execution, waiting for user input (recoil) or a
+// write confirmation. One active suspension per session.
+export const suspendedPlans = sqliteTable(
+  'suspended_plans',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id').notNull(),
+    reason: text('reason').notNull(), // 'awaiting_info' | 'awaiting_confirmation'
+    payload: text('payload', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [uniqueIndex('idx_suspended_session').on(table.sessionId)],
+);
+
+// Harness: per-instruction execution ledger — the idempotency/replay guard.
+// A resumed or crash-recovered plan must never re-invoke a completed write.
+export const harnessLedger = sqliteTable(
+  'harness_ledger',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id').notNull(),
+    turnId: text('turn_id').notNull(),
+    instructionId: text('instruction_id').notNull(),
+    argsHash: text('args_hash').notNull(),
+    status: text('status').notNull(), // 'success' | 'error'
+    result: text('result', { mode: 'json' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_ledger_idem').on(table.sessionId, table.instructionId, table.argsHash),
+    index('idx_ledger_turn').on(table.turnId),
+  ],
+);
+
 export const schema = {
   customers,
   channelAddresses,
@@ -250,6 +285,8 @@ export const schema = {
   proactiveMessages,
   responseCache,
   turnApiCalls,
+  suspendedPlans,
+  harnessLedger,
 };
 
 export type DatabaseSchema = typeof schema;

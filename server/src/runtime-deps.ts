@@ -1,4 +1,4 @@
-import type { ConvoxMessageStore } from '@aelio/core';
+import type { ConvoxMessageStore, HarnessTracer, LighthouseService } from '@aelio/core';
 import type { AelioDatabase } from '@aelio/db';
 import type { LLMProvider } from '@aelio/llm';
 import type { WhatsAppSender } from '@aelio/channels';
@@ -11,6 +11,8 @@ export type RuntimeDeps = {
   database: AelioDatabase;
   llm: LLMProvider;
   sdkBridge: ServerSdkBridge;
+  lighthouse: LighthouseService;
+  tracer: HarnessTracer | null;
   whatsappSender: WhatsAppSender | null;
   sunjetClient: SunjetClient | null;
   messageStore: ConvoxMessageStore | null;

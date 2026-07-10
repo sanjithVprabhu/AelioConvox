@@ -29,9 +29,26 @@ export type LLMTelemetryMeta = {
     | 'chat_completion'
     | 'tool_synthesis'
     | 'session_summary'
-    | 'session_reflection';
+    | 'session_reflection'
+    | 'plan'
+    | 'replan'
+    | 'bind'
+    | 'synthesis'
+    | 'recoil_extract';
   iteration?: number;
 };
+
+/**
+ * How the model may use the provided tools.
+ * - 'auto': model decides (default)
+ * - 'none': tools visible but must not be called
+ * - 'tool': the named tool MUST be called — this is the structured-output
+ *   mechanism (e.g. the harness forces `emit_turn` to get a validated plan).
+ */
+export type LLMToolChoice =
+  | { type: 'auto' }
+  | { type: 'none' }
+  | { type: 'tool'; name: string };
 
 export type LLMCompleteOptions = {
   messages: ChatMessage[];
@@ -40,6 +57,7 @@ export type LLMCompleteOptions = {
   model: string;
   maxTokens?: number;
   temperature?: number;
+  toolChoice?: LLMToolChoice;
   telemetry?: LLMTelemetryMeta;
 };
 
