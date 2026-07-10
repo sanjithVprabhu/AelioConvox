@@ -8,7 +8,7 @@ import type { LighthouseService } from '../lighthouse/index.js';
 import { BudgetMeter } from './budgets.js';
 import { bindInstructions } from './binder.js';
 import { resolvePlan } from './resolver.js';
-import { executePlan, newExecutorState, hashArgs, type ExecOutcome } from './executor.js';
+import { executePlan, hydrateExecutorState, newExecutorState, hashArgs, type ExecOutcome } from './executor.js';
 import { runPlanner } from './planner.js';
 import { runSynthesis } from './synthesis.js';
 import { rehydrateSuspension, toSuspensionPayload } from './resume.js';
@@ -30,7 +30,7 @@ export { runSynthesis } from './synthesis.js';
 export { BudgetMeter } from './budgets.js';
 export { bindInstructions } from './binder.js';
 export { resolvePlan, nextWave } from './resolver.js';
-export { executePlan, newExecutorState, hashArgs } from './executor.js';
+export { executePlan, newExecutorState, hydrateExecutorState, hashArgs } from './executor.js';
 export { evaluateGate } from './gates.js';
 export { rehydrateSuspension, toSuspensionPayload } from './resume.js';
 export { applyStateTransition } from './transitions.js';
@@ -174,7 +174,10 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
   }
 
   // ---- Execute (wavefront) ----
-  const state = newExecutorState();
+  const state =
+    input.database && input.turnId
+      ? await hydrateExecutorState(input.database, input.context.sessionId, input.turnId)
+      : newExecutorState();
   const outcome = await executePlan(resolveResult.plan, state, buildExecutorDeps(input, budgets, trace));
 
   return finishTurn(input, plan.goal, state, outcome, budgets, trace, {
@@ -300,6 +303,7 @@ function buildExecutorDeps(
     budgets,
     ...(input.database ? { database: input.database } : {}),
     ...(input.internalCustomerId ? { internalCustomerId: input.internalCustomerId } : {}),
+    ...(input.turnId ? { turnId: input.turnId } : {}),
     trace: (kind: 'wave' | 'gate' | 'repair', payload: unknown) => trace(kind, payload),
     // Declarative lifecycle transitions on tool success. context.customerId is
     // the external id (what upsertCustomerLifecycleState keys on).

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main, rishabh-dev]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: AELIO_TEST_MODE=1 OPENAI_API_KEY= GEMINI_API_KEY= ANTHROPIC_API_KEY= pnpm test:all
+      - run: AELIO_TEST_MODE=1 OPENAI_API_KEY= pnpm test:phase6:lifecycle

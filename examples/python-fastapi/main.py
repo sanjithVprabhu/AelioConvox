@@ -1,5 +1,7 @@
 import os
+import threading
 
+import uvicorn
 from fastapi import FastAPI
 
 from sdk import Aelio
@@ -27,5 +29,10 @@ async def health():
     return {"ok": True}
 
 
-if __name__ == "__main__":
+def _run_sdk():
     aelio.run()
+
+
+if __name__ == "__main__":
+    threading.Thread(target=_run_sdk, daemon=True).start()
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8080")))

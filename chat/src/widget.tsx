@@ -9,6 +9,7 @@ type ChatMessage = {
 type ServerMessage =
   | { type: 'ready'; customerId: string }
   | { type: 'message'; role: 'assistant'; content: string }
+  | { type: 'confirmation'; prompt: string; turnId?: string }
   | { type: 'typing'; active: boolean }
   | { type: 'error'; message: string; code?: string };
 
@@ -17,6 +18,7 @@ type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'failed';
 // How long to wait for the server's `ready` frame before declaring the handshake
 // failed (covers a reachable socket that never completes init — e.g. wrong path).
 const HANDSHAKE_TIMEOUT_MS = 8000;
+const MAX_MESSAGE_LENGTH = 4096;
 // Stop auto-reconnecting after this many consecutive failures.
 const MAX_RECONNECT_ATTEMPTS = 10;
 
@@ -102,6 +104,7 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
   const [typing, setTyping] = useState(false);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [statusDetail, setStatusDetail] = useState('');
+  const [pendingConfirmationIndex, setPendingConfirmationIndex] = useState<number | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   // Set by the connection effect; the Retry button calls it to restart from scratch.
@@ -163,6 +166,15 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
       let ready = false;
       setStatus((prev) => (prev === 'reconnecting' ? 'reconnecting' : 'connecting'));
 
+      // Close any previous socket before opening a new one (BUG-037).
+      if (socketRef.current && socketRef.current.readyState <= WebSocket.OPEN) {
+        try {
+          socketRef.current.close();
+        } catch {
+          /* ignore */
+        }
+      }
+
       let wsUrl: URL;
       try {
         wsUrl = new URL('/widget/ws', options.serverUrl);
@@ -217,7 +229,16 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
           return;
         }
         if (data.type === 'message') {
+          setPendingConfirmationIndex(null);
           setMessages((prev) => [...prev, { role: 'assistant', content: data.content }]);
+          return;
+        }
+        if (data.type === 'confirmation') {
+          setMessages((prev) => {
+            const next: ChatMessage[] = [...prev, { role: 'assistant', content: data.prompt }];
+            setPendingConfirmationIndex(next.length - 1);
+            return next;
+          });
           return;
         }
         if (data.type === 'error') {
@@ -264,14 +285,27 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, typing, open]);
 
-  const sendMessage = () => {
-    const content = input.trim();
+  const sendMessage = (contentOverride?: string) => {
+    const content = (contentOverride ?? input).trim();
     if (!content || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    if (content.length > MAX_MESSAGE_LENGTH) {
       return;
     }
     setMessages((prev) => [...prev, { role: 'user', content }]);
     socketRef.current.send(JSON.stringify({ type: 'message', content }));
-    setInput('');
+    if (!contentOverride) {
+      setInput('');
+    }
+    setPendingConfirmationIndex(null);
+  };
+
+  const respondToConfirmation = (answer: 'yes' | 'no') => {
+    if (pendingConfirmationIndex === null) {
+      return;
+    }
+    sendMessage(answer);
   };
 
   const statusText =
@@ -315,6 +349,24 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} class={`aelio-msg aelio-${message.role}`}>
                 {message.content}
+                {pendingConfirmationIndex === index ? (
+                  <div class="aelio-confirm-actions">
+                    <button
+                      type="button"
+                      class="aelio-confirm-yes"
+                      onClick={() => respondToConfirmation('yes')}
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      type="button"
+                      class="aelio-confirm-no"
+                      onClick={() => respondToConfirmation('no')}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ))}
             {typing ? <div class="aelio-typing">Aelio is typing...</div> : null}
@@ -330,8 +382,9 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
               }}
               placeholder={placeholder}
               disabled={!connected}
+              maxLength={MAX_MESSAGE_LENGTH}
             />
-            <button type="button" onClick={sendMessage} disabled={!connected || !input.trim()}>
+            <button type="button" onClick={() => sendMessage()} disabled={!connected || !input.trim()}>
               Send
             </button>
           </div>
@@ -351,6 +404,10 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
         .aelio-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; line-height: 1.4; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
         .aelio-user { align-self: flex-end; background: #111827; color: #fff; }
         .aelio-assistant { align-self: flex-start; background: #fff; border: 1px solid #e5e7eb; color: #111827; }
+        .aelio-confirm-actions { display: flex; gap: 8px; margin-top: 10px; }
+        .aelio-confirm-yes, .aelio-confirm-no { border: none; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+        .aelio-confirm-yes { background: #111827; color: #fff; }
+        .aelio-confirm-no { background: #f3f4f6; color: #374151; }
         .aelio-hint, .aelio-typing { color: #6b7280; font-size: 13px; }
         .aelio-status { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 12px; border-bottom: 1px solid #e5e7eb; }
         .aelio-status-dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }

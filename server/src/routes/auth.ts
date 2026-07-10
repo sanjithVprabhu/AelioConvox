@@ -1,6 +1,7 @@
-import { createMagicLink, verifyMagicLink } from '@aelio/core';
+import { createMagicLink, createSessionToken, verifyMagicLink } from '@aelio/core';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { requireSecret } from '../auth.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 
 const MagicLinkRequestSchema = z.object({
@@ -8,11 +9,6 @@ const MagicLinkRequestSchema = z.object({
   externalId: z.string().optional(),
 });
 
-/**
- * Minimal in-memory sliding-window limiter for the unauthenticated magic-link
- * endpoint — stops email-bombing / link-farming (SEC-006). Keyed by IP and by
- * email; both must pass. In-process is right for the single-container deploy.
- */
 function makeRateLimiter(maxHits: number, windowMs: number) {
   const hits = new Map<string, number[]>();
   return (key: string, now = Date.now()): boolean => {
@@ -23,7 +19,6 @@ function makeRateLimiter(maxHits: number, windowMs: number) {
     }
     recent.push(now);
     hits.set(key, recent);
-    // Opportunistic cleanup so the map can't grow unbounded.
     if (hits.size > 10_000) {
       for (const [k, ts] of hits) {
         if (ts.every((t) => now - t >= windowMs)) hits.delete(k);
@@ -39,14 +34,18 @@ export async function registerAuthRoutes(app: FastifyInstance, deps: RuntimeDeps
     return;
   }
 
-  const perIp = makeRateLimiter(10, 60_000); // 10 / minute / IP
-  const perEmail = makeRateLimiter(5, 60 * 60_000); // 5 / hour / email
+  const perIp = makeRateLimiter(10, 60_000);
+  const perEmail = makeRateLimiter(5, 60 * 60_000);
   const clientIp = (request: { ip: string; headers: Record<string, unknown> }): string =>
     process.env.AELIO_TRUST_PROXY === '1'
       ? (String(request.headers['x-forwarded-for'] ?? '').split(',')[0]?.trim() || request.ip)
       : request.ip;
 
   app.post('/auth/magic-link', async (request, reply) => {
+    if (!requireSecret(request, reply, deps.config.secret)) {
+      return reply;
+    }
+
     const parsed = MagicLinkRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Invalid request body' });
@@ -88,10 +87,21 @@ export async function registerAuthRoutes(app: FastifyInstance, deps: RuntimeDeps
       return reply.status(401).send({ error: 'Invalid or expired token' });
     }
 
+    const sessionToken = createSessionToken(
+      deps.config.secret,
+      {
+        customerId: verified.customerId,
+        externalId: verified.externalId,
+        email: verified.email,
+      },
+      magicLink.session_token_ttl_minutes ?? 60,
+    );
+
     return {
       customerId: verified.customerId,
       externalId: verified.externalId,
       email: verified.email,
+      sessionToken,
     };
   });
 }

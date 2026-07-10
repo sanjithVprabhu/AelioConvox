@@ -90,6 +90,41 @@ function initializeVectorStore(sqlite: Database.Database): boolean {
   }
 }
 
+function ensureHarnessTables(sqlite: Database.Database): void {
+  const hasHarnessLedger = sqlite
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'harness_ledger' LIMIT 1")
+    .get();
+  if (hasHarnessLedger) {
+    return;
+  }
+
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS harness_ledger (
+      id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL,
+      turn_id TEXT NOT NULL,
+      instruction_id TEXT NOT NULL,
+      args_hash TEXT NOT NULL,
+      status TEXT NOT NULL,
+      result TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idem
+      ON harness_ledger (session_id, instruction_id, args_hash);
+    CREATE INDEX IF NOT EXISTS idx_ledger_turn ON harness_ledger (turn_id);
+    CREATE TABLE IF NOT EXISTS suspended_plans (
+      id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_suspended_session
+      ON suspended_plans (session_id);
+  `);
+}
+
 function syncExistingMemoryRows(sqlite: Database.Database, vectorEnabled: boolean): void {
   if (!vectorEnabled) {
     return;
@@ -235,6 +270,10 @@ export function createDatabase(databasePath: string): AelioDatabase {
     vectorEnabled,
     migrate(migrationsFolder: string) {
       migrate(db, { migrationsFolder });
+      // Drizzle only runs migrations newer than the latest __drizzle_migrations
+      // created_at stamp. Orphan journal rows (from renamed/regenerated SQL) can
+      // block later migrations — ensure harness tables exist regardless.
+      ensureHarnessTables(sqlite);
       // Additive columns for existing deployments (SQLite has no IF NOT EXISTS
       // for columns; inspect the table instead).
       const turnCallCols = sqlite

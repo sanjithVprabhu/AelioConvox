@@ -1,13 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { processTurn } from '@aelio/core';
+import { processTurn, verifySessionToken, withSessionLock } from '@aelio/core';
 import type { FastifyInstance } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { resolvePublicDir } from '../paths.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 import { buildTurnInput } from '../turn-options.js';
 import { z } from 'zod';
+import { MAX_WS_FRAME_BYTES } from '@aelio/protocol';
 
 const WIDGET_WS_PATH = '/widget/ws';
+const MAX_MESSAGE_LENGTH = 4096;
 
 const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
@@ -18,7 +21,7 @@ const ClientMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('message'),
-    content: z.string().min(1),
+    content: z.string().min(1).max(MAX_MESSAGE_LENGTH),
   }),
 ]);
 
@@ -36,6 +39,8 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
     const remoteAddress = request.socket.remoteAddress ?? 'unknown';
     const origin = request.headers.origin;
     const allowed = deps.config.channels.web.allowed_origins;
+    const socketLockKey = `widget-socket:${randomUUID()}`;
+
     app.log.info(
       {
         route: WIDGET_WS_PATH,
@@ -59,8 +64,6 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
         },
         'Widget websocket rejected by origin policy',
       );
-      // Send a diagnosable reason before closing so the widget can show *why*
-      // rather than sitting on "Connecting…". ws buffers this before the close.
       socket.send(
         JSON.stringify({
           type: 'error',
@@ -77,7 +80,13 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
     let initialized = false;
 
     socket.on('message', (raw) => {
-      void (async () => {
+      if (raw.toString().length > MAX_WS_FRAME_BYTES) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Message too large' }));
+        socket.close(1009, 'Frame too large');
+        return;
+      }
+
+      void withSessionLock(socketLockKey, async () => {
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw.toString());
@@ -94,26 +103,64 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
 
         const message = result.data;
         if (message.type === 'init') {
-          if (!deps.config.identity.allow_anonymous && message.customerId === 'anonymous') {
-            app.log.warn(
-              {
-                route: WIDGET_WS_PATH,
-                remoteAddress,
-                customerId: message.customerId,
-              },
-              'Widget init rejected because anonymous access is disabled',
-            );
+          if (initialized) {
             socket.send(
               JSON.stringify({
                 type: 'error',
-                message: 'Authentication required. Use a magic link before starting chat.',
+                code: 'already_initialized',
+                message: 'This connection is already initialized.',
               }),
             );
             return;
           }
 
-          customerId = message.customerId;
-          channelAddress = message.email ? `web:${message.email}` : `web:${customerId}`;
+          const requireAuth = !deps.config.identity.allow_anonymous;
+          const claims = message.authToken
+            ? verifySessionToken(deps.config.secret, message.authToken)
+            : null;
+
+          if (requireAuth && !claims) {
+            app.log.warn(
+              { route: WIDGET_WS_PATH, remoteAddress, customerId: message.customerId },
+              'Widget init rejected — valid session token required',
+            );
+            socket.send(
+              JSON.stringify({
+                type: 'error',
+                code: 'auth_required',
+                message: 'Authentication required. Verify a magic link and pass the session token.',
+              }),
+            );
+            return;
+          }
+
+          if (claims) {
+            if (message.customerId !== claims.externalId) {
+              socket.send(
+                JSON.stringify({
+                  type: 'error',
+                  code: 'identity_mismatch',
+                  message: 'customerId does not match the verified session.',
+                }),
+              );
+              return;
+            }
+            customerId = claims.externalId;
+            channelAddress = `web:${claims.email}`;
+          } else {
+            if (message.customerId === 'anonymous') {
+              socket.send(
+                JSON.stringify({
+                  type: 'error',
+                  message: 'Anonymous access is disabled. Use a magic link before starting chat.',
+                }),
+              );
+              return;
+            }
+            customerId = message.customerId;
+            channelAddress = message.email ? `web:${message.email}` : `web:${customerId}`;
+          }
+
           initialized = true;
           app.log.info(
             {
@@ -121,8 +168,8 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
               remoteAddress,
               customerId,
               channelAddress,
-              email: message.email ?? null,
-              hasAuthToken: Boolean(message.authToken),
+              email: message.email ?? claims?.email ?? null,
+              authenticated: Boolean(claims),
             },
             'Widget client initialized',
           );
@@ -131,32 +178,14 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
         }
 
         if (!initialized) {
-          app.log.warn(
-            {
-              route: WIDGET_WS_PATH,
-              remoteAddress,
-            },
-            'Widget message received before init',
-          );
           socket.send(JSON.stringify({ type: 'error', message: 'Send init before messaging' }));
           return;
         }
 
-        app.log.info(
-          {
-            route: WIDGET_WS_PATH,
-            remoteAddress,
-            customerId,
-            channelAddress,
-            contentPreview: message.content.slice(0, 160),
-            contentLength: message.content.length,
-          },
-          'Widget message received',
-        );
         socket.send(JSON.stringify({ type: 'typing', active: true }));
 
         try {
-          const { reply, turnId } = await processTurn(
+          const { reply, turnId, awaitingConfirmation } = await processTurn(
             buildTurnInput(deps, {
               customerExternalId: customerId,
               channel: 'web',
@@ -165,55 +194,63 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
             }),
           );
 
-          socket.send(
-            JSON.stringify({
-              type: 'message',
-              role: 'assistant',
-              content: reply,
-              turnId,
-            }),
-          );
-          app.log.info(
-            {
-              route: WIDGET_WS_PATH,
-              remoteAddress,
-              customerId,
-              turnId,
-              replyPreview: reply.slice(0, 160),
-              replyLength: reply.length,
-            },
-            'Widget turn completed',
-          );
+          const isConfirmation =
+            awaitingConfirmation ||
+            /reply \*\*yes\*\* to confirm/i.test(reply);
+
+          if (isConfirmation) {
+            socket.send(
+              JSON.stringify({
+                type: 'confirmation',
+                prompt: reply,
+                turnId,
+              }),
+            );
+          } else {
+            socket.send(
+              JSON.stringify({
+                type: 'message',
+                role: 'assistant',
+                content: reply,
+                turnId,
+              }),
+            );
+          }
         } catch (error) {
           app.log.error(
-            {
-              err: error,
-              route: WIDGET_WS_PATH,
-              remoteAddress,
-              customerId,
-            },
+            { err: error, route: WIDGET_WS_PATH, remoteAddress, customerId },
             'Widget turn failed',
           );
           socket.send(
             JSON.stringify({
               type: 'error',
-              message: error instanceof Error ? error.message : 'Failed to process message',
+              message: 'Something went wrong processing your message. Please try again.',
             }),
           );
         } finally {
           socket.send(JSON.stringify({ type: 'typing', active: false }));
         }
-      })();
+      }).catch((error) => {
+        app.log.error(
+          { err: error, route: WIDGET_WS_PATH, remoteAddress, customerId },
+          'Widget message handler failed',
+        );
+        try {
+          socket.send(
+            JSON.stringify({
+              type: 'error',
+              message: 'Something went wrong processing your message. Please try again.',
+            }),
+          );
+        } catch {
+          // Socket may already be closed.
+        }
+      });
     });
 
     socket.on('close', () => {
       app.log.info(
-        {
-          route: WIDGET_WS_PATH,
-          remoteAddress,
-          customerId,
-          initialized,
-        },
+        { route: WIDGET_WS_PATH, remoteAddress, customerId, initialized },
         'Widget websocket disconnected',
       );
     });

@@ -89,6 +89,7 @@ const configTemplate = readFileSync(join(root, 'config.yaml'), 'utf8');
 const testConfig = configTemplate
   .replace(/database_path:\s.*$/m, `database_path: ${dbPath}`)
   .replace(/port:\s*\d+$/m, `port: ${testPort}`)
+  .replace(/provider:\s*\w+/m, 'provider: mock')
   .replace(/- http:\/\/localhost:\d+$/m, `- ${baseUrl}`);
 writeFileSync(configPath, testConfig);
 

@@ -236,6 +236,7 @@ export async function createApp(config: AelioConfig) {
     stopOutbound();
     stopBackup();
     stopDaemon();
+    sdkBridge.shutdown();
     database.close();
   });
 

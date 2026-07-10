@@ -75,8 +75,9 @@ export const ConfigSchema = z.object({
           .object({
             enabled: z.boolean().default(true),
             ttl_minutes: z.number().int().positive().default(15),
+            session_token_ttl_minutes: z.number().int().positive().default(60),
           })
-          .default({ enabled: true, ttl_minutes: 15 }),
+          .default({ enabled: true, ttl_minutes: 15, session_token_ttl_minutes: 60 }),
       })
       .default({ enabled: true, allowed_origins: [], magic_link: { enabled: true, ttl_minutes: 15 } }),
   }),

@@ -6,6 +6,7 @@ primary_region = "iad"
 
 [env]
   AELIO_CONFIG = "/app/config.yaml"
+  AELIO_SDK_SECRET = "change-me-in-production"
 
 [http_service]
   internal_port = 3000
