@@ -81,6 +81,20 @@ export class MockProvider implements LLMProvider {
       (message) => message.toolResults && message.toolResults.length > 0,
     );
     if (hasToolResults) {
+      // Approximate what a real LLM would say from the tools that ran — the
+      // harness feeds executed tool calls in as assistant toolCalls, so the
+      // synthesis reply reflects the action (e.g. a cancellation) rather than a
+      // single canned string.
+      const calledTools = opts.messages
+        .flatMap((message) => message.toolCalls ?? [])
+        .map((call) => call.name.toLowerCase());
+      if (calledTools.some((name) => name.includes('cancel'))) {
+        return {
+          text: 'Your order has been cancelled. Is there anything else I can help with?',
+          toolCalls: [],
+          stopReason: 'stop',
+        };
+      }
       return {
         text: 'Your last order shipped today. Tracking: 1Z999AA10123456784',
         toolCalls: [],

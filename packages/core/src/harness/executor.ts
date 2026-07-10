@@ -73,6 +73,12 @@ export type ExecutorDeps = {
   budgets: BudgetMeter;
   database?: AelioDatabase;
   internalCustomerId?: string;
+  /**
+   * Instruction ids the user has already confirmed (a resumed
+   * awaiting_confirmation plan). Their needs_approval gate is treated as
+   * granted so the write executes and the rest of the plan continues.
+   */
+  approvedInstructions?: Set<string>;
   /** Called after each rock wave with the just-completed instructions' results. */
   onWaveComplete?: (completed: ResolvedInstruction[], state: ExecutorState) => void;
   /** Applied after a successful invoke — used for declarative state transitions. */
@@ -223,7 +229,10 @@ async function runInstruction(
     };
   }
 
-  if (verdict.verdict === 'needs_approval') {
+  // needs_approval → suspend for confirmation, UNLESS this instruction was
+  // already confirmed on a resume (the user said yes) — then it falls through
+  // to invoke. This is what lets a mid-plan confirmation resume the WHOLE plan.
+  if (verdict.verdict === 'needs_approval' && !deps.approvedInstructions?.has(instruction.id)) {
     if (deps.database && deps.internalCustomerId) {
       await logFunctionCall(deps.database.db, {
         sessionId: deps.context.sessionId,
@@ -251,8 +260,10 @@ async function runInstruction(
     };
   }
 
-  // verdict.allow — apply any transform, then invoke.
-  const invokeArgs = verdict.transformedArgs ?? finalArgs;
+  // allow (or a pre-approved confirmation that fell through) — apply any
+  // transform, then invoke.
+  const invokeArgs =
+    verdict.verdict === 'allow' && verdict.transformedArgs ? verdict.transformedArgs : finalArgs;
   const argsHash = hashArgs(invokeArgs);
 
   // Idempotency: a completed identical call (this turn's ledger) never re-runs.

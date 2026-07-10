@@ -221,6 +221,49 @@ console.log('\n[11] Blocked outcome flags a policy denial as fatal (reason must 
   assert(typeof outcome.reason === 'string' && outcome.reason.length > 0, 'carries a user-facing reason');
 }
 
+console.log('\n[12] Confirmation unification: mid-plan confirm resumes the WHOLE plan');
+{
+  const confirmSafety = { defaultMode: 'full', requireConfirmationFor: ['write'] };
+  // c is a read that consumes b's output — the "tail" that the old single-tool
+  // confirmation path would have dropped entirely.
+  const registry = [
+    readTool('check'),
+    writeTool('charge', { amount: 'number' }),
+    readTool('receipt', { charge_id: 'string' }),
+  ];
+  const bound = [
+    { instruction: { id: 'a', capability: 'read' }, tool: registry[0] },
+    { instruction: { id: 'b', capability: 'charge', args_hint: { amount: 5 }, produces: ['charge_id'] }, tool: registry[1] },
+    { instruction: { id: 'c', capability: 'receipt' }, tool: registry[2] },
+  ];
+  const res = resolvePlan('checkout', undefined, bound);
+  assert(res.plan.instructions.find((i) => i.id === 'c').needs.includes('b'), 'c depends on b (charge_id)');
+
+  // First pass: read a runs, write b needs confirmation → suspend (b and c not run).
+  const sdk = fakeSdk({ charge: () => ({ charge_id: 'CH-7' }) });
+  const state = newExecutorState();
+  const outcome = await executePlan(res.plan, state, { sdk, context: ctx, safety: confirmSafety, budgets: budgets() });
+  assert(outcome.kind === 'suspend' && outcome.reason === 'awaiting_confirmation', 'suspends for confirmation at the write');
+  assert(sdk.calls.map((c) => c.name).join(',') === 'check', 'only the read ran; no write before confirmation');
+
+  // Persist as awaiting_confirmation, then resume with approval for b.
+  const payload = toSuspensionPayload({
+    goal: 'checkout', userMessage: 'buy it', registryHash: 'h', plan: res.plan, state,
+    pendingInstructionId: outcome.instruction.id,
+    ask: { toolName: 'charge', question: outcome.question },
+    recoilCount: 0,
+  });
+  const resumed = rehydrateSuspension(payload, 'yes', registry, 'h');
+  assert(resumed.ok, 'rehydrates the confirmation suspension');
+  const outcome2 = await executePlan(resumed.plan, resumed.state, {
+    sdk, context: ctx, safety: confirmSafety, budgets: budgets(),
+    approvedInstructions: new Set([resumed.pendingInstructionId]),
+  });
+  assert(outcome2.kind === 'complete', 'resumes to completion after approval');
+  assert(sdk.calls.map((c) => c.name).join(',') === 'check,charge,receipt', 'the confirmed write AND its downstream step both ran (tail not lost)');
+  assert(sdk.calls[2].args.charge_id === 'CH-7', 'downstream step received the confirmed write’s output');
+}
+
 // ---------------------------------------------------------------------------
 if (failures > 0) {
   console.error(`\n${failures} harness assertion(s) failed`);

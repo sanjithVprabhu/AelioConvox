@@ -54,12 +54,17 @@ bounded by hard budgets.
   needs_info | transform`, composed from `evaluateSafety` + state tool-gating +
   guard conditions, evaluated on the concrete resolved args regardless of what
   the plan proposed.
-- **suspension.ts / resume.ts** — recoil = suspend-for-input. On `needs_info` the
-  plan + ledger are persisted (SQLite authoritative, Sunjet mirror); the next
-  message rehydrates it (rebind tools, replay ledger so finished steps never
-  re-run, validate + pin the answer) and resumes. Guards: a changed registry
-  hash or vanished tool discards the plan; a rejected answer re-asks; bounded by
-  `maxRecoilsPerIntent`.
+- **suspension.ts / resume.ts** — the unified suspend/resume store, for BOTH
+  recoil (`awaiting_info`) and write-confirmation (`awaiting_confirmation`). On
+  suspend the plan + ledger are persisted (SQLite authoritative, Sunjet mirror);
+  the next message rehydrates it (rebind tools, replay ledger so finished steps
+  never re-run) and resumes — so a mid-plan confirmation continues the WHOLE
+  plan, not just the one confirmed write. Recoil pins the validated answer;
+  confirmation grants the pending write's approval so its gate passes. Explicit
+  "no/cancel" abandons; a changed registry hash or vanished tool discards;
+  recoil is bounded by `maxRecoilsPerIntent`. (The legacy pending-confirmation
+  path in turn.ts remains only as the fallback when the harness runs without a
+  suspension store, and for the legacy tool loop.)
 - **transitions.ts** — declarative lifecycle transitions on tool success
   (`create_order` succeeds → `awaiting_payment`), guard-checked. SDK `set_state`
   always overrides.
@@ -104,8 +109,6 @@ harness:
 - Surprise-driven segment replanning after a rock (the outcome/replan path
   exists; the trigger is conservative).
 - Binding cache reads/writes against `harness_bindings` (table + key defined).
-- Full unification of confirmation into the suspension store (confirmation still
-  uses the proven pending-confirmation path).
 - `transform` policy verdict (arg caps) — enum + plumbing exist; no built-in rules.
 
 ## Verification

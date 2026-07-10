@@ -13,7 +13,7 @@ import { runPlanner } from './planner.js';
 import { runSynthesis } from './synthesis.js';
 import { rehydrateSuspension, toSuspensionPayload } from './resume.js';
 import { applyStateTransition } from './transitions.js';
-import { isDenialMessage } from '../safety/confirmations.js';
+import { isConfirmationMessage, isDenialMessage } from '../safety/confirmations.js';
 import type { SuspensionStore } from './suspension.js';
 import type { HarnessTracer, TraceKind } from './traces.js';
 import {
@@ -81,51 +81,18 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
       payload,
     });
 
-  // ---- Resume-first: a parked (recoil) plan intercepts this message ----
-  // Confirmation resume is handled upstream by the pending-confirmation path;
-  // here we only resume awaiting_info suspensions.
+  // ---- Resume-first: a parked plan (recoil OR confirmation) intercepts this
+  // message before any fresh planning, so a mid-plan suspension resumes the
+  // WHOLE plan instead of losing its remaining steps.
   if (input.suspensionStore) {
     const suspended = await input.suspensionStore.get(input.context.sessionId);
-    if (suspended && suspended.reason === 'awaiting_info') {
-      // Explicit "never mind / cancel / no" abandons the parked plan rather than
-      // being misread as the answer — critical when the pending arg feeds a
-      // write and its field is a free string that would coerce anything.
-      if (isDenialMessage(input.userMessage)) {
-        await input.suspensionStore.clear(input.context.sessionId);
-        trace('resume', { abandoned: 'user_declined' });
-        return {
-          reply: 'No problem — I’ve set that aside. What would you like to do instead?',
-          toolCallsExecuted: 0,
-          executedToolNames: [],
-        };
+    if (suspended) {
+      const resumeResult = await resumeSuspended(input, suspended, budgets, trace);
+      if (resumeResult) {
+        return resumeResult;
       }
-      const resumed = rehydrateSuspension(
-        suspended.payload,
-        input.userMessage,
-        input.functions,
-        input.lighthouse?.getHash() ?? null,
-      );
-      if (resumed.ok) {
-        trace('resume', { pending: resumed.pendingInstructionId });
-        await input.suspensionStore.clear(input.context.sessionId);
-        const outcome = await executePlan(resumed.plan, resumed.state, buildExecutorDeps(input, budgets, trace));
-        return finishTurn(input, resumed.plan.goal, resumed.state, outcome, budgets, trace, {
-          recoilCount: suspended.payload.recoilCount + 1,
-          userMessage: suspended.payload.userMessage,
-          plan: resumed.plan,
-        });
-      }
-      if (resumed.reason === 'answer_rejected') {
-        // Keep the plan parked; re-ask the same question.
-        return {
-          reply: suspended.payload.ask.question,
-          toolCallsExecuted: 0,
-          executedToolNames: [],
-        };
-      }
-      // stale_registry / tool_gone → drop the suspension and plan fresh below.
-      await input.suspensionStore.clear(input.context.sessionId);
-      trace('resume', { discarded: resumed.reason });
+      // null → the suspension was stale/undecidable; it's been cleared, fall
+      // through to fresh planning below.
     }
   }
 
@@ -217,10 +184,111 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
   });
 }
 
+/**
+ * Resume a parked plan (recoil or confirmation) from the user's reply.
+ * Returns the finished turn, or `null` when the suspension was stale/undecidable
+ * (already cleared) and the caller should plan fresh.
+ */
+async function resumeSuspended(
+  input: HarnessRunInput,
+  suspended: NonNullable<Awaited<ReturnType<SuspensionStore['get']>>>,
+  budgets: BudgetMeter,
+  trace: (kind: TraceKind, payload: unknown) => void,
+): Promise<ToolLoopResult | null> {
+  const store = input.suspensionStore!;
+  const sessionId = input.context.sessionId;
+
+  // Explicit "never mind / cancel / no" abandons the parked plan rather than
+  // being misread as an answer or an approval. Critical: for recoil a free
+  // string would coerce anything into a write's argument; for confirmation this
+  // is the natural "no".
+  if (isDenialMessage(input.userMessage)) {
+    await store.clear(sessionId);
+    trace('resume', { abandoned: 'user_declined', reason: suspended.reason });
+    return {
+      reply:
+        suspended.reason === 'awaiting_confirmation'
+          ? 'Okay, I won’t do that. Anything else?'
+          : 'No problem — I’ve set that aside. What would you like to do instead?',
+      toolCallsExecuted: 0,
+      executedToolNames: [],
+    };
+  }
+
+  if (suspended.reason === 'awaiting_confirmation') {
+    // Only an explicit "yes" proceeds; anything else re-asks (never assume
+    // consent for a write from an ambiguous reply).
+    if (!isConfirmationMessage(input.userMessage)) {
+      return {
+        reply: suspended.payload.ask.question,
+        toolCallsExecuted: 0,
+        executedToolNames: [],
+      };
+    }
+    const resumed = rehydrateSuspension(
+      suspended.payload,
+      input.userMessage,
+      input.functions,
+      input.lighthouse?.getHash() ?? null,
+    );
+    if (!resumed.ok) {
+      await store.clear(sessionId);
+      trace('resume', { discarded: resumed.reason, reason: 'awaiting_confirmation' });
+      return null;
+    }
+    await store.clear(sessionId);
+    trace('resume', { confirmed: resumed.pendingInstructionId });
+    // Grant the confirmed instruction so its needs_approval gate passes; the
+    // write runs and the rest of the plan continues from the seeded ledger.
+    const approved = new Set([resumed.pendingInstructionId]);
+    const outcome = await executePlan(
+      resumed.plan,
+      resumed.state,
+      buildExecutorDeps(input, budgets, trace, approved),
+    );
+    return finishTurn(input, resumed.plan.goal, resumed.state, outcome, budgets, trace, {
+      recoilCount: suspended.payload.recoilCount,
+      userMessage: suspended.payload.userMessage,
+      plan: resumed.plan,
+    });
+  }
+
+  // awaiting_info (recoil): the message is the answer.
+  const resumed = rehydrateSuspension(
+    suspended.payload,
+    input.userMessage,
+    input.functions,
+    input.lighthouse?.getHash() ?? null,
+  );
+  if (resumed.ok) {
+    await store.clear(sessionId);
+    trace('resume', { pending: resumed.pendingInstructionId });
+    const outcome = await executePlan(resumed.plan, resumed.state, buildExecutorDeps(input, budgets, trace));
+    return finishTurn(input, resumed.plan.goal, resumed.state, outcome, budgets, trace, {
+      recoilCount: suspended.payload.recoilCount + 1,
+      userMessage: suspended.payload.userMessage,
+      plan: resumed.plan,
+    });
+  }
+  if (resumed.reason === 'answer_rejected') {
+    // Keep the plan parked; re-ask the same question.
+    return {
+      reply: suspended.payload.ask.question,
+      toolCallsExecuted: 0,
+      executedToolNames: [],
+    };
+  }
+  // stale_registry / tool_gone → drop and plan fresh.
+  await store.clear(sessionId);
+  trace('resume', { discarded: resumed.reason });
+  return null;
+}
+
 function buildExecutorDeps(
   input: HarnessRunInput,
   budgets: BudgetMeter,
   trace: (kind: TraceKind, payload: unknown) => void,
+  approvedInstructions?: Set<string>,
 ) {
   return {
     sdk: input.sdk,
@@ -228,6 +296,7 @@ function buildExecutorDeps(
     safety: input.safety,
     ...(input.state ? { state: input.state } : {}),
     ...(input.presentFields ? { presentFields: input.presentFields } : {}),
+    ...(approvedInstructions ? { approvedInstructions } : {}),
     budgets,
     ...(input.database ? { database: input.database } : {}),
     ...(input.internalCustomerId ? { internalCustomerId: input.internalCustomerId } : {}),
@@ -277,36 +346,56 @@ async function finishTurn(
     // Recoil: persist the plan+ledger so the next message resumes instead of
     // restarting. Guarded by the recoil budget so a user who can't supply the
     // value isn't asked forever.
-    if (
-      outcome.reason === 'awaiting_info' &&
-      input.suspensionStore &&
-      meta.plan &&
-      meta.recoilCount < (input.budgets ?? DEFAULT_BUDGETS).maxRecoilsPerIntent
-    ) {
+    const recoilBudget = (input.budgets ?? DEFAULT_BUDGETS).maxRecoilsPerIntent;
+    const canPersist = Boolean(input.suspensionStore && meta.plan);
+    const withinRecoilBudget = outcome.reason !== 'awaiting_info' || meta.recoilCount < recoilBudget;
+
+    // Persist the FULL plan+ledger so the next message resumes the whole plan —
+    // for recoil (awaiting_info) AND for confirmation (awaiting_confirmation).
+    // This is the unification: a mid-plan confirmation no longer drops the tail.
+    if (canPersist && withinRecoilBudget) {
       const payload = toSuspensionPayload({
         goal,
         userMessage: meta.userMessage,
         registryHash: input.lighthouse?.getHash() ?? '',
-        plan: meta.plan,
+        plan: meta.plan!,
         state,
         pendingInstructionId: outcome.instruction.id,
         ask: {
-          ...(outcome.verdict.verdict === 'needs_info' && outcome.verdict.missing[0]
+          ...(outcome.reason === 'awaiting_info' &&
+          outcome.verdict.verdict === 'needs_info' &&
+          outcome.verdict.missing[0]
             ? { field: outcome.verdict.missing[0] }
             : {}),
           toolName: outcome.instruction.tool.name,
           question: outcome.question,
         },
+        ...(outcome.reason === 'awaiting_confirmation' && outcome.pendingConfirmation
+          ? {
+              pendingCall: {
+                toolName: outcome.pendingConfirmation.functionName,
+                args: outcome.pendingConfirmation.args,
+                safetyLevel: outcome.pendingConfirmation.safetyLevel,
+                description: outcome.pendingConfirmation.description,
+              },
+            }
+          : {}),
         recoilCount: meta.recoilCount,
       });
-      await input.suspensionStore.suspend(input.context.sessionId, 'awaiting_info', payload);
+      await input.suspensionStore!.suspend(input.context.sessionId, outcome.reason, payload);
     }
 
     return {
       reply: outcome.question,
       toolCallsExecuted: state.toolCallsExecuted,
       executedToolNames: state.executedToolNames,
-      ...(outcome.pendingConfirmation ? { pendingConfirmation: outcome.pendingConfirmation } : {}),
+      // Legacy fallback: only hand the confirmation back to turn.ts's
+      // pending-confirmation path when we could NOT persist it to the store
+      // (e.g. harness used without a suspension store). With the store, the
+      // store owns it and turn.ts must not double-persist.
+      ...(outcome.pendingConfirmation && !canPersist
+        ? { pendingConfirmation: outcome.pendingConfirmation }
+        : {}),
     };
   }
 
