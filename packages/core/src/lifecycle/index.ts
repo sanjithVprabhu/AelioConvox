@@ -88,7 +88,13 @@ export async function getCustomerPresentFields(
   const present = new Set<string>();
   if (metadata && typeof metadata === 'object') {
     for (const [key, value] of Object.entries(metadata)) {
-      if (!RESERVED_METADATA_KEYS.has(key) && value !== null && value !== undefined && value !== false) {
+      if (
+        !RESERVED_METADATA_KEYS.has(key) &&
+        value !== null &&
+        value !== undefined &&
+        value !== false &&
+        value !== ''
+      ) {
         present.add(key);
       }
     }

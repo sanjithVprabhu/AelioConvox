@@ -17,6 +17,12 @@ export async function registerWhatsAppRoutes(app: FastifyInstance, deps: Runtime
     const token = query['hub.verify_token'];
     const challenge = query['hub.challenge'];
 
+    // Require verify_token to be configured — otherwise `undefined === undefined`
+    // would let anyone subscribe the webhook (SEC-003).
+    if (!wa.verify_token) {
+      app.log.error('WhatsApp webhook verification attempted but channels.whatsapp.verify_token is not set');
+      return reply.status(403).send('Forbidden');
+    }
     if (mode === 'subscribe' && token === wa.verify_token) {
       return reply.status(200).send(challenge);
     }

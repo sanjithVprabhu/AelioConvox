@@ -403,12 +403,16 @@ async function finishTurn(
     trace('budget', { blocked: outcome.reason, fatal: outcome.fatal });
     // A fatal denial's reason IS the message the user needs ("can't cancel via
     // chat") — surface it even when earlier steps ran, so it's never swallowed
-    // by a synthesis that only sees the ledger. A non-fatal (budget/stall) stop
-    // reads better as a graceful synthesis over whatever did complete.
+    // by a synthesis that only sees the ledger. Dependency/stall stops must
+    // also surface their reason. Only budget exhaustion synthesizes over a
+    // partial ledger.
     let reply: string;
-    if (outcome.fatal) {
-      reply = outcome.reason;
-    } else if (state.ledger.length === 0) {
+    if (
+      outcome.fatal ||
+      outcome.cause === 'dependency' ||
+      outcome.cause === 'stall' ||
+      state.ledger.length === 0
+    ) {
       reply = outcome.reason;
     } else {
       const synthesized = await runSynthesis({

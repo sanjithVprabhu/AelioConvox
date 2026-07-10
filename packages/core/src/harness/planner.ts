@@ -105,5 +105,6 @@ export async function runPlanner(input: {
   return {
     turn: { mode: 'refuse', reason: 'Planning failed.' },
     degraded: true,
+    ...(usage ? { usage } : {}),
   };
 }
