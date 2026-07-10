@@ -28,11 +28,14 @@ socket.on('open', async () => {
     socket.send(JSON.stringify({ type: 'message', content: 'please cancel my order' }));
     const prompt = await waitForMessage(
       socket,
-      (message) => message.type === 'message' && message.role === 'assistant',
+      (message) =>
+        (message.type === 'confirmation' && typeof message.prompt === 'string') ||
+        (message.type === 'message' && message.role === 'assistant'),
     );
 
-    console.log('[Phase 4] Confirmation prompt:', prompt.content);
-    if (!prompt.content.toLowerCase().includes('confirm') || !prompt.content.includes('cancelOrder')) {
+    const promptText = prompt.type === 'confirmation' ? prompt.prompt : prompt.content;
+    console.log('[Phase 4] Confirmation prompt:', promptText);
+    if (!promptText.toLowerCase().includes('confirm') || !promptText.includes('cancelOrder')) {
       throw new Error('Expected confirmation prompt for cancelOrder');
     }
 

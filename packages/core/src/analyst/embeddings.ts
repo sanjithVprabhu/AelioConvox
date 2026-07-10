@@ -1,4 +1,13 @@
-const DIMENSIONS = 1536;
+let defaultDimensions = 1536;
+
+// Memoize text → vector. One turn embeds the SAME text several times (cache
+// lookup, memory recall, message storage, conversation archive), which with a
+// remote provider is several identical paid API calls. Embeddings are
+// deterministic per provider, so an LRU collapses them into one real call.
+// Only successful remote results (or pure-hash mode) are cached, so a transient
+// remote failure never pins a fallback hash vector for that text.
+const EMBED_CACHE_MAX = 512;
+const embedCache = new Map<string, number[]>();
 
 function hashToken(token: string): number {
   let hash = 0;
@@ -8,7 +17,15 @@ function hashToken(token: string): number {
   return hash;
 }
 
-export function embedText(text: string, dimensions = DIMENSIONS): number[] {
+/** Align local hash embeddings with the configured vector store dimension. */
+export function configureEmbeddingDimensions(dimensions: number): void {
+  if (Number.isFinite(dimensions) && dimensions > 0) {
+    defaultDimensions = Math.trunc(dimensions);
+    embedCache.clear();
+  }
+}
+
+export function embedText(text: string, dimensions = defaultDimensions): number[] {
   const vector = new Array<number>(dimensions).fill(0);
   const tokens = text
     .toLowerCase()
@@ -40,15 +57,6 @@ export function embedText(text: string, dimensions = DIMENSIONS): number[] {
 // in the real embedder falls back to the hash so the system never hard-breaks.
 type AsyncEmbedder = (text: string) => Promise<number[]>;
 let configuredEmbedder: AsyncEmbedder | null = null;
-
-// Memoize text → vector. One turn embeds the SAME text several times (cache
-// lookup, memory recall, message storage, conversation archive), which with a
-// remote provider is several identical paid API calls. Embeddings are
-// deterministic per provider, so an LRU collapses them into one real call.
-// Only successful remote results (or pure-hash mode) are cached, so a transient
-// remote failure never pins a fallback hash vector for that text.
-const EMBED_CACHE_MAX = 512;
-const embedCache = new Map<string, number[]>();
 
 function embedCacheGet(text: string): number[] | undefined {
   const hit = embedCache.get(text);
@@ -87,7 +95,16 @@ export type EmbedPurpose =
   | 'response_cache_store'
   | 'message_storage'
   | 'conversation_archive'
-  | 'reflection_insight';
+  | 'reflection_insight'
+  | 'tool_registration'
+  | 'tool_retrieval';
+
+/** Pre-seed the embed LRU from a persisted vector (e.g. tool registry at SDK register). */
+export function seedEmbedCache(text: string, vector: number[]): void {
+  if (Array.isArray(vector) && vector.length > 0) {
+    embedCacheSet(text, vector);
+  }
+}
 
 export type EmbedOptions = {
   purpose: EmbedPurpose;
@@ -117,7 +134,7 @@ export async function embed(text: string, options?: EmbedOptions): Promise<numbe
   }
 
   if (!vector) {
-    vector = embedText(text);
+    vector = embedText(text, defaultDimensions);
   }
 
   if (!cacheHit && (usedRemote || !configuredEmbedder)) {

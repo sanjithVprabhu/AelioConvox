@@ -9,11 +9,13 @@
  * to customize secrets and provider keys.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
 import { existsSync, copyFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const root = process.cwd();
+const DEFAULT_SERVER_PORT = 3000;
 
 function log(step, message) {
   console.log(`[start] ${step} ${message}`);
@@ -22,6 +24,57 @@ function log(step, message) {
 function fail(message) {
   console.error(`[start] error: ${message}`);
   process.exit(1);
+}
+
+function resolveEnvRefs(value) {
+  return value.replace(/\$\{([A-Z0-9_]+)\}/g, (_, name) => process.env[name] ?? '');
+}
+
+/** Read server.port and llm.provider from the active YAML config. */
+function readConfigMeta(configFilePath) {
+  const fallback = { port: DEFAULT_SERVER_PORT, llmProvider: 'mock' };
+  if (!existsSync(configFilePath)) {
+    return fallback;
+  }
+
+  const raw = resolveEnvRefs(readFileSync(configFilePath, 'utf8'));
+  const portMatch = raw.match(/(?:^|\n)server:\s*\n(?:[ \t].*\n)*?[ \t]+port:\s*(\d+)/);
+  const llmMatch = raw.match(/(?:^|\n)llm:\s*\n(?:[ \t].*\n)*?[ \t]+provider:\s*(\w+)/);
+
+  return {
+    port: portMatch ? Number.parseInt(portMatch[1], 10) : fallback.port,
+    llmProvider: llmMatch?.[1] ?? fallback.llmProvider,
+  };
+}
+
+function serverBaseUrl(port) {
+  return `http://127.0.0.1:${port}`;
+}
+
+function serverWsUrl(port) {
+  return `ws://127.0.0.1:${port}`;
+}
+
+function assertPortAvailable(port) {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once('error', (err) => {
+      if (err && typeof err === 'object' && 'code' in err && err.code === 'EADDRINUSE') {
+        reject(
+          new Error(
+            `Port ${port} is already in use. Stop the existing server ` +
+              `(lsof -nP -iTCP:${port} -sTCP:LISTEN) or change server.port in your config.`,
+          ),
+        );
+        return;
+      }
+      reject(err);
+    });
+    probe.once('listening', () => {
+      probe.close(() => resolve());
+    });
+    probe.listen(port, '0.0.0.0');
+  });
 }
 
 function runSync(command, args, options = {}) {
@@ -87,6 +140,9 @@ loadEnvFile(envPath);
 const secret = process.env.AELIO_SDK_SECRET ?? 'change-me-in-production';
 const configPath = process.env.AELIO_CONFIG ?? join(root, 'config.yaml');
 const resolvedConfig = configPath.startsWith('/') ? configPath : join(root, configPath);
+const { port: serverPort, llmProvider } = readConfigMeta(resolvedConfig);
+const baseUrl = serverBaseUrl(serverPort);
+const wsUrl = serverWsUrl(serverPort);
 
 // ── Install & build ─────────────────────────────────────────────────────────
 
@@ -106,7 +162,7 @@ const childEnv = {
   ...process.env,
   AELIO_CONFIG: resolvedConfig,
   AELIO_SDK_SECRET: secret,
-  AELIO_SERVER_URL: process.env.AELIO_SERVER_URL ?? 'ws://127.0.0.1:3000',
+  AELIO_SERVER_URL: process.env.AELIO_SERVER_URL ?? wsUrl,
 };
 
 const procs = [];
@@ -137,7 +193,7 @@ async function waitFor(url, attempts = 60) {
 async function waitForSdkReady(attempts = 60) {
   for (let i = 0; i < attempts; i += 1) {
     try {
-      const response = await fetch('http://127.0.0.1:3000/ready');
+      const response = await fetch(`${baseUrl}/ready`);
       if (response.ok) {
         const body = await response.json();
         const functions = body.sdk?.functions ?? [];
@@ -161,9 +217,15 @@ const shutdown = () => {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-log('boot', 'starting Aelio server…');
+try {
+  await assertPortAvailable(serverPort);
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
+
+log('boot', `starting Aelio server on port ${serverPort}…`);
 run('server', 'pnpm', ['--filter', '@aelio/server', 'dev'], root);
-await waitFor('http://127.0.0.1:3000/health');
+await waitFor(`${baseUrl}/health`);
 
 log('boot', 'starting example SDK backend…');
 run('sdk', 'pnpm', ['--filter', 'aelio-example-express', 'start'], root);
@@ -171,10 +233,11 @@ await waitForSdkReady();
 
 console.log('\n────────────────────────────────────────────────────────');
 console.log('  Aelio is running');
-console.log('  Chat demo:    http://localhost:3000/demo.html');
-console.log('  Health:       http://localhost:3000/health');
-console.log('  Ready:        http://localhost:3000/ready');
+console.log(`  Chat demo:    http://localhost:${serverPort}/demo.html`);
+console.log(`  Health:       ${baseUrl}/health`);
+console.log(`  Ready:        ${baseUrl}/ready`);
 console.log('  Config:       ' + resolvedConfig);
-console.log('  LLM:          mock (edit config.yaml or .env for a real provider)');
+console.log(`  LLM:          ${llmProvider}`);
+console.log(`  SDK WS:       ${childEnv.AELIO_SERVER_URL}`);
 console.log('  Stop:         Ctrl+C');
 console.log('────────────────────────────────────────────────────────\n');

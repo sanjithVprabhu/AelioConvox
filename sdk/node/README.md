@@ -36,7 +36,7 @@ aelio.expose('cancelOrder', async ({ orderId }, ctx) => {
 })
 
 await aelio.listen({
-  secret: process.env.AELIO_SECRET,
+  secret: process.env.AELIO_SDK_SECRET,
   url: process.env.AELIO_SERVER_URL ?? 'ws://127.0.0.1:3000',
 })
 ```

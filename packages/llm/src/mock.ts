@@ -7,6 +7,62 @@ function lastUserMessage(messages: ChatMessage[]): string {
 
 export class MockProvider implements LLMProvider {
   async complete(opts: LLMCompleteOptions): Promise<LLMCompleteResult> {
+    const purpose = opts.telemetry?.purpose;
+
+    if (purpose === 'harness_router') {
+      const content = lastUserMessage(opts.messages);
+      const category =
+        content.includes('checkout') || content.includes('buy') || content.includes('order')
+          ? 'transaction'
+          : content.includes('cancel')
+            ? 'order'
+            : 'general';
+      return {
+        text: JSON.stringify({
+          intent: content || 'general inquiry',
+          category,
+        }),
+        toolCalls: [],
+        stopReason: 'stop',
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+    }
+
+    if (
+      purpose === 'harness_planner' ||
+      purpose === 'harness_replan'
+    ) {
+      const content = lastUserMessage(opts.messages);
+      const steps =
+        content.includes('cancel')
+          ? [{ tool_name: 'cancelOrder', input: { orderId: 'last' }, depends_on_step_index: [] }]
+          : content.includes('order') || content.includes('status') || content.includes('ship')
+            ? [{ tool_name: 'getOrderStatus', input: { orderId: 'last' }, depends_on_step_index: [] }]
+            : [{ tool_name: 'getOrderStatus', input: { orderId: 'last' }, depends_on_step_index: [] }];
+
+      return {
+        text: '',
+        toolCalls: [
+          {
+            id: 'mock_submit_plan',
+            name: 'submit_plan',
+            args: { steps },
+          },
+        ],
+        stopReason: 'tool_use',
+        usage: { inputTokens: 20, outputTokens: 20 },
+      };
+    }
+
+    if (purpose === 'harness_synthesis') {
+      return {
+        text: 'Your request has been completed successfully.',
+        toolCalls: [],
+        stopReason: 'stop',
+        usage: { inputTokens: 15, outputTokens: 15 },
+      };
+    }
+
     const hasToolResults = opts.messages.some(
       (message) => message.toolResults && message.toolResults.length > 0,
     );

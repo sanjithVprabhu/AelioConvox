@@ -159,7 +159,21 @@ export class OpenAICompatibleProvider implements LLMProvider {
             parameters: tool.input_schema,
           },
         })),
-        tool_choice: opts.tools.length > 0 ? 'auto' : 'none',
+        tool_choice:
+          opts.tools.length === 0
+            ? 'none'
+            : opts.toolChoice && typeof opts.toolChoice === 'object'
+              ? opts.toolChoice.mode === 'required'
+                ? { type: 'function', function: { name: opts.toolChoice.name } }
+                : opts.toolChoice.mode === 'any' &&
+                    opts.toolChoice.allowedFunctionNames?.length === 1
+                  ? {
+                      type: 'function',
+                      function: { name: opts.toolChoice.allowedFunctionNames[0] },
+                    }
+                  : 'auto'
+              : 'auto',
+        ...(opts.responseFormat === 'json' ? { response_format: { type: 'json_object' } } : {}),
       }),
     });
 

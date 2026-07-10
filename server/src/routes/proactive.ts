@@ -1,6 +1,7 @@
 import { sendProactiveMessage, setProactiveOptIn } from '@aelio/core';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { authorized } from '../auth.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 
 const SendSchema = z.object({
@@ -15,15 +16,6 @@ const OptInSchema = z.object({
   customerExternalId: z.string().min(1),
   optIn: z.boolean(),
 });
-
-// The dev's backend triggers proactive messages on its own domain events, so
-// these endpoints are authenticated with the same SDK secret.
-function authorized(request: FastifyRequest, secret: string): boolean {
-  const header = request.headers.authorization;
-  const bearer = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
-  const provided = bearer ?? (request.headers['x-aelio-secret'] as string | undefined);
-  return provided === secret;
-}
 
 export async function registerProactiveRoutes(app: FastifyInstance, deps: RuntimeDeps) {
   if (!deps.config.proactive.enabled) {

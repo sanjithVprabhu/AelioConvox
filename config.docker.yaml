@@ -14,11 +14,15 @@ channels:
     webhook_path: /wa/webhook
   web:
     enabled: true
+    # Do NOT use "*" in production. Set AELIO_ALLOWED_ORIGINS=https://app.example.com,https://www.example.com
+    # or list origins below. Unresolved placeholders are stripped at load time.
     allowed_origins:
-      - "*"
+      - ${AELIO_ALLOWED_ORIGIN}
     magic_link:
       enabled: true
       ttl_minutes: 15
+      require_sdk_auth: true
+      rate_limit_per_minute: 5
 
 safety:
   default_mode: full

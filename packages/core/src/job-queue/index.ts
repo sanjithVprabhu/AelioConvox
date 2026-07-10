@@ -9,6 +9,8 @@ export type JobRecord = {
   payload: Record<string, unknown>;
 };
 
+const DEFAULT_STALE_LOCK_MS = 5 * 60_000;
+
 export async function enqueueJob(
   database: AelioDatabase,
   queue: string,
@@ -53,11 +55,55 @@ export function claimJob(
     return null;
   }
 
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(row.payload) as Record<string, unknown>;
+  } catch {
+    database.sqlite
+      .prepare(`UPDATE job_queue SET status = 'failed', error_message = ? WHERE id = ?`)
+      .run('Corrupt job payload (invalid JSON)', row.id);
+    return null;
+  }
+
   return {
     id: row.id,
     queue: row.queue,
-    payload: JSON.parse(row.payload) as Record<string, unknown>,
+    payload,
   };
+}
+
+export async function updateJobPayload(
+  database: AelioDatabase,
+  jobId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const existing = await database.db
+    .select()
+    .from(jobQueue)
+    .where(eq(jobQueue.id, jobId))
+    .limit(1);
+  const job = existing[0];
+  if (!job) {
+    return;
+  }
+  const payload = { ...(job.payload ?? {}), ...patch };
+  await database.db.update(jobQueue).set({ payload }).where(eq(jobQueue.id, jobId));
+}
+
+/** Requeue jobs stuck in `processing` after a worker crash. */
+export function requeueStaleJobs(
+  database: AelioDatabase,
+  staleAfterMs = DEFAULT_STALE_LOCK_MS,
+): number {
+  const cutoff = Date.now() - staleAfterMs;
+  const result = database.sqlite
+    .prepare(
+      `UPDATE job_queue
+       SET status = 'pending', locked_by = NULL, locked_at = NULL, next_run_at = ?, error_message = ?
+       WHERE status = 'processing' AND locked_at IS NOT NULL AND locked_at < ?`,
+    )
+    .run(Date.now(), 'Requeued after stale processing lock', cutoff);
+  return result.changes;
 }
 
 export async function completeJob(database: AelioDatabase, jobId: string): Promise<void> {

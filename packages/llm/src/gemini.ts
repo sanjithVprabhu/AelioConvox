@@ -111,6 +111,9 @@ export class GeminiProvider implements LLMProvider {
       generationConfig: {
         maxOutputTokens: opts.maxTokens ?? this.defaultMaxTokens,
         temperature: opts.temperature ?? 0.2,
+        ...(opts.responseFormat === 'json'
+          ? { responseMimeType: 'application/json' }
+          : {}),
       },
     };
 
@@ -120,9 +123,28 @@ export class GeminiProvider implements LLMProvider {
 
     if (opts.tools.length > 0) {
       body.tools = [{ functionDeclarations: toFunctionDeclarations(opts.tools) }];
-      body.toolConfig = {
-        functionCallingConfig: { mode: 'AUTO' },
-      };
+      const toolChoice = opts.toolChoice;
+      if (toolChoice && typeof toolChoice === 'object' && toolChoice.mode === 'any') {
+        body.toolConfig = {
+          functionCallingConfig: {
+            mode: 'ANY',
+            ...(toolChoice.allowedFunctionNames
+              ? { allowedFunctionNames: toolChoice.allowedFunctionNames }
+              : {}),
+          },
+        };
+      } else if (toolChoice && typeof toolChoice === 'object' && toolChoice.mode === 'required') {
+        body.toolConfig = {
+          functionCallingConfig: {
+            mode: 'ANY',
+            allowedFunctionNames: [toolChoice.name],
+          },
+        };
+      } else {
+        body.toolConfig = {
+          functionCallingConfig: { mode: 'AUTO' },
+        };
+      }
     }
 
     const response = await fetch(url, {

@@ -2,16 +2,26 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { listConversationTelemetry, listTurnApiCalls, summarizeTurnApiCalls } from '@aelio/core';
 import type { FastifyInstance } from 'fastify';
+import { authorized } from '../auth.js';
 import { resolvePublicDir } from '../paths.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 
 export async function registerTelemetryRoutes(app: FastifyInstance, deps: RuntimeDeps) {
-  app.get('/telemetry', async (_request, reply) => {
+  app.get('/telemetry', async (request, reply) => {
+    // HTML UI is open for local ops; API routes below require the SDK secret.
+    // In production, put this behind a reverse-proxy auth layer if needed.
+    if (process.env.NODE_ENV === 'production' && !authorized(request, deps.config.secret)) {
+      return reply.status(401).send({ error: 'Unauthorized' });
+    }
     const html = readFileSync(join(resolvePublicDir(), 'telemetry.html'), 'utf8');
     return reply.type('text/html').send(html);
   });
 
   app.get('/api/v1/telemetry/events', async (request, reply) => {
+    if (!authorized(request, deps.config.secret)) {
+      return reply.status(401).send({ error: 'Unauthorized' });
+    }
+
     const query = request.query as {
       limit?: string;
       since?: string;
@@ -49,7 +59,11 @@ export async function registerTelemetryRoutes(app: FastifyInstance, deps: Runtim
     };
   });
 
-  app.get('/api/v1/telemetry/turn-calls', async (request) => {
+  app.get('/api/v1/telemetry/turn-calls', async (request, reply) => {
+    if (!authorized(request, deps.config.secret)) {
+      return reply.status(401).send({ error: 'Unauthorized' });
+    }
+
     const query = request.query as {
       turn_id?: string;
       session_id?: string;

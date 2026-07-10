@@ -1,4 +1,5 @@
-import { claimJob, completeJob, failJob } from '@aelio/core';
+import { claimJob, completeJob, failJob, recordProactiveDelivery } from '@aelio/core';
+import type { Channel } from '@aelio/protocol';
 import type { RuntimeDeps } from '../runtime-deps.js';
 
 const WORKER_ID = 'outbound-worker';
@@ -39,6 +40,19 @@ export function startOutboundWorker(deps: RuntimeDeps) {
           // Web replies are delivered inline on the widget socket — nothing to do here.
         } else {
           throw new Error(`No delivery method configured for channel "${channel}"`);
+        }
+
+        const proactiveRecord = job.payload.proactiveRecord as
+          | { customerId: string; content: string; dedupKey?: string }
+          | undefined;
+        if (proactiveRecord) {
+          await recordProactiveDelivery(deps.database, {
+            customerId: proactiveRecord.customerId,
+            channel: channel as Channel,
+            to,
+            content: proactiveRecord.content,
+            dedupKey: proactiveRecord.dedupKey,
+          });
         }
 
         await completeJob(deps.database, job.id);

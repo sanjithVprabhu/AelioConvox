@@ -1,7 +1,12 @@
 import { createDatabase } from '@aelio/db';
 import { MetaWhatsAppSender, MockWhatsAppSender } from '@aelio/channels';
 import { createLLMProviderChain, createEmbeddingProvider } from '@aelio/llm';
-import { configureEmbedder, createInstrumentedLlm } from '@aelio/core';
+import {
+  configureEmbedder,
+  configureEmbeddingDimensions,
+  createInstrumentedLlm,
+  requeueStaleJobs,
+} from '@aelio/core';
 import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
@@ -27,7 +32,9 @@ export async function createApp(config: AelioConfig) {
   const migrationsFolder = resolveMigrationsFolder();
   const publicDir = resolvePublicDir();
 
-  const database = createDatabase(config.storage.database_path);
+  const vectorDimensions =
+    config.embeddings.output_dimension ?? config.sunjet.embed_dim ?? 1536;
+  const database = createDatabase(config.storage.database_path, { vectorDimensions });
   database.migrate(migrationsFolder);
 
   const llm = createInstrumentedLlm(createLLMProviderChain([
@@ -51,15 +58,18 @@ export async function createApp(config: AelioConfig) {
       : []),
   ]));
 
+  configureEmbeddingDimensions(vectorDimensions);
+
   // Wire a real embedding model if configured; otherwise the built-in hash
-  // embedding stays in use. Failures at call time fall back to the hash.
+  // embedding stays in use (aligned to the same vector dimension).
+  // Failures at call time fall back to the hash.
   if (config.embeddings.provider !== 'hash') {
     const embeddingProvider = createEmbeddingProvider({
       provider: config.embeddings.provider,
       model: config.embeddings.model,
       apiKey: config.embeddings.api_key,
       baseUrl: config.embeddings.base_url,
-      outputDimension: config.embeddings.output_dimension ?? config.sunjet.embed_dim,
+      outputDimension: vectorDimensions,
     });
     configureEmbedder((text) => embeddingProvider.embed(text));
   }
@@ -110,11 +120,12 @@ export async function createApp(config: AelioConfig) {
     logger: {
       level: config.logging.level,
     },
+    trustProxy: process.env.AELIO_TRUST_PROXY === '1',
   });
 
   await app.register(websocket);
   await registerHealthRoutes(app, deps);
-  await registerSdkRoutes(app, deps);
+  const { stopHeartbeat } = await registerSdkRoutes(app, deps);
   await registerAuthRoutes(app, deps);
   await registerWidgetRoutes(app, deps);
   await registerWhatsAppRoutes(app, deps);
@@ -132,7 +143,18 @@ export async function createApp(config: AelioConfig) {
   const stopBackup = startBackupWorker(deps);
   const stopDaemon = startDaemonWorker(deps);
 
+  const staleJobInterval = setInterval(() => {
+    const requeued = requeueStaleJobs(database);
+    if (requeued > 0) {
+      app.log.warn({ requeued }, 'Requeued stale processing jobs');
+    }
+  }, 60_000);
+  staleJobInterval.unref();
+
   app.addHook('onClose', async () => {
+    clearInterval(staleJobInterval);
+    stopHeartbeat();
+    sdkBridge.shutdown();
     stopInbound();
     stopOutbound();
     stopBackup();

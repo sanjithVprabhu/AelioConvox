@@ -29,6 +29,27 @@
       "when": 1783285000000,
       "tag": "0003_turn_api_calls",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1783600000000,
+      "tag": "0004_runtime_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1784000000000,
+      "tag": "0005_harness_plans",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1784100000000,
+      "tag": "0006_tool_embeddings",
+      "breakpoints": true
     }
   ]
 }

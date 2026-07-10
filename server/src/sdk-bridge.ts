@@ -1,5 +1,6 @@
 import {
   INVOKE_TIMEOUT_MS,
+  MAX_SDK_CONNECTIONS,
   type Channel,
   type FlowDefinition,
   type FunctionDefinition,
@@ -49,12 +50,46 @@ export class ServerSdkBridge implements SdkBridge {
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     this.deleteConnectionStmt = this.database.sqlite.prepare('DELETE FROM sdk_connections WHERE id = ?');
-    this.database.sqlite.prepare('DELETE FROM sdk_connections').run();
+    // Keep connection metadata across restarts for ops visibility. Live sockets
+    // are gone after a restart — SDKs must re-register — but we no longer wipe
+    // the table. Stale rows (no heartbeat for 2 minutes) are pruned.
+    const staleBefore = Date.now() - 2 * 60_000;
+    this.database.sqlite
+      .prepare('DELETE FROM sdk_connections WHERE last_heartbeat_at < ?')
+      .run(staleBefore);
   }
 
   register(connection: ActiveConnection): void {
+    if (this.connections.size >= MAX_SDK_CONNECTIONS) {
+      connection.socket.close(1008, 'Too many SDK connections');
+      return;
+    }
     this.connections.set(connection.id, connection);
     this.persist(connection);
+  }
+
+  getConnectionCount(): number {
+    return this.connections.size;
+  }
+
+  shutdown(): void {
+    for (const [connectionId, connection] of this.connections) {
+      connection.socket.close(1000, 'Server shutting down');
+      this.unregister(connectionId);
+    }
+    for (const [id, pending] of this.pendingInvokes) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error('Server shutting down'));
+      this.pendingInvokes.delete(id);
+    }
+  }
+
+  private pickConnection(
+    predicate: (entry: ActiveConnection) => boolean,
+  ): ActiveConnection | undefined {
+    return [...this.connections.values()]
+      .filter(predicate)
+      .sort((a, b) => b.lastHeartbeatAt - a.lastHeartbeatAt)[0];
   }
 
   unregister(connectionId: string): void {
@@ -172,7 +207,7 @@ export class ServerSdkBridge implements SdkBridge {
     content: string,
     metadata?: Record<string, unknown>,
   ): Promise<SdkInvokeResult> {
-    const connection = [...this.connections.values()].find((entry) => entry.canSend);
+    const connection = this.pickConnection((entry) => entry.canSend);
     if (!connection) {
       return { ok: false, error: 'No connected SDK can deliver outbound messages', durationMs: 0 };
     }
@@ -218,7 +253,7 @@ export class ServerSdkBridge implements SdkBridge {
     args: Record<string, unknown>,
     context: InvocationContext,
   ): Promise<SdkInvokeResult> {
-    const connection = [...this.connections.values()].find((entry) =>
+    const connection = this.pickConnection((entry) =>
       entry.functions.some((fn) => fn.name === functionName),
     );
 

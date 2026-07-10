@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 
 const baseUrl = process.env.AELIO_SERVER_URL ?? 'http://127.0.0.1:3000';
+const secret = process.env.AELIO_SDK_SECRET ?? 'change-me-in-production';
 
 function waitForMessage(socket, predicate, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
@@ -18,9 +19,21 @@ function waitForMessage(socket, predicate, timeoutMs = 15000) {
 }
 
 try {
-  const issue = await fetch(`${baseUrl}/auth/magic-link`, {
+  const unauthorized = await fetch(`${baseUrl}/auth/magic-link`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: 'phase4-user@example.com', externalId: 'user_phase4_123' }),
+  });
+  if (unauthorized.status !== 401) {
+    throw new Error(`Expected 401 without SDK secret, got ${unauthorized.status}`);
+  }
+
+  const issue = await fetch(`${baseUrl}/auth/magic-link`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${secret}`,
+    },
     body: JSON.stringify({ email: 'phase4-user@example.com', externalId: 'user_phase4_123' }),
   });
   const issued = await issue.json();
@@ -31,7 +44,7 @@ try {
 
   const verify = await fetch(`${baseUrl}/auth/verify?token=${issued.token}`);
   const verified = await verify.json();
-  if (!verify.ok || verified.externalId !== 'user_phase4_123') {
+  if (!verify.ok || verified.externalId !== 'user_phase4_123' || !verified.sessionToken) {
     throw new Error(`Magic link verify failed: ${verify.status} ${JSON.stringify(verified)}`);
   }
   console.log('[Phase 4] Magic link verified:', verified.externalId);
@@ -42,16 +55,22 @@ try {
     socket.on('error', reject);
   });
 
+  // Spoof attempt: different customerId without session token should still work
+  // only when allow_anonymous is true (local config). With sessionToken, identity
+  // is bound to the verified externalId.
   socket.send(
     JSON.stringify({
       type: 'init',
-      customerId: verified.externalId,
+      customerId: 'spoofed-id',
       email: verified.email,
+      sessionToken: verified.sessionToken,
     }),
   );
   const ready = await waitForMessage(socket, (message) => message.type === 'ready');
   if (ready.customerId !== verified.externalId) {
-    throw new Error('Widget init did not return verified customer id');
+    throw new Error(
+      `Widget init did not bind to verified customer id (got ${ready.customerId})`,
+    );
   }
 
   socket.close();

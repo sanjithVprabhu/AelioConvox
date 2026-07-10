@@ -118,6 +118,7 @@ export class Aelio {
   private reconnectAttempt = 0;
   private listenOptions: ListenOptions | null = null;
   private shouldReconnect = false;
+  private reconnecting = false;
 
   expose<T extends Record<string, unknown>, R>(
     name: string,
@@ -335,6 +336,22 @@ export class Aelio {
       return;
     }
 
+    if (message.type === 'error') {
+      console.error(
+        `[aelio-sdk] server error${message.operation ? ` (${message.operation})` : ''}: ${message.message}`,
+      );
+      return;
+    }
+
+    if (message.type === 'ack') {
+      if (!message.ok) {
+        console.error(
+          `[aelio-sdk] ${message.operation} failed: ${message.message ?? 'unknown error'}`,
+        );
+      }
+      return;
+    }
+
     if (message.type === 'invoke') {
       await this.handleInvoke(message);
       return;
@@ -431,11 +448,13 @@ export class Aelio {
     }
   }
 
-  private send(message: Parameters<typeof SdkToServerMessageSchema.parse>[0]): void {
+  private send(message: Parameters<typeof SdkToServerMessageSchema.parse>[0]): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return;
+      console.warn('[aelio-sdk] WebSocket not connected — message dropped');
+      return false;
     }
     this.ws.send(JSON.stringify(message));
+    return true;
   }
 
   private startHeartbeat(): void {
@@ -456,17 +475,25 @@ export class Aelio {
   }
 
   private async scheduleReconnect(): Promise<void> {
+    if (this.reconnecting) {
+      return;
+    }
+    this.reconnecting = true;
     const delay = Math.min(30_000, 1_000 * 2 ** this.reconnectAttempt);
     this.reconnectAttempt += 1;
     await new Promise((resolve) => setTimeout(resolve, delay));
     if (!this.shouldReconnect) {
+      this.reconnecting = false;
       return;
     }
     try {
       await this.connect();
     } catch {
+      this.reconnecting = false;
       void this.scheduleReconnect();
+      return;
     }
+    this.reconnecting = false;
   }
 }
 

@@ -77,6 +77,18 @@ export class AnthropicProvider implements LLMProvider {
           description: tool.description,
           input_schema: tool.input_schema,
         })),
+        ...(opts.tools.length > 0 && opts.toolChoice && typeof opts.toolChoice === 'object'
+          ? opts.toolChoice.mode === 'required'
+            ? { tool_choice: { type: 'tool', name: opts.toolChoice.name } }
+            : opts.toolChoice.mode === 'any' && opts.toolChoice.allowedFunctionNames?.length === 1
+              ? {
+                  tool_choice: {
+                    type: 'tool',
+                    name: opts.toolChoice.allowedFunctionNames[0],
+                  },
+                }
+              : { tool_choice: { type: 'any' } }
+          : {}),
       }),
     });
 

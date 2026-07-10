@@ -9,7 +9,12 @@ import * as schema from './schema.js';
 
 export * from './schema.js';
 
-const VECTOR_DIMENSIONS = 1536;
+const DEFAULT_VECTOR_DIMENSIONS = 1536;
+
+export type CreateDatabaseOptions = {
+  /** Must match the embedding provider output dimension (e.g. 1536 openai, 768 gemini). */
+  vectorDimensions?: number;
+};
 
 export type MemoryVectorSearchRow = {
   memoryId: string;
@@ -21,6 +26,7 @@ export type AelioDatabase = {
   db: BetterSQLite3Database<typeof schema>;
   sqlite: Database.Database;
   vectorEnabled: boolean;
+  vectorDimensions: number;
   migrate: (migrationsFolder: string) => void;
   upsertMemoryVector: (input: {
     memoryId: string;
@@ -45,28 +51,61 @@ function jsonEmbedding(vector: number[]): string {
   return JSON.stringify(vector);
 }
 
-function normalizeEmbedding(input: string | number[]): number[] {
+function normalizeEmbedding(input: string | number[], dimensions: number): number[] {
   const parsed = Array.isArray(input) ? input : (JSON.parse(input) as unknown);
   const values = Array.isArray(parsed)
     ? parsed.map((value) => (typeof value === 'number' && Number.isFinite(value) ? value : 0))
     : [];
 
-  if (values.length === VECTOR_DIMENSIONS) {
+  if (values.length === dimensions) {
     return values;
   }
 
-  if (values.length > VECTOR_DIMENSIONS) {
-    return values.slice(0, VECTOR_DIMENSIONS);
+  if (values.length > dimensions) {
+    return values.slice(0, dimensions);
   }
 
-  return [...values, ...new Array<number>(VECTOR_DIMENSIONS - values.length).fill(0)];
+  return [...values, ...new Array<number>(dimensions - values.length).fill(0)];
 }
 
 function normalizeVecId(value: number | bigint): bigint {
   return typeof value === 'bigint' ? value : BigInt(Math.trunc(value));
 }
 
-function initializeVectorStore(sqlite: Database.Database): boolean {
+function readStoredVectorDimensions(sqlite: Database.Database): number | null {
+  try {
+    const row = sqlite
+      .prepare("SELECT value FROM aelio_meta WHERE key = 'vector_dimensions'")
+      .get() as { value: string } | undefined;
+    if (!row) {
+      return null;
+    }
+    const parsed = Number.parseInt(row.value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredVectorDimensions(sqlite: Database.Database, dimensions: number): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS aelio_meta (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL
+    );
+  `);
+  sqlite
+    .prepare(
+      `INSERT INTO aelio_meta (key, value) VALUES ('vector_dimensions', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    )
+    .run(String(dimensions));
+}
+
+function initializeVectorStore(
+  sqlite: Database.Database,
+  dimensions: number,
+): boolean {
   try {
     loadSqliteVec(sqlite);
     sqlite.exec(`
@@ -75,22 +114,41 @@ function initializeVectorStore(sqlite: Database.Database): boolean {
         vec_id INTEGER NOT NULL UNIQUE
       );
     `);
+
+    const previous = readStoredVectorDimensions(sqlite);
+    if (previous != null && previous !== dimensions) {
+      console.warn(
+        `[aelio] Embedding dimension changed (${previous} → ${dimensions}); recreating memory_vec index`,
+      );
+      sqlite.exec('DROP TABLE IF EXISTS memory_vec');
+      sqlite.exec('DELETE FROM memory_vec_index');
+    }
+
     sqlite.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_vec USING vec0(
         vec_id INTEGER,
         memory_id TEXT,
         customer_id TEXT PARTITION KEY,
         category TEXT,
-        embedding FLOAT[${VECTOR_DIMENSIONS}]
+        embedding FLOAT[${dimensions}]
       );
     `);
+    writeStoredVectorDimensions(sqlite, dimensions);
     return true;
-  } catch {
+  } catch (error) {
+    console.warn(
+      '[aelio] sqlite-vec failed to load — memory recall using brute-force fallback:',
+      error instanceof Error ? error.message : String(error),
+    );
     return false;
   }
 }
 
-function syncExistingMemoryRows(sqlite: Database.Database, vectorEnabled: boolean): void {
+function syncExistingMemoryRows(
+  sqlite: Database.Database,
+  vectorEnabled: boolean,
+  dimensions: number,
+): void {
   if (!vectorEnabled) {
     return;
   }
@@ -133,7 +191,7 @@ function syncExistingMemoryRows(sqlite: Database.Database, vectorEnabled: boolea
         row.id,
         row.customer_id,
         row.category,
-        jsonEmbedding(normalizeEmbedding(row.embedding)),
+        jsonEmbedding(normalizeEmbedding(row.embedding, dimensions)),
       );
     }
   });
@@ -141,69 +199,17 @@ function syncExistingMemoryRows(sqlite: Database.Database, vectorEnabled: boolea
   tx(rows);
 }
 
-export function createDatabase(databasePath: string): AelioDatabase {
+export function createDatabase(
+  databasePath: string,
+  options: CreateDatabaseOptions = {},
+): AelioDatabase {
+  const vectorDimensions = options.vectorDimensions ?? DEFAULT_VECTOR_DIMENSIONS;
   mkdirSync(dirname(databasePath), { recursive: true });
 
   const sqlite = new Database(databasePath);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
-  const vectorEnabled = initializeVectorStore(sqlite);
-
-  // The reflections table is created here (not via a migration) so the daemon's
-  // self-evaluation store is always present — same approach as the vector store.
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS reflections (
-      id TEXT PRIMARY KEY NOT NULL,
-      session_id TEXT NOT NULL,
-      customer_id TEXT NOT NULL,
-      outcome TEXT NOT NULL,
-      score REAL,
-      summary TEXT,
-      issues TEXT,
-      created_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_reflections_session ON reflections(session_id);
-    CREATE INDEX IF NOT EXISTS idx_reflections_customer ON reflections(customer_id, created_at);
-  `);
-
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS proactive_messages (
-      id TEXT PRIMARY KEY NOT NULL,
-      customer_id TEXT NOT NULL,
-      channel TEXT NOT NULL,
-      to_address TEXT NOT NULL,
-      content TEXT NOT NULL,
-      dedup_key TEXT,
-      status TEXT NOT NULL,
-      reason TEXT,
-      created_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_proactive_customer ON proactive_messages(customer_id, created_at);
-  `);
-
-  // Channel webhooks retry (Meta redelivers on slow ACKs); processing the same
-  // inbound message twice double-spends LLM calls and can re-run tools. Dedup by
-  // provider message id.
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS inbound_dedup (
-      message_id TEXT PRIMARY KEY NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-  `);
-
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS response_cache (
-      id TEXT PRIMARY KEY NOT NULL,
-      customer_id TEXT NOT NULL,
-      query TEXT NOT NULL,
-      embedding TEXT,
-      reply TEXT NOT NULL,
-      hits INTEGER DEFAULT 0,
-      created_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_respcache_customer ON response_cache(customer_id, expires_at);
-  `);
+  const vectorEnabled = initializeVectorStore(sqlite, vectorDimensions);
 
   const db = drizzle(sqlite, { schema });
   const getVecId = vectorEnabled
@@ -233,6 +239,7 @@ export function createDatabase(databasePath: string): AelioDatabase {
     db,
     sqlite,
     vectorEnabled,
+    vectorDimensions,
     migrate(migrationsFolder: string) {
       migrate(db, { migrationsFolder });
       // Additive columns for existing deployments (SQLite has no IF NOT EXISTS
@@ -245,7 +252,7 @@ export function createDatabase(databasePath: string): AelioDatabase {
         sqlite.exec('ALTER TABLE turn_api_calls ADD COLUMN tokens_in INTEGER');
         sqlite.exec('ALTER TABLE turn_api_calls ADD COLUMN tokens_out INTEGER');
       }
-      syncExistingMemoryRows(sqlite, vectorEnabled);
+      syncExistingMemoryRows(sqlite, vectorEnabled, vectorDimensions);
     },
     upsertMemoryVector(input) {
       if (!vectorEnabled) {
@@ -266,7 +273,7 @@ export function createDatabase(databasePath: string): AelioDatabase {
           input.memoryId,
           input.customerId,
           input.category,
-          jsonEmbedding(input.embedding),
+          jsonEmbedding(normalizeEmbedding(input.embedding, vectorDimensions)),
         );
       });
 
@@ -291,7 +298,7 @@ export function createDatabase(databasePath: string): AelioDatabase {
 
       return searchVectors!.all(
         input.customerId,
-        jsonEmbedding(input.embedding),
+        jsonEmbedding(normalizeEmbedding(input.embedding, vectorDimensions)),
         input.limit,
       ) as MemoryVectorSearchRow[];
     },

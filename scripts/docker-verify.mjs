@@ -110,6 +110,8 @@ try {
         '-e',
         `AELIO_SDK_SECRET=${secret}`,
         '-e',
+        'AELIO_ALLOWED_ORIGINS=http://127.0.0.1:3000,http://localhost:3000',
+        '-e',
         'AELIO_TEST_MODE=1',
         '-e',
         'AELIO_DIAGNOSTICS=1',

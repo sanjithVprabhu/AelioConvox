@@ -25,7 +25,10 @@ function resolveEnvDeep<T>(input: T): T {
   return input;
 }
 
-export const ConfigSchema = z.object({
+export const DEFAULT_SDK_SECRET = 'change-me-in-production';
+
+export const ConfigSchema = z
+  .object({
   name: z.string().min(1),
   secret: z.string().min(1),
   llm: z
@@ -35,6 +38,9 @@ export const ConfigSchema = z.object({
       api_key: z.string().optional(),
       base_url: z.string().url().optional(),
       max_tokens: z.number().int().positive().default(4096),
+      // Cheaper model for session summaries, daemon reflection, and other
+      // background LLM work. Defaults to `model` when omitted.
+      background_model: z.string().optional(),
       // Assistant persona/voice. An SDK-registered persona (aelio.persona()) takes
       // precedence; this is the config-level fallback.
       system_prompt: z.string().optional(),
@@ -76,14 +82,37 @@ export const ConfigSchema = z.object({
       .object({
         enabled: z.boolean(),
         allowed_origins: z.array(z.string()).default([]),
+        max_message_length: z.number().int().positive().default(4096),
         magic_link: z
           .object({
             enabled: z.boolean().default(true),
             ttl_minutes: z.number().int().positive().default(15),
+            session_token_ttl_minutes: z.number().int().positive().default(60),
+            // When true (default), POST /auth/magic-link requires the SDK secret.
+            require_sdk_auth: z.boolean().default(true),
+            // Per-IP and per-email issuance limits (sliding 1-minute window).
+            rate_limit_per_minute: z.number().int().positive().default(5),
           })
-          .default({ enabled: true, ttl_minutes: 15 }),
+          .default({
+            enabled: true,
+            ttl_minutes: 15,
+            session_token_ttl_minutes: 60,
+            require_sdk_auth: true,
+            rate_limit_per_minute: 5,
+          }),
       })
-      .default({ enabled: true, allowed_origins: [], magic_link: { enabled: true, ttl_minutes: 15 } }),
+      .default({
+        enabled: true,
+        allowed_origins: [],
+        max_message_length: 4096,
+        magic_link: {
+          enabled: true,
+          ttl_minutes: 15,
+          session_token_ttl_minutes: 60,
+          require_sdk_auth: true,
+          rate_limit_per_minute: 5,
+        },
+      }),
   }),
   safety: z
     .object({
@@ -188,6 +217,34 @@ export const ConfigSchema = z.object({
       ttl_minutes: z.number().int().positive().default(60),
     })
     .default({ enabled: false, similarity_threshold: 0.92, ttl_minutes: 60 }),
+  harness: z
+    .object({
+      enabled: z.boolean().default(false),
+      router_model: z.string().optional(),
+      planner_model: z.string().optional(),
+      synthesis_model: z.string().optional(),
+      plan_step_cap: z.number().int().positive().default(10),
+      replan_cap: z.number().int().positive().default(3),
+      token_budget: z.number().int().positive().default(50_000),
+      wall_clock_ms: z.number().int().positive().default(60_000),
+      flow_confidence_threshold: z.number().min(0).max(1).default(0.82),
+      tool_retrieval_k: z.number().int().positive().default(12),
+      force_categories: z
+        .array(z.string())
+        .default(['transaction', 'checkout', 'order', 'multi_step']),
+      force_on_active_flow: z.boolean().default(true),
+    })
+    .default({
+      enabled: false,
+      plan_step_cap: 10,
+      replan_cap: 3,
+      token_budget: 50_000,
+      wall_clock_ms: 60_000,
+      flow_confidence_threshold: 0.82,
+      tool_retrieval_k: 12,
+      force_categories: ['transaction', 'checkout', 'order', 'multi_step'],
+      force_on_active_flow: true,
+    }),
   sunjet: z
     .object({
       enabled: z.boolean().default(false),
@@ -230,7 +287,62 @@ export const ConfigSchema = z.object({
       port: z.number().int().positive().default(3000),
     })
     .default({}),
-});
+})
+  .superRefine((value, ctx) => {
+    // AELIO_TEST_MODE skips production hard-fails so CI/docker-verify can use
+    // the documented placeholder secret and local origins.
+    const enforceProductionGuards =
+      process.env.NODE_ENV === 'production' && process.env.AELIO_TEST_MODE !== '1';
+    if (enforceProductionGuards && value.secret === DEFAULT_SDK_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          `Refusing to start with default SDK secret "${DEFAULT_SDK_SECRET}". ` +
+          'Set AELIO_SDK_SECRET to a strong random value before deploying.',
+        path: ['secret'],
+      });
+    }
+
+    if (enforceProductionGuards && value.channels.web.enabled) {
+      const origins = value.channels.web.allowed_origins.filter((origin) => origin.trim().length > 0);
+      if (origins.length === 0 || origins.includes('*')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            'channels.web.allowed_origins must be an explicit non-wildcard list in production. ' +
+            'Set AELIO_ALLOWED_ORIGINS (or list origins in config). "*" is dev-only.',
+          path: ['channels', 'web', 'allowed_origins'],
+        });
+      }
+    }
+
+    if (
+      enforceProductionGuards &&
+      value.channels.whatsapp.enabled &&
+      value.channels.whatsapp.provider === 'meta' &&
+      !value.channels.whatsapp.mock_mode &&
+      !value.channels.whatsapp.app_secret
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'channels.whatsapp.app_secret is required in production when provider is meta and mock_mode is false.',
+        path: ['channels', 'whatsapp', 'app_secret'],
+      });
+    }
+
+    if (
+      value.sunjet.enabled &&
+      value.embeddings.output_dimension != null &&
+      value.embeddings.output_dimension !== value.sunjet.embed_dim
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `embeddings.output_dimension (${value.embeddings.output_dimension}) must match sunjet.embed_dim (${value.sunjet.embed_dim})`,
+        path: ['embeddings', 'output_dimension'],
+      });
+    }
+  });
 
 export type AelioConfig = z.infer<typeof ConfigSchema>;
 
@@ -256,7 +368,28 @@ function resolveConfigPath(configPath: string): string {
 export function loadConfig(configPath = process.env.AELIO_CONFIG ?? './config.yaml'): AelioConfig {
   const absolutePath = resolveConfigPath(configPath);
   const raw = parse(readFileSync(absolutePath, 'utf8')) as unknown;
-  const resolved = resolveEnvDeep(raw);
+  const resolved = resolveEnvDeep(raw) as Record<string, unknown>;
+
+  // Allow comma-separated AELIO_ALLOWED_ORIGINS to populate web origins at deploy time.
+  const envOrigins = process.env.AELIO_ALLOWED_ORIGINS?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  if (envOrigins && envOrigins.length > 0) {
+    const channels = (resolved.channels ?? {}) as Record<string, unknown>;
+    const web = (channels.web ?? {}) as Record<string, unknown>;
+    channels.web = { ...web, allowed_origins: envOrigins };
+    resolved.channels = channels;
+  }
+
+  // Drop empty strings left by unresolved ${AELIO_ALLOWED_ORIGIN} placeholders.
+  const channels = resolved.channels as Record<string, unknown> | undefined;
+  const web = channels?.web as Record<string, unknown> | undefined;
+  if (Array.isArray(web?.allowed_origins)) {
+    web.allowed_origins = (web.allowed_origins as string[]).filter(
+      (origin) => typeof origin === 'string' && origin.trim().length > 0,
+    );
+  }
+
   const result = ConfigSchema.safeParse(resolved);
 
   if (!result.success) {

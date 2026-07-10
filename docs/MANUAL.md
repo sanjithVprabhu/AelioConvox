@@ -526,14 +526,19 @@ fetched fresh), high similarity threshold, TTL-bounded.
 |---|---|---|
 | GET | `/health` | Liveness |
 | GET | `/ready` | Readiness (db, migrations, sdk, memory, channels, llm) |
+| GET | `/diagnostics` | Process/config diagnostics (`AELIO_TEST_MODE=1` or `AELIO_DIAGNOSTICS=1`) |
 | GET | `/widget.js` | The embeddable widget bundle |
+| GET | `/demo.html` | Local demo page that embeds the widget |
 | WS  | `/widget/ws` | Web chat transport |
 | GET/POST | `/wa/webhook` | WhatsApp verification (GET) + inbound (POST) |
-| WS  | `/sdk` | SDK connection (authenticated by `?secret=`) |
-| POST | `/auth/magic-link` | Issue a magic link |
-| GET | `/auth/verify` | Verify a magic-link token |
-| POST | `/proactive` | Send a proactive message (Bearer `secret`) |
+| WS  | `/sdk` | SDK connection (`Authorization: Bearer <secret>`; `?secret=` deprecated) |
+| POST | `/auth/magic-link` | Issue a magic link (Bearer `secret` + rate limited) |
+| GET | `/auth/verify` | Verify a magic-link token (returns `sessionToken` for widget init) |
+| POST | `/proactive` | Send a proactive message (Bearer `secret`; requires `proactive.enabled`) |
 | POST | `/proactive/opt-in` | Set a customer's proactive opt-in (Bearer `secret`) |
+| GET | `/telemetry` | Telemetry HTML UI (auth required in production) |
+| GET | `/api/v1/telemetry/events` | Conversation telemetry events (Bearer `secret`; Sunjet) |
+| GET | `/api/v1/telemetry/turn-calls` | Per-turn LLM/embed call log (Bearer `secret`) |
 
 Test-only endpoints (`/__test__/...`) are enabled when `AELIO_TEST_MODE=1`.
 

@@ -1,28 +1,41 @@
 import { render } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 
+// Capture synchronously while this script executes — currentScript is null after
+// DOMContentLoaded or any deferred render.
+const EMBED_SCRIPT = document.currentScript as HTMLScriptElement | null;
+
+const MAX_MESSAGE_LENGTH = 4096;
+
 type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
+  confirmation?: { functionName: string };
 };
 
 type ServerMessage =
   | { type: 'ready'; customerId: string }
   | { type: 'message'; role: 'assistant'; content: string }
+  | {
+      type: 'confirmation';
+      prompt: string;
+      functionName: string;
+      turnId?: string;
+    }
   | { type: 'typing'; active: boolean }
   | { type: 'error'; message: string; code?: string };
 
 type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'failed';
 
-// How long to wait for the server's `ready` frame before declaring the handshake
-// failed (covers a reachable socket that never completes init — e.g. wrong path).
 const HANDSHAKE_TIMEOUT_MS = 8000;
-// Stop auto-reconnecting after this many consecutive failures.
 const MAX_RECONNECT_ATTEMPTS = 10;
 
 export type AelioChatOptions = {
   serverUrl: string;
   customerId: string;
+  /** HMAC session token from /auth/verify (preferred over authToken). */
+  sessionToken?: string;
+  /** @deprecated Use sessionToken — kept for backward compatibility. */
   authToken?: string;
   email?: string;
   target?: HTMLElement | string;
@@ -39,7 +52,7 @@ export type AelioChatHandle = {
 type NormalizedOptions = Required<
   Pick<AelioChatOptions, 'serverUrl' | 'customerId' | 'title' | 'launcherLabel' | 'initialMessage'>
 > &
-  Pick<AelioChatOptions, 'authToken' | 'email'>;
+  Pick<AelioChatOptions, 'sessionToken' | 'email'>;
 
 declare global {
   interface Window {
@@ -54,7 +67,7 @@ function normalizeOptions(options: AelioChatOptions): NormalizedOptions {
   return {
     serverUrl: options.serverUrl.replace(/\/$/, ''),
     customerId: options.customerId,
-    authToken: options.authToken,
+    sessionToken: options.sessionToken ?? options.authToken,
     email: options.email,
     title: options.title ?? 'Chat with us',
     launcherLabel: options.launcherLabel ?? 'Chat',
@@ -80,18 +93,17 @@ function getTarget(target: AelioChatOptions['target']): HTMLElement {
 }
 
 function getScriptOptions(): AelioChatOptions | null {
-  const script = document.currentScript as HTMLScriptElement | null;
-  if (!script) {
+  if (!EMBED_SCRIPT) {
     return null;
   }
   return {
-    serverUrl: script.dataset.serverUrl ?? window.location.origin,
-    customerId: script.dataset.customerId ?? 'demo-user',
-    authToken: script.dataset.authToken,
-    email: script.dataset.email,
-    title: script.dataset.title,
-    launcherLabel: script.dataset.launcherLabel,
-    initialMessage: script.dataset.initialMessage,
+    serverUrl: EMBED_SCRIPT.dataset.serverUrl ?? window.location.origin,
+    customerId: EMBED_SCRIPT.dataset.customerId ?? 'demo-user',
+    sessionToken: EMBED_SCRIPT.dataset.sessionToken ?? EMBED_SCRIPT.dataset.authToken,
+    email: EMBED_SCRIPT.dataset.email,
+    title: EMBED_SCRIPT.dataset.title,
+    launcherLabel: EMBED_SCRIPT.dataset.launcherLabel,
+    initialMessage: EMBED_SCRIPT.dataset.initialMessage,
   };
 }
 
@@ -102,19 +114,19 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
   const [typing, setTyping] = useState(false);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [statusDetail, setStatusDetail] = useState('');
+  const [pendingConfirmationIndex, setPendingConfirmationIndex] = useState<number | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
-  // Set by the connection effect; the Retry button calls it to restart from scratch.
   const retryRef = useRef<() => void>(() => {});
   const connected = status === 'connected';
   const initPayload = useMemo(
     () => ({
       type: 'init' as const,
       customerId: options.customerId,
-      authToken: options.authToken,
+      sessionToken: options.sessionToken,
       email: options.email,
     }),
-    [options.authToken, options.customerId, options.email],
+    [options.sessionToken, options.customerId, options.email],
   );
 
   useEffect(() => {
@@ -122,8 +134,6 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
     let attempt = 0;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let handshakeTimer: ReturnType<typeof setTimeout> | null = null;
-    // An error frame the server sends just before closing (e.g. origin rejection),
-    // stashed so onclose can report *why* instead of a generic drop.
     let pendingError: { message: string; code?: string } | null = null;
 
     const clearTimers = () => {
@@ -146,7 +156,6 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
         setStatusDetail('Unable to reach the server. Check your connection, then retry.');
         return;
       }
-      // Exponential backoff capped at 30s, with jitter to avoid thundering herds.
       const delay = Math.min(30_000, 1_000 * 2 ** attempt) + Math.floor(Math.random() * 1_000);
       attempt += 1;
       setStatus('reconnecting');
@@ -162,6 +171,19 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
       pendingError = null;
       let ready = false;
       setStatus((prev) => (prev === 'reconnecting' ? 'reconnecting' : 'connecting'));
+
+      // Close any previous socket before opening a new one (reconnect leak fix).
+      if (socketRef.current) {
+        try {
+          socketRef.current.onclose = null;
+          socketRef.current.onerror = null;
+          socketRef.current.onmessage = null;
+          socketRef.current.close();
+        } catch {
+          /* already closed */
+        }
+        socketRef.current = null;
+      }
 
       let wsUrl: URL;
       try {
@@ -217,12 +239,27 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
           return;
         }
         if (data.type === 'message') {
+          setPendingConfirmationIndex(null);
           setMessages((prev) => [...prev, { role: 'assistant', content: data.content }]);
           return;
         }
+        if (data.type === 'confirmation') {
+          setPendingConfirmationIndex(null);
+          setMessages((prev) => {
+            const next = [
+              ...prev,
+              {
+                role: 'assistant' as const,
+                content: data.prompt,
+                confirmation: { functionName: data.functionName },
+              },
+            ];
+            setPendingConfirmationIndex(next.length - 1);
+            return next;
+          });
+          return;
+        }
         if (data.type === 'error') {
-          // After the handshake, errors are per-turn failures — show them inline.
-          // Before it, the error explains the imminent close — stash for onclose.
           if (ready) {
             setMessages((prev) => [...prev, { role: 'assistant', content: data.message }]);
           } else {
@@ -231,12 +268,19 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
         }
       };
 
+      socket.onerror = () => {
+        if (!ready) {
+          pendingError = {
+            message: 'WebSocket connection failed — check the server URL and network.',
+          };
+        }
+      };
+
       socket.onclose = (event) => {
         if (disposed) {
           return;
         }
         clearTimers();
-        // A policy rejection (origin not allowed, auth) will not heal by retrying.
         const policyRejected = event.code === 1008 || pendingError?.code === 'origin_not_allowed';
         if (policyRejected) {
           setStatus('failed');
@@ -264,13 +308,21 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, typing, open]);
 
-  const sendMessage = () => {
-    const content = input.trim();
-    if (!content || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+  const sendContent = (content: string) => {
+    const trimmed = content.trim().slice(0, MAX_MESSAGE_LENGTH);
+    if (!trimmed || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
       return;
     }
-    setMessages((prev) => [...prev, { role: 'user', content }]);
-    socketRef.current.send(JSON.stringify({ type: 'message', content }));
+    setMessages((prev) => [...prev, { role: 'user', content: trimmed }]);
+    socketRef.current.send(JSON.stringify({ type: 'message', content: trimmed }));
+  };
+
+  const sendMessage = () => {
+    const content = input.trim();
+    if (!content) {
+      return;
+    }
+    sendContent(content);
     setInput('');
   };
 
@@ -314,7 +366,33 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
             {messages.length === 0 ? <div class="aelio-hint">{options.initialMessage}</div> : null}
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} class={`aelio-msg aelio-${message.role}`}>
-                {message.content}
+                <div>{message.content}</div>
+                {message.confirmation ? (
+                  <div class="aelio-confirm-actions">
+                    <button
+                      type="button"
+                      class="aelio-confirm-yes"
+                      disabled={!connected || pendingConfirmationIndex !== index}
+                      onClick={() => {
+                        setPendingConfirmationIndex(null);
+                        sendContent('yes');
+                      }}
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      type="button"
+                      class="aelio-confirm-no"
+                      disabled={!connected || pendingConfirmationIndex !== index}
+                      onClick={() => {
+                        setPendingConfirmationIndex(null);
+                        sendContent('no');
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ))}
             {typing ? <div class="aelio-typing">Aelio is typing...</div> : null}
@@ -322,6 +400,7 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
           <div class="aelio-input-row">
             <input
               value={input}
+              maxLength={MAX_MESSAGE_LENGTH}
               onInput={(event) => setInput((event.target as HTMLInputElement).value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
@@ -351,6 +430,11 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
         .aelio-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; line-height: 1.4; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
         .aelio-user { align-self: flex-end; background: #111827; color: #fff; }
         .aelio-assistant { align-self: flex-start; background: #fff; border: 1px solid #e5e7eb; color: #111827; }
+        .aelio-confirm-actions { display: flex; gap: 8px; margin-top: 10px; }
+        .aelio-confirm-yes, .aelio-confirm-no { border: none; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+        .aelio-confirm-yes { background: #111827; color: #fff; }
+        .aelio-confirm-no { background: #f3f4f6; color: #111827; border: 1px solid #d1d5db; }
+        .aelio-confirm-yes:disabled, .aelio-confirm-no:disabled { opacity: 0.5; cursor: not-allowed; }
         .aelio-hint, .aelio-typing { color: #6b7280; font-size: 13px; }
         .aelio-status { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 12px; border-bottom: 1px solid #e5e7eb; }
         .aelio-status-dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }
@@ -402,7 +486,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   };
 
   const scriptOptions = getScriptOptions();
-  if (scriptOptions && (document.currentScript as HTMLScriptElement | null)?.dataset.autoMount !== 'false') {
+  if (scriptOptions && EMBED_SCRIPT?.dataset.autoMount !== 'false') {
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => mountAelioChat(scriptOptions), { once: true });
     } else {

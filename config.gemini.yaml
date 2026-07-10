@@ -38,6 +38,12 @@ memory:
   enabled: true
   recall_limit: 5
 
+harness:
+  enabled: true
+  router_model: gemini-2.0-flash
+  planner_model: gemini-2.0-flash
+  synthesis_model: gemini-2.0-flash
+
 sunjet:
   enabled: false
   embed_dim: 768

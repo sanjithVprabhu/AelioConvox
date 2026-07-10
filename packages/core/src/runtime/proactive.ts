@@ -76,6 +76,20 @@ async function record(
   });
 }
 
+/** Record a proactive message only after outbound delivery succeeds. */
+export async function recordProactiveDelivery(
+  database: AelioDatabase,
+  fields: {
+    customerId: string;
+    channel: Channel;
+    to: string;
+    content: string;
+    dedupKey?: string;
+  },
+): Promise<void> {
+  await record(database, { ...fields, status: 'sent' });
+}
+
 /**
  * Send a proactive (system-initiated) message to a customer, enforcing every
  * guardrail server-side before anything is delivered:
@@ -194,16 +208,12 @@ export async function sendProactiveMessage(input: ProactiveInput): Promise<Proac
     to: address,
     text: input.content,
     proactive: true,
+    proactiveRecord: {
+      customerId: customer.id,
+      content: input.content,
+      dedupKey: input.dedupKey,
+    },
     ...(input.templateName ? { templateName: input.templateName } : {}),
-  });
-
-  await record(input.database, {
-    customerId: customer.id,
-    channel: input.channel,
-    to: address,
-    content: input.content,
-    dedupKey: input.dedupKey,
-    status: 'sent',
   });
 
   return { ok: true, status: 'sent' };

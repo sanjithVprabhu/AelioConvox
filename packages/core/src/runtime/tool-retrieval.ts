@@ -17,7 +17,10 @@
  * Callers pass those as `forceInclude`.
  */
 import type { FunctionDefinition } from '@aelio/protocol';
+import type { AelioDatabase } from '@aelio/db';
 import { cosineSimilarity, embed } from '../analyst/embeddings.js';
+import { loadToolEmbeddings } from './tool-embeddings.js';
+import { buildToolDescriptor } from './tool-descriptor.js';
 
 export const TOOL_RETRIEVAL_THRESHOLD = 12;
 export const TOOL_RETRIEVAL_TOP_K = 8;
@@ -29,11 +32,11 @@ export type ToolRetrievalOptions = {
   topK?: number;
   /** Tool names that must survive selection regardless of ranking. */
   forceInclude?: string[];
+  /** Database handle for loading precomputed tool embeddings from registration. */
+  database?: AelioDatabase['db'];
 };
 
-function toolDescriptor(tool: FunctionDefinition): string {
-  return [tool.name, tool.intent ?? '', tool.description].filter(Boolean).join(' — ');
-}
+export { buildToolDescriptor } from './tool-descriptor.js';
 
 export async function selectRelevantTools(
   functions: FunctionDefinition[],
@@ -48,11 +51,22 @@ export async function selectRelevantTools(
   }
 
   const forced = new Set(options?.forceInclude ?? []);
-  const queryEmbedding = await embed(userMessage);
+  const queryEmbedding = await embed(userMessage, { purpose: 'tool_retrieval' });
+
+  const persisted =
+    options?.database != null
+      ? await loadToolEmbeddings(
+          options.database,
+          functions.map((fn) => fn.name),
+        )
+      : new Map<string, number[]>();
 
   const ranked = await Promise.all(
     functions.map(async (fn) => {
-      const vector = await embed(toolDescriptor(fn));
+      const descriptor = buildToolDescriptor(fn);
+      const vector =
+        persisted.get(fn.name) ??
+        (await embed(descriptor, { purpose: 'tool_retrieval' }));
       return { fn, score: cosineSimilarity(queryEmbedding, vector) };
     }),
   );

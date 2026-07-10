@@ -10,6 +10,7 @@ export function baseTurnOptions(
   | 'llm'
   | 'sdk'
   | 'model'
+  | 'backgroundModel'
   | 'maxTokens'
   | 'historyWindow'
   | 'safety'
@@ -23,12 +24,14 @@ export function baseTurnOptions(
   | 'intent'
   | 'messageStore'
   | 'persona'
+  | 'harness'
 > {
   return {
     database: deps.database,
     llm: deps.llm,
     sdk: deps.sdkBridge,
     model: deps.config.llm.model,
+    backgroundModel: deps.config.llm.background_model ?? deps.config.llm.model,
     maxTokens: deps.config.llm.max_tokens,
     historyWindow: deps.config.session.history_window,
     safety: {
@@ -60,6 +63,20 @@ export function baseTurnOptions(
     },
     messageStore: deps.messageStore ?? undefined,
     persona: deps.config.llm.system_prompt ?? null,
+    harness: {
+      enabled: deps.config.harness.enabled,
+      routerModel: deps.config.harness.router_model,
+      plannerModel: deps.config.harness.planner_model,
+      synthesisModel: deps.config.harness.synthesis_model,
+      planStepCap: deps.config.harness.plan_step_cap,
+      replanCap: deps.config.harness.replan_cap,
+      tokenBudget: deps.config.harness.token_budget,
+      wallClockMs: deps.config.harness.wall_clock_ms,
+      flowConfidenceThreshold: deps.config.harness.flow_confidence_threshold,
+      toolRetrievalK: deps.config.harness.tool_retrieval_k,
+      forceCategories: deps.config.harness.force_categories,
+      forceOnActiveFlow: deps.config.harness.force_on_active_flow,
+    },
   };
 }
 

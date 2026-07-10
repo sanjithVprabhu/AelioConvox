@@ -12,6 +12,7 @@ const tests = [
   { name: 'Phase 4 — Magic link auth', script: 'scripts/test-phase4-magic-link.mjs' },
   { name: 'Phase 4 — WhatsApp identity', script: 'scripts/test-phase4-whatsapp-identity.mjs' },
   { name: 'Phase 5 — Memory analyst', script: 'scripts/test-phase5-memory.mjs' },
+  { name: 'Phase 6 — Lifecycle', script: 'scripts/test-phase6-lifecycle.mjs' },
 ];
 
 function run(command, args, env = {}) {

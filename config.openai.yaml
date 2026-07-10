@@ -1,14 +1,16 @@
 name: aelio-openai
 secret: ${AELIO_SDK_SECRET}
 
+# OpenAI model tiers (cost vs capability):
+#   gpt-4o-mini  — routing, synthesis, chat/tool loop, background jobs
+#   gpt-4o       — multi-step planning + replan (forced tool-call DAG)
 llm:
   provider: openai
   model: gpt-4o-mini
+  background_model: gpt-4o-mini
   api_key: ${OPENAI_API_KEY}
-  max_tokens: 1024
+  max_tokens: 4096
 
-# Real semantic embeddings for memory recall + response cache (defaults to the
-# built-in 'hash' embedding if omitted). 'openai' uses text-embedding-3-small (1536d).
 embeddings:
   provider: openai
   model: text-embedding-3-small
@@ -17,25 +19,15 @@ embeddings:
 
 channels:
   whatsapp:
-    enabled: true
-    mock_mode: true
-    verify_token: test-verify-token
-    webhook_path: /wa/webhook
+    enabled: false
   web:
     enabled: true
     allowed_origins:
       - "*"
-    magic_link:
-      enabled: true
-      ttl_minutes: 15
 
 safety:
   default_mode: full
   require_confirmation_for: [write, destructive]
-  overrides:
-    cancelOrder:
-      mode: write
-      require_confirmation: true
 
 identity:
   mapping_function: phone
@@ -46,17 +38,40 @@ session:
   history_window: 20
   summarize_after: 50
 
+intent:
+  enabled: true
+  ttl_minutes: 20
+  max_depth: 5
+
 memory:
   enabled: true
   recall_limit: 5
+
+harness:
+  enabled: true
+  router_model: gpt-4o-mini
+  planner_model: gpt-4o
+  synthesis_model: gpt-4o-mini
+  plan_step_cap: 10
+  replan_cap: 3
+  token_budget: 50000
+  wall_clock_ms: 60000
+  flow_confidence_threshold: 0.82
+  tool_retrieval_k: 12
+  force_categories: [transaction, checkout, order, multi_step]
+  force_on_active_flow: true
+
+sunjet:
+  enabled: false
+  embed_dim: 1536
 
 storage:
   database_path: ./data/aelio-openai.db
 
 logging:
   level: info
-  format: json
+  format: pretty
 
 server:
   host: 0.0.0.0
-  port: 3000
+  port: 3003

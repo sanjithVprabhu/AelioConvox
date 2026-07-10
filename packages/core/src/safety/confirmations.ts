@@ -6,10 +6,20 @@ export type PendingConfirmation = {
   description: string;
   safetyLevel: 'write' | 'destructive';
   createdAt: number;
+  /** When set, confirmation resumes a multi-step harness plan. */
+  harnessPlanId?: string;
+  harnessStepId?: string;
 };
 
-const CONFIRM_PATTERN = /^(yes|y|yeah|yep|confirm|proceed|ok|okay|sure|go ahead)\b/i;
-const DENY_PATTERN = /^(no|n|nope|cancel|stop|deny|don't|do not)\b/i;
+const CONFIRM_PATTERN = /^(yes|y|yeah|yep|confirm|proceed|sure|go ahead|ok|okay)$/i;
+const DENY_PATTERN = /^(no|n|nope|cancel|stop|deny|don't|do not)$/i;
+
+/** Pending write confirmations expire after this window. */
+export const PENDING_CONFIRMATION_TTL_MS = 10 * 60_000;
+
+export function isPendingConfirmationExpired(pending: PendingConfirmation): boolean {
+  return Date.now() - pending.createdAt > PENDING_CONFIRMATION_TTL_MS;
+}
 
 export function isConfirmationMessage(message: string): boolean {
   const trimmed = message.trim();

@@ -164,6 +164,21 @@ export const PongMessageSchema = z.object({
 });
 export type PongMessage = z.infer<typeof PongMessageSchema>;
 
+export const ErrorMessageSchema = z.object({
+  type: z.literal('error'),
+  message: z.string().min(1),
+  operation: z.string().optional(),
+});
+export type ErrorMessage = z.infer<typeof ErrorMessageSchema>;
+
+export const AckMessageSchema = z.object({
+  type: z.literal('ack'),
+  operation: z.enum(['set_state', 'set_flow_progress']),
+  ok: z.boolean(),
+  message: z.string().optional(),
+});
+export type AckMessage = z.infer<typeof AckMessageSchema>;
+
 export const SdkToServerMessageSchema = z.discriminatedUnion('type', [
   RegisterMessageSchema,
   ResultMessageSchema,
@@ -178,6 +193,8 @@ export const ServerToSdkMessageSchema = z.discriminatedUnion('type', [
   InvokeMessageSchema,
   SendInvokeMessageSchema,
   PingMessageSchema,
+  ErrorMessageSchema,
+  AckMessageSchema,
 ]);
 export type ServerToSdkMessage = z.infer<typeof ServerToSdkMessageSchema>;
 
@@ -185,3 +202,9 @@ export const DEFAULT_SDK_PATH = '/sdk';
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 export const HEARTBEAT_TIMEOUT_MS = 60_000;
 export const INVOKE_TIMEOUT_MS = 30_000;
+/** Max concurrent registered SDK WebSocket connections per server instance. */
+export const MAX_SDK_CONNECTIONS = 32;
+/** Close authenticated SDK sockets that never send `register` within this window. */
+export const SDK_REGISTER_TIMEOUT_MS = 15_000;
+/** Reject WebSocket frames larger than this before JSON parsing. */
+export const MAX_WS_FRAME_BYTES = 64 * 1024;

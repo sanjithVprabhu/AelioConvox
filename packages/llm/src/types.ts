@@ -29,9 +29,19 @@ export type LLMTelemetryMeta = {
     | 'chat_completion'
     | 'tool_synthesis'
     | 'session_summary'
-    | 'session_reflection';
+    | 'session_reflection'
+    | 'harness_router'
+    | 'harness_planner'
+    | 'harness_replan'
+    | 'harness_synthesis';
   iteration?: number;
 };
+
+export type LLMToolChoice =
+  | 'auto'
+  | 'none'
+  | { mode: 'any'; allowedFunctionNames?: string[] }
+  | { mode: 'required'; name: string };
 
 export type LLMCompleteOptions = {
   messages: ChatMessage[];
@@ -41,6 +51,9 @@ export type LLMCompleteOptions = {
   maxTokens?: number;
   temperature?: number;
   telemetry?: LLMTelemetryMeta;
+  /** When set, providers that support it return JSON-only text (no markdown). */
+  responseFormat?: 'json';
+  toolChoice?: LLMToolChoice;
 };
 
 export type LLMUsage = {

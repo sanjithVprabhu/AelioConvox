@@ -63,6 +63,18 @@ memory:
   enabled: true
   recall_limit: 5
 
+# Multi-step planning harness ("the brain") — see docs/system.md
+harness:
+  enabled: false
+  plan_step_cap: 10
+  replan_cap: 3
+  token_budget: 50000
+  wall_clock_ms: 60000
+  flow_confidence_threshold: 0.82
+  tool_retrieval_k: 12
+  force_categories: [transaction, checkout, order, multi_step]
+  force_on_active_flow: true
+
 # Sunjet (ll-server) — primary message store when enabled.
 # Start ll-server first: LL_DATA_DIR=./data/sunjet LL_API_KEYS=secret cargo run --release -p ll-server
 sunjet:

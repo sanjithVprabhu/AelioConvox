@@ -19,7 +19,13 @@ export type TurnApiCallPurpose =
   | 'response_cache_store'
   | 'message_storage'
   | 'conversation_archive'
-  | 'reflection_insight';
+  | 'reflection_insight'
+  | 'harness_router'
+  | 'harness_planner'
+  | 'harness_replan'
+  | 'harness_synthesis'
+  | 'tool_registration'
+  | 'tool_retrieval';
 
 export type TurnContext = {
   turnId: string;

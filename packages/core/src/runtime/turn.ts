@@ -35,6 +35,7 @@ import {
   buildWriteSuccessReply,
   isConfirmationMessage,
   isDenialMessage,
+  isPendingConfirmationExpired,
 } from '../safety/confirmations.js';
 import type { SafetyConfig } from '../safety/policy.js';
 import {
@@ -54,11 +55,26 @@ import {
 import { composeSystemPrompt } from './prompt-composer.js';
 import { selectRelevantTools } from './tool-retrieval.js';
 import { runToolLoop } from './tool-loop.js';
+import {
+  runHarnessTurn,
+  resumeHarnessAfterConfirmation,
+  updatePlanStatus,
+  type HarnessConfig,
+  DEFAULT_HARNESS_CONFIG,
+} from '../harness/index.js';
 import { runWithTurnContext } from '../telemetry/turn-calls.js';
 
 export type ProcessTurnResult = {
   reply: string;
   turnId: string;
+  /** Present when the assistant is waiting for yes/no confirmation of a write action. */
+  pendingConfirmation?: {
+    functionName: string;
+    args: Record<string, unknown>;
+    description: string;
+    safetyLevel: 'write' | 'destructive';
+    createdAt: number;
+  };
 };
 
 export type ProcessTurnInput = {
@@ -66,6 +82,8 @@ export type ProcessTurnInput = {
   llm: LLMProvider;
   sdk: SdkBridge;
   model: string;
+  /** Cheaper model for session summaries and other background LLM work. */
+  backgroundModel?: string;
   maxTokens: number;
   historyWindow: number;
   safety: SafetyConfig;
@@ -84,6 +102,7 @@ export type ProcessTurnInput = {
   messageStore?: ConvoxMessageStore;
   /** Config-level persona override (SDK-registered persona wins when present). */
   persona?: string | null;
+  harness?: HarnessConfig;
 };
 
 type PersistMessageInput = {
@@ -280,8 +299,59 @@ async function executeTurn(
 
   const pending = await getPendingConfirmation(db, session.id);
   if (pending) {
-    if (isConfirmationMessage(input.message)) {
+    if (isPendingConfirmationExpired(pending)) {
+      await clearPendingConfirmation(db, session.id);
+    } else if (isConfirmationMessage(input.message)) {
       const fn = input.sdk.getFunctions().find((entry) => entry.name === pending.functionName);
+
+      if (pending.harnessPlanId && pending.harnessStepId && fn && input.harness?.enabled) {
+        const harnessResult = await resumeHarnessAfterConfirmation({
+          database: input.database,
+          llm: input.llm,
+          sdk: input.sdk,
+          model: input.model,
+          maxTokens: input.maxTokens,
+          harness: input.harness,
+          internalCustomerId: customerId,
+          sessionId: session.id,
+          turnId,
+          userMessage: input.message,
+          context,
+          safety: input.safety,
+          functions: input.sdk.getFunctions(),
+          planId: pending.harnessPlanId,
+          stepId: pending.harnessStepId,
+          fn,
+          args: pending.args,
+        });
+
+        await clearPendingConfirmation(db, session.id);
+
+        if (harnessResult.pendingConfirmation) {
+          await setPendingConfirmation(db, session.id, harnessResult.pendingConfirmation);
+        }
+
+        await persistMessage(input, db, {
+          sessionId: session.id,
+          customerId,
+          role: 'assistant',
+          content: harnessResult.reply,
+          channel: input.channel,
+          context: buildTurnContext(input, preTurnSnapshot, {
+            toolsExecuted: harnessResult.executedToolNames,
+            pendingConfirmation: Boolean(harnessResult.pendingConfirmation),
+          }),
+        });
+
+        return {
+          reply: harnessResult.reply,
+          turnId,
+          ...(harnessResult.pendingConfirmation
+            ? { pendingConfirmation: harnessResult.pendingConfirmation }
+            : {}),
+        };
+      }
+
       const invokeResult = await input.sdk.invoke(
         pending.functionName,
         pending.args,
@@ -322,10 +392,13 @@ async function executeTurn(
       });
 
       return { reply, turnId };
-    }
-
-    if (isDenialMessage(input.message)) {
+    } else if (isDenialMessage(input.message)) {
       await clearPendingConfirmation(db, session.id);
+      if (pending.harnessPlanId && input.harness?.enabled) {
+        await updatePlanStatus(input.database.db, pending.harnessPlanId, 'aborted', {
+          abortReason: 'user_denied',
+        });
+      }
       const reply = buildCancellationReply();
       await persistMessage(input, db, {
         sessionId: session.id,
@@ -336,6 +409,8 @@ async function executeTurn(
         context: buildTurnContext(input, preTurnSnapshot),
       });
       return { reply, turnId };
+    } else {
+      await clearPendingConfirmation(db, session.id);
     }
   }
 
@@ -368,7 +443,7 @@ async function executeTurn(
     sessionId: session.id,
     summarizeAfter: input.summarizeAfter,
     llm: input.llm,
-    model: input.model,
+    model: input.backgroundModel ?? input.model,
     maxTokens: input.maxTokens,
   });
 
@@ -401,6 +476,7 @@ async function executeTurn(
   }
   const scopedFunctions = await selectRelevantTools(stateScopedFunctions, input.message, {
     forceInclude: activeFlowTools,
+    database: db,
   });
 
   let memoriesPrompt = '';
@@ -428,20 +504,71 @@ async function executeTurn(
     { id: 'intent', content: intentPrompt, stability: 'volatile', priority: 40, maxTokens: 400 },
   ]);
 
-  const loopResult = await runToolLoop({
-    database: input.database,
-    internalCustomerId: customerId,
-    llm: input.llm,
-    sdk: input.sdk,
-    functions: scopedFunctions,
-    model: input.model,
-    maxTokens: input.maxTokens,
-    system,
-    history,
-    userMessage: input.message,
-    context,
-    safety: input.safety,
-  });
+  const harnessConfig = input.harness ?? DEFAULT_HARNESS_CONFIG;
+  let loopResult: Awaited<ReturnType<typeof runToolLoop>>;
+
+  if (harnessConfig.enabled) {
+    const activeFlowId = lifecycle.flowProgress
+      ? Object.keys(lifecycle.flowProgress)[0]
+      : undefined;
+    const harnessResult = await runHarnessTurn({
+      database: input.database,
+      llm: input.llm,
+      sdk: input.sdk,
+      model: input.model,
+      maxTokens: input.maxTokens,
+      harness: harnessConfig,
+      internalCustomerId: customerId,
+      sessionId: session.id,
+      turnId,
+      userMessage: input.message,
+      history,
+      system,
+      functions: scopedFunctions,
+      context,
+      safety: input.safety,
+      activeFlowId,
+    });
+
+    if (harnessResult.usedHarness) {
+      loopResult = {
+        reply: harnessResult.reply,
+        toolCallsExecuted: harnessResult.toolCallsExecuted,
+        executedToolNames: harnessResult.executedToolNames,
+        pendingConfirmation: harnessResult.pendingConfirmation,
+      };
+    } else {
+      loopResult = await runToolLoop({
+        database: input.database,
+        internalCustomerId: customerId,
+        llm: input.llm,
+        sdk: input.sdk,
+        functions: scopedFunctions,
+        model: input.model,
+        maxTokens: input.maxTokens,
+        system,
+        history,
+        userMessage: input.message,
+        context,
+        safety: input.safety,
+      });
+    }
+  } else {
+    loopResult = await runToolLoop({
+      database: input.database,
+      internalCustomerId: customerId,
+      llm: input.llm,
+      sdk: input.sdk,
+      functions: scopedFunctions,
+      model: input.model,
+      maxTokens: input.maxTokens,
+      system,
+      history,
+      userMessage: input.message,
+      context,
+      safety: input.safety,
+    });
+  }
 
   if (loopResult.pendingConfirmation) {
     await setPendingConfirmation(db, session.id, loopResult.pendingConfirmation);
@@ -474,7 +601,8 @@ async function executeTurn(
   });
 
   if (input.memoryEnabled !== false) {
-    void extractMemories({
+    // Await so facts from this turn are indexed before the next turn recalls.
+    await extractMemories({
       database: input.database,
       customerId,
       sessionId: session.id,
@@ -500,5 +628,11 @@ async function executeTurn(
     });
   }
 
-  return { reply: loopResult.reply, turnId };
+  return {
+    reply: loopResult.reply,
+    turnId,
+    ...(loopResult.pendingConfirmation
+      ? { pendingConfirmation: loopResult.pendingConfirmation }
+      : {}),
+  };
 }

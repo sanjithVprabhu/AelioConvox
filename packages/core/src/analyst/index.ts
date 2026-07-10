@@ -2,6 +2,7 @@ export {
   embedText,
   embed,
   configureEmbedder,
+  configureEmbeddingDimensions,
   hasConfiguredEmbedder,
   cosineSimilarity,
 } from './embeddings.js';

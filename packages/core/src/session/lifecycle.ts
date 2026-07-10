@@ -41,23 +41,66 @@ export async function ensureCustomer(
   const customerId = existingCustomer[0]?.id ?? randomUUID();
 
   if (!existingCustomer[0]) {
-    await db.insert(customers).values({
-      id: customerId,
-      externalId,
-      displayName: externalId,
-      createdAt: now,
-      updatedAt: now,
-    });
+    try {
+      await db.insert(customers).values({
+        id: customerId,
+        externalId,
+        displayName: externalId,
+        createdAt: now,
+        updatedAt: now,
+      });
+    } catch {
+      const raced = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.externalId, externalId))
+        .limit(1);
+      if (!raced[0]) {
+        throw new Error(`Failed to create customer for externalId "${externalId}"`);
+      }
+      return ensureChannelAddress(db, raced[0].id, channel, channelAddress, now);
+    }
   }
 
-  await db.insert(channelAddresses).values({
-    id: randomUUID(),
-    customerId,
-    channel,
-    address: channelAddress,
-    verifiedAt: now,
-    createdAt: now,
-  });
+  return ensureChannelAddress(db, customerId, channel, channelAddress, now);
+}
+
+async function ensureChannelAddress(
+  db: AelioDatabase['db'],
+  customerId: string,
+  channel: Channel,
+  channelAddress: string,
+  now: Date,
+): Promise<string> {
+  const existing = await db
+    .select()
+    .from(channelAddresses)
+    .where(and(eq(channelAddresses.channel, channel), eq(channelAddresses.address, channelAddress)))
+    .limit(1);
+  if (existing[0]) {
+    return existing[0].customerId;
+  }
+
+  try {
+    await db.insert(channelAddresses).values({
+      id: randomUUID(),
+      customerId,
+      channel,
+      address: channelAddress,
+      verifiedAt: now,
+      createdAt: now,
+    });
+  } catch {
+    const raced = await db
+      .select()
+      .from(channelAddresses)
+      .where(and(eq(channelAddresses.channel, channel), eq(channelAddresses.address, channelAddress)))
+      .limit(1);
+    if (!raced[0]) {
+      throw new Error(`Failed to create channel address "${channelAddress}"`);
+    }
+    return raced[0].customerId;
+  }
 
   return customerId;
 }
@@ -76,6 +119,7 @@ export async function findOrCreateSession(
     .where(
       and(
         eq(sessions.customerId, customerId),
+        eq(sessions.channel, channel),
         eq(sessions.status, 'active'),
         lt(sessions.lastActivityAt, cutoff),
       ),
@@ -87,6 +131,7 @@ export async function findOrCreateSession(
     .where(
       and(
         eq(sessions.customerId, customerId),
+        eq(sessions.channel, channel),
         eq(sessions.status, 'active'),
       ),
     )

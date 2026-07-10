@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
+import { authorized } from '../auth.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 import { resolveMigrationsFolder, resolvePublicDir } from '../paths.js';
 
@@ -12,7 +13,7 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
     uptimeSeconds: Math.floor(process.uptime()),
   }));
 
-  app.get('/ready', async (_request, reply) => {
+  app.get('/ready', async (request, reply) => {
     if (!deps) {
       return reply.status(503).send({ ready: false, reason: 'Server not initialized' });
     }
@@ -48,31 +49,45 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
     }
 
     const ready = checks.database && checks.migrations && checks.widget && checks.sunjet;
+    const sdkConnected = deps.sdkBridge.getFunctions().length > 0;
+    const exposeSdkCatalog =
+      process.env.NODE_ENV !== 'production' ||
+      process.env.AELIO_TEST_MODE === '1' ||
+      authorized(request, deps.config.secret);
+
     const body = {
       ready,
       checks,
-      sdk: {
-        connected: deps.sdkBridge.getFunctions().length > 0,
-        functions: deps.sdkBridge.getFunctions().map((fn) => fn.name),
-        states: deps.sdkBridge.getStates().map((state) => state.id),
-        policies: deps.sdkBridge.getPolicies().map((policy) => policy.id),
-        flows: deps.sdkBridge.getFlows().map((flow) => flow.id),
-      },
+      sdk: exposeSdkCatalog
+        ? {
+            connected: sdkConnected,
+            functions: deps.sdkBridge.getFunctions().map((fn) => fn.name),
+            states: deps.sdkBridge.getStates().map((state) => state.id),
+            policies: deps.sdkBridge.getPolicies().map((policy) => policy.id),
+            flows: deps.sdkBridge.getFlows().map((flow) => flow.id),
+          }
+        : { connected: sdkConnected },
       memory: {
         enabled: deps.config.memory.enabled,
         vectorIndex: deps.database.vectorEnabled,
+        vectorDimensions: deps.database.vectorDimensions,
+        vectorIndexWarning: deps.config.memory.enabled && !deps.database.vectorEnabled
+          ? 'sqlite-vec unavailable — recall using brute-force fallback'
+          : undefined,
       },
       channels: {
         web: deps.config.channels.web.enabled,
         whatsapp: deps.config.channels.whatsapp.enabled,
       },
       llm: deps.config.llm.provider,
-      sunjet: {
-        enabled: deps.config.sunjet.enabled,
-        url: deps.config.sunjet.url,
-        dualWriteSqlite: deps.config.sunjet.dual_write_sqlite,
-        messageBackend: deps.messageStore ? 'sunjet' : 'sqlite',
-      },
+      sunjet: exposeSdkCatalog
+        ? {
+            enabled: deps.config.sunjet.enabled,
+            url: deps.config.sunjet.url,
+            dualWriteSqlite: deps.config.sunjet.dual_write_sqlite,
+            messageBackend: deps.messageStore ? 'sunjet' : 'sqlite',
+          }
+        : { enabled: deps.config.sunjet.enabled },
     };
 
     return reply.status(ready ? 200 : 503).send(body);

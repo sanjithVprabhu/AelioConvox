@@ -236,6 +236,7 @@ try {
     ['Phase 4 — Magic link', 'node', ['scripts/test-phase4-magic-link.mjs']],
     ['Phase 4 — WhatsApp identity', 'node', ['scripts/test-phase4-whatsapp-identity.mjs']],
     ['Phase 5 — Memory', 'npx', ['tsx', 'scripts/test-phase5-memory.mjs']],
+    ['Phase 6 — Lifecycle', 'node', ['scripts/test-phase6-lifecycle.mjs']],
   ];
 
   for (const [name, cmd, args] of phaseTests) {

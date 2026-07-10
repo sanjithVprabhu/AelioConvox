@@ -124,6 +124,14 @@ export const sdkConnections = sqliteTable('sdk_connections', {
     .$type<Array<Record<string, unknown>>>(),
 });
 
+export const toolEmbeddings = sqliteTable('tool_embeddings', {
+  toolName: text('tool_name').primaryKey(),
+  descriptor: text('descriptor').notNull(),
+  descriptorHash: text('descriptor_hash').notNull(),
+  embedding: text('embedding', { mode: 'json' }).notNull().$type<number[]>(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
 export const magicLinks = sqliteTable('magic_links', {
   id: text('id').primaryKey(),
   tokenHash: text('token_hash').notNull(),
@@ -217,6 +225,65 @@ export const proactiveMessages = sqliteTable(
   (table) => [index('idx_proactive_customer').on(table.customerId, table.createdAt)],
 );
 
+export const plans = sqliteTable(
+  'plans',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id),
+    customerId: text('customer_id')
+      .notNull()
+      .references(() => customers.id),
+    turnId: text('turn_id').notNull(),
+    status: text('status').notNull().default('pending'),
+    matchedFlowId: text('matched_flow_id'),
+    userMessage: text('user_message').notNull(),
+    intent: text('intent'),
+    intentCategory: text('intent_category'),
+    tokenSpend: integer('token_spend').notNull().default(0),
+    replanCount: integer('replan_count').notNull().default(0),
+    abortReason: text('abort_reason'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('idx_plans_session').on(table.sessionId),
+    index('idx_plans_status').on(table.status, table.createdAt),
+  ],
+);
+
+export const planSteps = sqliteTable(
+  'plan_steps',
+  {
+    id: text('id').primaryKey(),
+    planId: text('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+    stepOrder: integer('step_order').notNull(),
+    toolName: text('tool_name').notNull(),
+    dependsOn: text('depends_on', { mode: 'json' })
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    inputTemplate: text('input_template', { mode: 'json' })
+      .notNull()
+      .$type<Record<string, unknown>>(),
+    resolvedInput: text('resolved_input', { mode: 'json' }).$type<Record<string, unknown>>(),
+    output: text('output', { mode: 'json' }).$type<unknown>(),
+    status: text('status').notNull().default('pending'),
+    idempotencyKey: text('idempotency_key').notNull(),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    errorMessage: text('error_message'),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+  },
+  (table) => [
+    index('idx_plan_steps_plan').on(table.planId, table.stepOrder),
+    uniqueIndex('plan_steps_idempotency_unique').on(table.planId, table.idempotencyKey),
+  ],
+);
+
 export const jobQueue = sqliteTable(
   'job_queue',
   {
@@ -244,12 +311,15 @@ export const schema = {
   memory,
   functionCalls,
   sdkConnections,
+  toolEmbeddings,
   magicLinks,
   jobQueue,
   reflections,
   proactiveMessages,
   responseCache,
   turnApiCalls,
+  plans,
+  planSteps,
 };
 
 export type DatabaseSchema = typeof schema;

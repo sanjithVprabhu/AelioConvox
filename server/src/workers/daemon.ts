@@ -64,7 +64,7 @@ export function startDaemonWorker(deps: RuntimeDeps) {
           const reflection = await reflectOnSession({
             database: deps.database,
             llm: deps.llm,
-            model: deps.config.llm.model,
+            model: deps.config.llm.background_model ?? deps.config.llm.model,
             maxTokens: deps.config.llm.max_tokens,
             sessionId,
             customerId,

@@ -94,30 +94,29 @@ export async function verifyMagicLink(
   const tokenHash = hashToken(token);
   const now = new Date();
 
-  const rows = await database.db
-    .select()
-    .from(magicLinks)
-    .where(eq(magicLinks.tokenHash, tokenHash))
-    .limit(1);
+  const consumed = database.sqlite
+    .prepare(
+      `UPDATE magic_links
+       SET consumed_at = ?
+       WHERE token_hash = ? AND consumed_at IS NULL AND expires_at >= ?
+       RETURNING id, email, customer_id, external_id`,
+    )
+    .get(now.getTime(), tokenHash, now.getTime()) as
+    | { id: string; email: string; customer_id: string; external_id: string }
+    | undefined;
 
-  const link = rows[0];
-  if (!link || link.consumedAt || link.expiresAt < now || !link.customerId || !link.externalId) {
+  if (!consumed?.customer_id || !consumed.external_id) {
     return null;
   }
 
   await database.db
-    .update(magicLinks)
-    .set({ consumedAt: now })
-    .where(eq(magicLinks.id, link.id));
-
-  await database.db
     .update(channelAddresses)
     .set({ verifiedAt: now })
-    .where(and(eq(channelAddresses.channel, 'web'), eq(channelAddresses.address, link.email)));
+    .where(and(eq(channelAddresses.channel, 'web'), eq(channelAddresses.address, consumed.email)));
 
   return {
-    customerId: link.customerId,
-    externalId: link.externalId,
-    email: link.email,
+    customerId: consumed.customer_id,
+    externalId: consumed.external_id,
+    email: consumed.email,
   };
 }

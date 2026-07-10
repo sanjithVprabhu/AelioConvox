@@ -37,12 +37,15 @@ export {
   selectRelevantTools,
   TOOL_RETRIEVAL_THRESHOLD,
   TOOL_RETRIEVAL_TOP_K,
+  buildToolDescriptor,
   type ToolRetrievalOptions,
 } from './runtime/tool-retrieval.js';
+export { syncToolEmbeddings, loadToolEmbeddings } from './runtime/tool-embeddings.js';
 export { assertWithinRateLimit, type RateLimitConfig } from './runtime/rate-limit.js';
 export {
   sendProactiveMessage,
   setProactiveOptIn,
+  recordProactiveDelivery,
   type ProactiveConfig,
   type ProactiveInput,
   type ProactiveResult,
@@ -90,6 +93,8 @@ export {
   buildWriteSuccessReply,
   isConfirmationMessage,
   isDenialMessage,
+  isPendingConfirmationExpired,
+  PENDING_CONFIRMATION_TTL_MS,
   type PendingConfirmation,
 } from './safety/confirmations.js';
 export type { SdkBridge, SdkInvokeResult } from './sdk-bridge/types.js';
@@ -113,11 +118,13 @@ export {
   type CustomerLifecycleMetadata,
   type FlowProgressRecord,
 } from './lifecycle/index.js';
-export { enqueueJob, claimJob, completeJob, failJob, type JobRecord } from './job-queue/index.js';
+export { enqueueJob, claimJob, completeJob, failJob, updateJobPayload, requeueStaleJobs, type JobRecord } from './job-queue/index.js';
+export { enqueueCustomerTurn } from './runtime/customer-turn-queue.js';
 export {
   embedText,
   embed,
   configureEmbedder,
+  configureEmbeddingDimensions,
   hasConfiguredEmbedder,
   cosineSimilarity,
   extractMemories,
@@ -144,4 +151,16 @@ export {
   type MagicLinkResult,
   type VerifiedMagicLink,
 } from './identity/magic-link.js';
+export {
+  issueWidgetSessionToken,
+  verifyWidgetSessionToken,
+  type WidgetSessionClaims,
+} from './identity/session-token.js';
 export { logFunctionCall } from './audit/function-calls.js';
+export {
+  runHarnessTurn,
+  resumeHarnessAfterConfirmation,
+  DEFAULT_HARNESS_CONFIG,
+  type HarnessConfig,
+  type HarnessTurnResult,
+} from './harness/index.js';

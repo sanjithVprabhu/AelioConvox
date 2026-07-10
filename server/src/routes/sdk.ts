@@ -1,17 +1,44 @@
 import {
   DEFAULT_SDK_PATH,
   HEARTBEAT_INTERVAL_MS,
+  MAX_SDK_CONNECTIONS,
+  MAX_WS_FRAME_BYTES,
+  SDK_REGISTER_TIMEOUT_MS,
   SdkToServerMessageSchema,
 } from '@aelio/protocol';
-import { enqueueJob, upsertCustomerFlowProgress, upsertCustomerLifecycleState } from '@aelio/core';
+import { enqueueJob, upsertCustomerFlowProgress, upsertCustomerLifecycleState, syncToolEmbeddings } from '@aelio/core';
 import type { WebSocket } from '@fastify/websocket';
 import type { FastifyInstance } from 'fastify';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { RuntimeDeps } from '../runtime-deps.js';
 
-export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps) {
+function sendSdkError(
+  socket: WebSocket,
+  message: string,
+  operation?: string,
+): void {
+  socket.send(JSON.stringify({ type: 'error', message, ...(operation ? { operation } : {}) }));
+}
+
+function inboundDedupKey(
+  channel: string,
+  from: string,
+  text: string,
+  messageId?: string,
+): string {
+  if (messageId) {
+    return `${channel}:${messageId}`;
+  }
+  const hash = createHash('sha256').update(`${from}|${text}`).digest('hex').slice(0, 16);
+  return `${channel}:fallback:${hash}`;
+}
+
+export async function registerSdkRoutes(
+  app: FastifyInstance,
+  deps: RuntimeDeps,
+): Promise<{ stopHeartbeat: () => void }> {
   const { config, sdkBridge, database } = deps;
-  setInterval(() => {
+  const heartbeat = setInterval(() => {
     const now = Date.now();
     for (const connectionId of sdkBridge.getConnectionIds()) {
       const connection = sdkBridge.getConnection(connectionId);
@@ -28,10 +55,10 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
 
       connection.socket.send(JSON.stringify({ type: 'ping', ts: now }));
     }
-  }, HEARTBEAT_INTERVAL_MS).unref();
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeat.unref();
 
   app.get(DEFAULT_SDK_PATH, { websocket: true }, (socket, request) => {
-    const remoteAddress = request.socket.remoteAddress ?? 'unknown';
     // Preferred: Authorization header (never logged). Query-param `?secret=`
     // remains as a DEPRECATED fallback for older SDKs.
     const header = request.headers.authorization;
@@ -39,61 +66,58 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
     const secret =
       bearer ?? new URL(request.url, 'http://localhost').searchParams.get('secret');
     if (!secret || secret !== config.secret) {
-      app.log.warn(
-        {
-          route: DEFAULT_SDK_PATH,
-          remoteAddress,
-          usedAuthorizationHeader: Boolean(bearer),
-        },
-        'Rejected SDK websocket connection with invalid secret',
-      );
       socket.close(1008, 'Invalid SDK secret');
       return;
     }
     if (!bearer) {
-      app.log.warn('SDK connected with ?secret= in the URL — deprecated; upgrade the SDK to send an Authorization header');
+      app.log.warn(
+        'SDK connected with ?secret= in the URL — deprecated; upgrade the SDK to send an Authorization header',
+      );
+    }
+
+    if (sdkBridge.getConnectionCount() >= MAX_SDK_CONNECTIONS) {
+      socket.close(1008, 'Too many SDK connections');
+      return;
     }
 
     const connectionId = randomUUID();
-    app.log.info(
-      {
-        connectionId,
-        route: DEFAULT_SDK_PATH,
-        remoteAddress,
-        usedAuthorizationHeader: Boolean(bearer),
-      },
-      'SDK websocket connection accepted',
-    );
+    const ws = socket as WebSocket;
+    let registered = false;
+
+    const registerTimeout = setTimeout(() => {
+      if (!registered) {
+        socket.close(1008, 'Register timeout');
+      }
+    }, SDK_REGISTER_TIMEOUT_MS);
+    registerTimeout.unref();
+
+    const requireRegistered = (operation: string): boolean => {
+      if (registered) {
+        return true;
+      }
+      sendSdkError(ws, 'Send register before other SDK messages', operation);
+      return false;
+    };
 
     socket.on('message', (raw) => {
+      const frame = raw.toString();
+      if (frame.length > MAX_WS_FRAME_BYTES) {
+        sendSdkError(ws, 'Message frame too large');
+        return;
+      }
+
       let parsed: unknown;
       try {
-        parsed = JSON.parse(raw.toString());
+        parsed = JSON.parse(frame);
       } catch {
-        app.log.warn(
-          {
-            connectionId,
-            remoteAddress,
-            payloadPreview: raw.toString().slice(0, 160),
-          },
-          'SDK sent invalid JSON payload',
-        );
+        sendSdkError(ws, 'Invalid JSON message');
         return;
       }
 
       const result = SdkToServerMessageSchema.safeParse(parsed);
       if (!result.success) {
-        app.log.warn(
-          {
-            connectionId,
-            remoteAddress,
-            issues: result.error.issues.map((issue) => ({
-              path: issue.path.join('.'),
-              message: issue.message,
-            })),
-          },
-          'SDK payload failed schema validation',
-        );
+        app.log.warn({ connectionId, issues: result.error.issues }, 'Invalid SDK message');
+        sendSdkError(ws, 'Invalid message format');
         return;
       }
 
@@ -101,7 +125,7 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
       if (message.type === 'register') {
         sdkBridge.register({
           id: connectionId,
-          socket: socket as WebSocket,
+          socket: ws,
           functions: message.functions,
           states: message.states ?? [],
           policies: message.policies ?? [],
@@ -113,6 +137,14 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           connectedAt: Date.now(),
           lastHeartbeatAt: Date.now(),
         });
+        void syncToolEmbeddings(database.db, message.functions).catch((error) => {
+          app.log.warn(
+            { connectionId, err: error },
+            'Failed to sync tool embeddings after SDK register',
+          );
+        });
+        registered = true;
+        clearTimeout(registerTimeout);
 
         app.log.info(
           {
@@ -131,106 +163,121 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
       }
 
       if (message.type === 'set_state') {
-        app.log.info(
-          {
-            connectionId,
-            customerId: message.customerId,
-            stateId: message.stateId,
-            reason: message.reason ?? null,
-          },
-          'SDK requested customer lifecycle state update',
-        );
+        if (!requireRegistered('set_state')) {
+          return;
+        }
+        const connection = sdkBridge.getConnection(connectionId);
+        const knownStates = connection?.states ?? [];
+        if (!knownStates.some((state) => state.id === message.stateId)) {
+          sendSdkError(
+            ws,
+            `Unknown stateId "${message.stateId}" — register it in the SDK catalog first`,
+            'set_state',
+          );
+          return;
+        }
+
         void upsertCustomerLifecycleState(
           database.db,
           message.customerId,
           message.stateId,
           message.reason,
-        ).then(() => {
-          app.log.info(
-            {
-              connectionId,
-              customerId: message.customerId,
-              stateId: message.stateId,
-              reason: message.reason,
-            },
-            'Customer lifecycle state updated from SDK',
-          );
-        });
+        )
+          .then(() => {
+            app.log.info(
+              {
+                connectionId,
+                customerId: message.customerId,
+                stateId: message.stateId,
+                reason: message.reason,
+              },
+              'Customer lifecycle state updated from SDK',
+            );
+            ws.send(
+              JSON.stringify({ type: 'ack', operation: 'set_state', ok: true }),
+            );
+          })
+          .catch((error: unknown) => {
+            const msg = error instanceof Error ? error.message : 'Failed to update state';
+            app.log.error({ connectionId, error: msg }, 'set_state failed');
+            sendSdkError(ws, msg, 'set_state');
+          });
         return;
       }
 
       if (message.type === 'set_flow_progress') {
-        app.log.info(
-          {
-            connectionId,
-            customerId: message.customerId,
-            flowId: message.flowId,
-            stepIndex: message.stepIndex,
-            completedSteps: message.completedSteps ?? [],
-          },
-          'SDK requested flow progress update',
-        );
+        if (!requireRegistered('set_flow_progress')) {
+          return;
+        }
+        const connection = sdkBridge.getConnection(connectionId);
+        const knownFlows = connection?.flows ?? [];
+        if (!knownFlows.some((flow) => flow.id === message.flowId)) {
+          sendSdkError(
+            ws,
+            `Unknown flowId "${message.flowId}" — register it in the SDK catalog first`,
+            'set_flow_progress',
+          );
+          return;
+        }
+
         void upsertCustomerFlowProgress(
           database.db,
           message.customerId,
           message.flowId,
           message.stepIndex,
           message.completedSteps,
-        ).then(() => {
-          app.log.info(
-            {
-              connectionId,
-              customerId: message.customerId,
-              flowId: message.flowId,
-              stepIndex: message.stepIndex,
-            },
-            'Customer flow progress updated from SDK',
-          );
-        });
+        )
+          .then(() => {
+            app.log.info(
+              {
+                connectionId,
+                customerId: message.customerId,
+                flowId: message.flowId,
+                stepIndex: message.stepIndex,
+              },
+              'Customer flow progress updated from SDK',
+            );
+            ws.send(
+              JSON.stringify({ type: 'ack', operation: 'set_flow_progress', ok: true }),
+            );
+          })
+          .catch((error: unknown) => {
+            const msg =
+              error instanceof Error ? error.message : 'Failed to update flow progress';
+            app.log.error({ connectionId, error: msg }, 'set_flow_progress failed');
+            sendSdkError(ws, msg, 'set_flow_progress');
+          });
         return;
       }
 
       if (message.type === 'pong') {
-        sdkBridge.touchHeartbeat(connectionId);
-        app.log.debug({ connectionId, remoteAddress, ts: message.ts }, 'SDK heartbeat acknowledged');
+        if (registered) {
+          sdkBridge.touchHeartbeat(connectionId);
+        }
         return;
       }
 
       if (message.type === 'result') {
-        app.log.info(
-          {
-            connectionId,
-            requestId: message.id,
-            ok: message.ok,
-            durationMs: message.durationMs,
-            errorCode: message.error?.code ?? null,
-          },
-          'SDK function invocation completed',
-        );
+        if (!requireRegistered('result')) {
+          return;
+        }
         sdkBridge.handleResult(message);
         return;
       }
 
       if (message.type === 'ingest') {
-        app.log.info(
-          {
-            connectionId,
-            channel: message.channel,
-            from: message.from,
-            messageId: message.messageId ?? null,
-            textPreview: message.text.slice(0, 160),
-            textLength: message.text.length,
-          },
-          'SDK submitted inbound channel message',
+        if (!requireRegistered('ingest')) {
+          return;
+        }
+        const dedupKey = inboundDedupKey(
+          message.channel,
+          message.from,
+          message.text,
+          message.messageId,
         );
-        // The dev's own channel webhook handed us an inbound message. Queue it
-        // for the inbound worker exactly like a built-in channel would.
-        if (
-          message.messageId &&
-          !database.claimInboundMessage(`${message.channel}:${message.messageId}`)
-        ) {
+        if (!database.claimInboundMessage(dedupKey)) {
           app.log.info(
-            { connectionId, messageId: message.messageId },
+            { connectionId, messageId: message.messageId, dedupKey },
             'Duplicate ingest dropped',
           );
           return;
@@ -250,8 +297,11 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
     });
 
     socket.on('close', () => {
+      clearTimeout(registerTimeout);
       sdkBridge.unregister(connectionId);
-      app.log.info({ connectionId, remoteAddress }, 'Aelio SDK disconnected');
+      app.log.info({ connectionId }, 'Aelio SDK disconnected');
     });
   });
+
+  return { stopHeartbeat: () => clearInterval(heartbeat) };
 }
