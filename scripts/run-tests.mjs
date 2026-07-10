@@ -118,6 +118,10 @@ server.stderr.on('data', (chunk) => {
 const getServerLogs = () => serverOutput.slice(-8000);
 
 try {
+  // Server-independent harness unit tests run first (fast, no LLM/network).
+  console.log('\n=== Running harness executor unit tests ===');
+  await run('node', [join(root, 'scripts/test-harness-executor.mjs')], {});
+
   await waitForHealth(baseUrl, server, getServerLogs);
 
   sdk = spawn('npx', ['tsx', 'src/index.ts'], {

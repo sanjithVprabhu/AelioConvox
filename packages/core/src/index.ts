@@ -180,6 +180,14 @@ export {
   runPlanner,
   runSynthesis,
   BudgetMeter,
+  bindInstructions,
+  resolvePlan,
+  nextWave,
+  executePlan,
+  newExecutorState,
+  evaluateGate,
   hashArgs,
   type HarnessRunInput,
 } from './harness/index.js';
+export type { BoundInstruction } from './harness/resolver.js';
+export type { ExecOutcome, ExecutorState } from './harness/executor.js';

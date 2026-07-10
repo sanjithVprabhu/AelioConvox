@@ -469,6 +469,7 @@ async function executeTurn(
   const loopResult = input.harness?.enabled
     ? await runHarness({
         ...engineInput,
+        ...(stateDef ? { state: stateDef } : {}),
         lighthouse: input.lighthouse,
         tracer: input.tracer,
         budgets: input.harness.budgets,
