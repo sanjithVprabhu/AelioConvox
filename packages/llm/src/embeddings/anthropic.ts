@@ -1,4 +1,4 @@
-import type { EmbeddingProvider } from './embeddings.js';
+import type { EmbeddingProvider } from './index.js';
 
 /**
  * Anthropic does not ship a first-party embedding API. The Anthropic ecosystem

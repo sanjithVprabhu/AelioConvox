@@ -5,7 +5,7 @@ import type {
   LLMCompleteResult,
   LLMProvider,
   LLMToolCall,
-} from './types.js';
+} from '../types.js';
 
 type GeminiPart =
   | { text: string }

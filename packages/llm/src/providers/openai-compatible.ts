@@ -6,7 +6,7 @@ import type {
   LLMProvider,
   LLMToolCall,
   LLMToolChoice,
-} from './types.js';
+} from '../types.js';
 
 function toOpenAIToolChoice(choice: LLMToolChoice | undefined, toolCount: number) {
   if (!choice) {
