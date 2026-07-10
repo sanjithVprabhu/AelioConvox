@@ -192,7 +192,7 @@ const DEMO_CUSTOMER_ID = 'demo-user-123';
 
 await aelio.listen({
   secret: process.env.AELIO_SDK_SECRET ?? 'change-me-in-production',
-  url: process.env.AELIO_SERVER_URL ?? 'ws://127.0.0.1:3000',
+  url: process.env.AELIO_SERVER_URL ?? `ws://127.0.0.1:${process.env.AELIO_PORT ?? '3010'}`,
 });
 
 // Demo users start in onboarding — your real app would set this from your DB on login/events.

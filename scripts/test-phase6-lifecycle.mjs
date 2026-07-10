@@ -2,8 +2,9 @@
  * Phase 6 — SDK lifecycle catalog: states block upgradePlan for onboarding users.
  */
 import WebSocket from 'ws';
+import { aelioHttpUrl } from './lib/aelio-port.mjs';
 
-const baseUrl = process.env.AELIO_SERVER_URL ?? 'http://127.0.0.1:3000';
+const baseUrl = process.env.AELIO_SERVER_URL ?? aelioHttpUrl();
 const secret = process.env.AELIO_SDK_SECRET ?? 'change-me-in-production';
 const wsUrl = new URL('/sdk', baseUrl.replace(/^http/, 'ws'));
 

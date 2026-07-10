@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
+import { aelioWsUrl } from './lib/aelio-port.mjs';
 
-const serverUrl = process.env.AELIO_SERVER_URL ?? 'ws://127.0.0.1:3000';
+const serverUrl = process.env.AELIO_SERVER_URL ?? aelioWsUrl();
 
 function waitForMessage(socket, predicate, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {

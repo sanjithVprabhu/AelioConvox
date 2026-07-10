@@ -3,9 +3,11 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { join } from 'node:path';
+import { aelioHttpUrl, aelioWsUrl, resolveAelioPort } from './lib/aelio-port.mjs';
 
 const root = process.cwd();
-const baseUrl = process.env.AELIO_SERVER_URL ?? 'http://127.0.0.1:3000';
+const serverPort = resolveAelioPort();
+const baseUrl = process.env.AELIO_SERVER_URL ?? aelioHttpUrl();
 const results = [];
 
 function record(name, status, detail = '') {
@@ -81,6 +83,7 @@ let sdk = null;
 const serverEnv = {
   AELIO_CONFIG: join(root, 'config.yaml'),
   AELIO_SDK_SECRET: process.env.AELIO_SDK_SECRET ?? 'change-me-in-production',
+  AELIO_PORT: String(serverPort),
   AELIO_TEST_MODE: '1',
   AELIO_DIAGNOSTICS: '1',
   AELIO_MIGRATIONS_PATH: join(root, 'packages/db/drizzle'),
@@ -102,7 +105,7 @@ function spawnSdk(stdio = 'pipe') {
     env: {
       ...process.env,
       AELIO_SDK_SECRET: serverEnv.AELIO_SDK_SECRET,
-      AELIO_SERVER_URL: 'ws://127.0.0.1:3000',
+      AELIO_SERVER_URL: aelioWsUrl(),
     },
   });
 }

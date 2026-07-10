@@ -1,4 +1,6 @@
-const baseUrl = process.env.AELIO_SERVER_URL ?? 'http://127.0.0.1:3000';
+import { aelioHttpUrl } from './lib/aelio-port.mjs';
+
+const baseUrl = process.env.AELIO_SERVER_URL ?? aelioHttpUrl();
 const phone = '919876543210';
 
 const webhookPayload = {

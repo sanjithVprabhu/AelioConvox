@@ -76,7 +76,7 @@ aelio.expose(
 
 await aelio.listen({
   secret: process.env.AELIO_SDK_SECRET ?? 'change-me-in-production',
-  url: process.env.AELIO_SERVER_URL ?? 'ws://127.0.0.1:3000',
+  url: process.env.AELIO_SERVER_URL ?? `ws://127.0.0.1:${process.env.AELIO_PORT ?? '3010'}`,
 });
 
 app.get('/health', (_req, res) => {

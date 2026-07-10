@@ -13,6 +13,7 @@ import { createServer } from 'node:net';
 import { existsSync, copyFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { DEFAULT_AELIO_PORT, resolveAelioPort } from './lib/aelio-port.mjs';
 
 const root = process.cwd();
 
@@ -141,17 +142,17 @@ if (needsBuild()) {
 
 // ── Start services ──────────────────────────────────────────────────────────
 
-const serverPort = Number(process.env.AELIO_SERVER_PORT ?? 3000);
+const serverPort = resolveAelioPort();
 if (!(await isPortFree(serverPort))) {
   fail(
-    `port ${serverPort} is in use — stop the other process (lsof -i :${serverPort}) or set AELIO_SERVER_PORT`,
+    `port ${serverPort} is in use — stop the other process (lsof -i :${serverPort}) or set AELIO_PORT`,
   );
 }
 
 const examplePort =
   process.env.PORT !== undefined
     ? Number(process.env.PORT)
-    : await pickPort([8080, 8082, 8090, 8091]);
+    : await pickPort([8080, 8083, 8084, 8085, 8086, 8087, 8088, 8089, 8092, 8093, 9000, 9001]);
 
 if (examplePort !== 8080) {
   log(
@@ -164,6 +165,7 @@ const childEnv = {
   ...process.env,
   AELIO_CONFIG: resolvedConfig,
   AELIO_SDK_SECRET: secret,
+  AELIO_PORT: String(serverPort),
   AELIO_SERVER_URL: process.env.AELIO_SERVER_URL ?? `ws://127.0.0.1:${serverPort}`,
   PORT: String(examplePort),
 };
@@ -233,9 +235,10 @@ await waitForSdkReady();
 
 console.log('\n────────────────────────────────────────────────────────');
 console.log('  Aelio is running');
-console.log('  Chat demo:    http://localhost:3000/demo.html');
-console.log('  Health:       http://localhost:3000/health');
-console.log('  Ready:        http://localhost:3000/ready');
+console.log(`  Chat demo:    http://localhost:${serverPort}/demo.html`);
+console.log(`  Health:       http://localhost:${serverPort}/health`);
+console.log(`  Ready:        http://localhost:${serverPort}/ready`);
+console.log(`  Port:         ${serverPort} (set AELIO_PORT to change; default ${DEFAULT_AELIO_PORT})`);
 console.log('  Config:       ' + resolvedConfig);
 console.log('  LLM:          mock (edit config.yaml or .env for a real provider)');
 console.log('  Stop:         Ctrl+C');
