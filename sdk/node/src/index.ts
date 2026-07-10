@@ -383,6 +383,13 @@ export class Aelio {
 
     if (message.type === 'send') {
       await this.handleSend(message);
+      return;
+    }
+
+    if (message.type === 'error') {
+      // A protocol-level complaint from the server (e.g. a malformed frame we
+      // sent). Surface it so integrators can see why a message had no effect.
+      console.warn(`[aelio-sdk] server error [${message.code}]: ${message.message}`);
     }
   }
 

@@ -1,9 +1,44 @@
 # Aelio-Convox — Bug List & Fix Tracker
 
-> **Last updated:** 2026-07-09  
+> **Last updated:** 2026-07-10  
 > **Purpose:** Track open bugs, security issues, and improvement items for end-to-end system fixes.
 
 Use this file alongside [fix-log.md](./fix-log.md) (already-fixed bugs) and [project-documentation.md](./project-documentation.md) (architecture reference).
+
+---
+
+## ⚠️ Reconciliation (2026-07-10) — this file over-reported "fixed"
+
+A line-by-line code audit ([issues-list.md](./issues-list.md)) found that **many
+BUG-* entries below marked "Fixed" were never present in code** (documentation
+drift). Treat [issues-list.md](./issues-list.md) as the **authoritative open-work
+tracker**, not the "0 open" summary below.
+
+**Genuinely fixed on 2026-07-10 (verified in code, with tests):**
+
+| ID | What was actually broken → now fixed | Commit |
+|----|--------------------------------------|--------|
+| BUG-002 / SEC-008 | Default SDK secret is now refused at boot in `NODE_ENV=production` | `491eaf0` |
+| BUG-010 / SEC-002 | Telemetry JSON APIs now require the SDK secret (Bearer); timing-safe compare | `d138187` |
+| BUG-005 / SEC-004 | WhatsApp HMAC now signs the **raw** request bytes (content-type parser), not a re-serialized copy | `d138187` |
+| SEC-003 / SEC-005 | WhatsApp GET requires `verify_token`; live Meta channel rejects unsigned inbound | `491eaf0`, `d138187` |
+| BUG-009 / SEC-006 | `/auth/magic-link` now rate-limited per-IP + per-email | `d138187` |
+| BUG-038 / SDK-001 | Node SDK warns (not silent) when sending while disconnected | `d138187` |
+| BUG-011 | SDK route returns a protocol `{type:'error'}` frame on bad input; SDK surfaces it | *(this session)* |
+| BUG-043 | Secret comparison is now constant-time (`server/src/auth.ts`) | `d138187` |
+| SEC-007 | `AELIO_WEB_ALLOWED_ORIGINS` env restricts widget origins without rebuilding | `d138187` |
+| BUG-024 | Per-customer/channel turn serialization via `withSessionLock` in `processTurn` | *(harness work)* |
+| HAR-003/004/008/012, CON-006 | See [issues-list.md Resolved](./issues-list.md#resolved) | `83e9850`, `4874df3` |
+
+**Still open (claimed "fixed" here but NOT in code — verify in issues-list.md):**
+SEC-001 (widget identity binding), BUG-018 (widget Confirm/Cancel buttons),
+BUG-026 (`requeueStaleJobs`), BUG-029/030 (SDK connection cap + register
+timeout), BUG-013 (SDK `set_state` ack), BUG-015 (inbound dedup fallback),
+BUG-036 (`/ready` catalog redaction), plus the rest tracked in
+[issues-list.md](./issues-list.md).
+
+> The historical "Fixed in Pass 1/2" tables below are **retained as-claimed but
+> unverified** — do not trust them without checking the code or issues-list.md.
 
 ---
 
@@ -27,7 +62,12 @@ Use this file alongside [fix-log.md](./fix-log.md) (already-fixed bugs) and [pro
 
 ## Summary
 
-| Category | Open | Fixed (see fix-log) |
+> ⚠️ **This "0 open / 49 fixed" table is inaccurate** — see the Reconciliation
+> banner above and [issues-list.md](./issues-list.md) for the real open count
+> (~89, of which the security-critical subset was fixed 2026-07-10). Kept here
+> as the original (unverified) claim.
+
+| Category | Open (claimed) | Fixed (claimed) |
 |----------|------|---------------------|
 | Security | 0 | 10 |
 | Correctness / Race Conditions | 0 | 15 |
@@ -36,7 +76,7 @@ Use this file alongside [fix-log.md](./fix-log.md) (already-fixed bugs) and [pro
 | SDK / Server Lifecycle | 0 | 4 |
 | Documentation | 0 | 3 |
 | Testing Gaps | 0 | 2 |
-| **Total Open** | **0** | **49 fixed** |
+| **Total (claimed)** | **0 open** | **49 "fixed"** |
 
 ---
 
