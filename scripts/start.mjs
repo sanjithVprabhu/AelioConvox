@@ -9,6 +9,7 @@
  * to customize secrets and provider keys.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
 import { existsSync, copyFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -61,6 +62,32 @@ function needsBuild() {
   );
 }
 
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once('error', (error) => {
+      if (error?.code === 'EADDRINUSE') {
+        resolve(false);
+        return;
+      }
+      fail(`cannot probe port ${port}: ${error?.message ?? error}`);
+    });
+    probe.once('listening', () => {
+      probe.close(() => resolve(true));
+    });
+    probe.listen(port, '127.0.0.1');
+  });
+}
+
+async function pickPort(preferred) {
+  for (const port of preferred) {
+    if (await isPortFree(port)) {
+      return port;
+    }
+  }
+  fail(`no free port in [${preferred.join(', ')}] — stop conflicting processes (e.g. docker stop aelio-sunjet-1)`);
+}
+
 // ── Prerequisites ───────────────────────────────────────────────────────────
 
 const nodeMajor = Number(process.versions.node.split('.')[0]);
@@ -98,15 +125,47 @@ if (!existsSync(join(root, 'node_modules'))) {
 if (needsBuild()) {
   log('setup', 'building packages and widget…');
   runSync('pnpm', ['build']);
+} else {
+  // Server and SDK import compiled workspace packages (e.g. @aelio/core → dist/).
+  // Turbo rebuilds only what changed; without this, editing packages/*/src leaves
+  // stale dist and the server crashes on missing exports.
+  log('setup', 'building workspace packages (server + SDK deps)…');
+  runSync('pnpm', [
+    'turbo',
+    'run',
+    'build',
+    '--filter=@aelio/server^...',
+    '--filter=@aelio/sdk',
+  ]);
 }
 
 // ── Start services ──────────────────────────────────────────────────────────
+
+const serverPort = Number(process.env.AELIO_SERVER_PORT ?? 3000);
+if (!(await isPortFree(serverPort))) {
+  fail(
+    `port ${serverPort} is in use — stop the other process (lsof -i :${serverPort}) or set AELIO_SERVER_PORT`,
+  );
+}
+
+const examplePort =
+  process.env.PORT !== undefined
+    ? Number(process.env.PORT)
+    : await pickPort([8080, 8082, 8090, 8091]);
+
+if (examplePort !== 8080) {
+  log(
+    'setup',
+    `port 8080 busy (often leftover aelio-sunjet-1) — example SDK will use :${examplePort}`,
+  );
+}
 
 const childEnv = {
   ...process.env,
   AELIO_CONFIG: resolvedConfig,
   AELIO_SDK_SECRET: secret,
-  AELIO_SERVER_URL: process.env.AELIO_SERVER_URL ?? 'ws://127.0.0.1:3000',
+  AELIO_SERVER_URL: process.env.AELIO_SERVER_URL ?? `ws://127.0.0.1:${serverPort}`,
+  PORT: String(examplePort),
 };
 
 const procs = [];
@@ -135,9 +194,10 @@ async function waitFor(url, attempts = 60) {
 }
 
 async function waitForSdkReady(attempts = 60) {
+  const readyUrl = `http://127.0.0.1:${serverPort}/ready`;
   for (let i = 0; i < attempts; i += 1) {
     try {
-      const response = await fetch('http://127.0.0.1:3000/ready');
+      const response = await fetch(readyUrl);
       if (response.ok) {
         const body = await response.json();
         const functions = body.sdk?.functions ?? [];
@@ -162,8 +222,10 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 log('boot', 'starting Aelio server…');
-run('server', 'pnpm', ['--filter', '@aelio/server', 'dev'], root);
-await waitFor('http://127.0.0.1:3000/health');
+// Use dev:once (no file watchers) — tsx watch hits ENOSPC when IDE/tsserver
+// processes exhaust the kernel inotify limit on Linux.
+run('server', 'pnpm', ['--filter', '@aelio/server', 'dev:once'], root);
+await waitFor(`http://127.0.0.1:${serverPort}/health`);
 
 log('boot', 'starting example SDK backend…');
 run('sdk', 'pnpm', ['--filter', 'aelio-example-express', 'start'], root);

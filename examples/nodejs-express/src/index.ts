@@ -83,6 +83,7 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(8080, () => {
-  console.log('Example SaaS backend listening on :8080 with Aelio SDK connected');
+const port = Number(process.env.PORT ?? 8080);
+app.listen(port, () => {
+  console.log(`Example SaaS backend listening on :${port} with Aelio SDK connected`);
 });
