@@ -12,6 +12,7 @@ import { executePlan, newExecutorState, hashArgs, type ExecOutcome } from './exe
 import { runPlanner } from './planner.js';
 import { runSynthesis } from './synthesis.js';
 import { rehydrateSuspension, toSuspensionPayload } from './resume.js';
+import { applyStateTransition } from './transitions.js';
 import type { SuspensionStore } from './suspension.js';
 import type { HarnessTracer, TraceKind } from './traces.js';
 import {
@@ -31,6 +32,7 @@ export { resolvePlan, nextWave } from './resolver.js';
 export { executePlan, newExecutorState, hashArgs } from './executor.js';
 export { evaluateGate } from './gates.js';
 export { rehydrateSuspension, toSuspensionPayload } from './resume.js';
+export { applyStateTransition } from './transitions.js';
 
 export type HarnessRunInput = {
   database?: AelioDatabase;
@@ -217,6 +219,24 @@ function buildExecutorDeps(
     ...(input.database ? { database: input.database } : {}),
     ...(input.internalCustomerId ? { internalCustomerId: input.internalCustomerId } : {}),
     trace: (kind: 'wave' | 'gate' | 'repair', payload: unknown) => trace(kind, payload),
+    // Declarative lifecycle transitions on tool success. context.customerId is
+    // the external id (what upsertCustomerLifecycleState keys on).
+    ...(input.database && input.state?.transitions?.length
+      ? {
+          onToolSuccess: async (toolName: string) => {
+            const applied = await applyStateTransition({
+              db: input.database!.db,
+              externalId: input.context.customerId,
+              state: input.state,
+              toolName,
+              presentFields: input.presentFields ?? new Set<string>(),
+            });
+            if (applied) {
+              trace('repair', { transitionedTo: applied.transitionedTo, afterTool: toolName });
+            }
+          },
+        }
+      : {}),
   };
 }
 

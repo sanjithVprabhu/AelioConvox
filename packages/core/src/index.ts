@@ -188,6 +188,7 @@ export {
   evaluateGate,
   rehydrateSuspension,
   toSuspensionPayload,
+  applyStateTransition,
   hashArgs,
   type HarnessRunInput,
 } from './harness/index.js';

@@ -186,6 +186,27 @@ console.log('\n[9] Resume guard: a changed registry hash discards the stale plan
   assert(!resumed.ok && resumed.reason === 'stale_registry', 'stale registry → discard');
 }
 
+console.log('\n[10] State transition: onToolSuccess fires the declared transition');
+{
+  const state = {
+    id: 'cart', description: 'cart',
+    transitions: [{ on_tool_success: 'create_order', to: 'awaiting_payment' }],
+  };
+  const bound = [{ instruction: { id: 'a', capability: 'order' }, tool: writeTool('create_order') }];
+  const res = resolvePlan('order', undefined, bound);
+  const sdk = fakeSdk({ create_order: () => ({ orderId: 'O-1' }) });
+  const execState = newExecutorState();
+  const transitions = [];
+  await executePlan(res.plan, execState, {
+    sdk, context: ctx, safety: baseSafety, budgets: budgets(), state,
+    onToolSuccess: async (toolName) => {
+      const t = state.transitions.find((x) => x.on_tool_success === toolName);
+      if (t) transitions.push(t.to);
+    },
+  });
+  assert(transitions.length === 1 && transitions[0] === 'awaiting_payment', 'transitioned to awaiting_payment after create_order');
+}
+
 // ---------------------------------------------------------------------------
 if (failures > 0) {
   console.error(`\n${failures} harness assertion(s) failed`);

@@ -72,6 +72,8 @@ export type ExecutorDeps = {
   internalCustomerId?: string;
   /** Called after each rock wave with the just-completed instructions' results. */
   onWaveComplete?: (completed: ResolvedInstruction[], state: ExecutorState) => void;
+  /** Applied after a successful invoke — used for declarative state transitions. */
+  onToolSuccess?: (toolName: string, args: Record<string, unknown>, result: unknown) => Promise<void>;
   trace?: (kind: 'wave' | 'gate' | 'repair', payload: unknown) => void;
 };
 
@@ -295,6 +297,10 @@ async function runInstruction(
       durationMs: invokeResult.durationMs,
       errorMessage: invokeResult.error,
     });
+  }
+
+  if (invokeResult.ok && deps.onToolSuccess) {
+    await deps.onToolSuccess(instruction.tool.name, invokeArgs, invokeResult.data);
   }
 
   return { kind: 'complete' };
