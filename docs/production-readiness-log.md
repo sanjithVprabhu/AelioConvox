@@ -25,7 +25,8 @@ Use this file when running real-LLM conversations, live Sunjet tests, or manual 
 |------|--------|--------------|
 | Unit + mock integration | 🟢 | 49 bugs fixed (Passes 1–2); `AELIO_TEST_MODE=1 pnpm test:all` + `pnpm test:harness` pass on **mock LLM** |
 | Real-LLM planning quality | 🔴 | **Single most important gap.** Mock keyword-matches (`packages/llm/src/mock.ts`); cannot validate `emit_turn` plans from Claude/GPT/Gemini |
-| Provider forced-tool mappings | 🟡 | Anthropic `tool_choice`, OpenAI `tool_choice`, Gemini `functionCallingConfig.mode: ANY` coded — **not run live** against chosen provider |
+| Provider forced-tool mappings | 🟡 | Anthropic `tool_choice`, OpenAI `tool_choice`, Gemini `functionCallingConfig.mode: ANY` coded; construction + config selection now covered by `pnpm test:llm`. Still **not run live** (structured-output compliance) against a real provider |
+| 3-provider configurability | 🟢 | `@aelio/llm` split into `providers/` + `embeddings/`; Anthropic/OpenAI/Gemini selected purely by config (`config.{anthropic,openai,gemini}.yaml`); missing keys fail loudly at boot; `pnpm test:llm` green |
 | Sunjet/Astrolobe E2E | 🟡 | `pnpm test:sunjet` exists but requires live `ll-server`; default `sunjet.enabled: false` — TS mirror, tool-graph search, trace firehose only tested against **in-process fallback** |
 | Multi-turn recoil / confirmation (browser) | 🟡 | Covered by unit tests (`test-harness-executor.mjs`) + mock phase tests — **no human widget click-through** |
 | Load / concurrency | 🔴 | Per-session turn lock logic tested; no multi-session load, no SDK invoke storm, no Sunjet backpressure |
@@ -233,6 +234,7 @@ Log template (copy into Session Logs below):
 
 | Test | Command | LLM | Sunjet | Harness | Browser |
 |------|---------|-----|--------|---------|---------|
+| LLM provider wiring | `pnpm test:llm` | none | off | — | — |
 | Phase 2 widget | `pnpm test:phase2` | mock | off | on | WS script |
 | Phase 4 confirmation | `pnpm test:phase4:confirmation` | mock | off | on | WS script |
 | Phase 5 memory | `pnpm test:phase5` | mock | off | on | — |
@@ -276,7 +278,18 @@ Log template (copy into Session Logs below):
 
 | ID | Date | Summary | Fix | Verified |
 |----|------|---------|-----|----------|
-| — | — | *None yet — populate after smoke test* | — | — |
+| LLM-ORG | 2026-07-10 | `@aelio/llm` reorganized into `providers/` + `embeddings/`; three chat providers config-selectable | `a628463` | `pnpm test:llm` |
+| HAR-003 | 2026-07-10 | Tool failure halts before a dependent step (no hallucinated success) | `83e9850` | `test:harness` [13] |
+| HAR-004 | 2026-07-10 | `presentFields` wired from customer metadata → harness gates | `83e9850` | build + typecheck |
+| HAR-008 | 2026-07-10 | `maxTurnTokens` enforced via `BudgetMeter.noteUsage` on all LLM calls | `83e9850` | build + typecheck |
+| HAR-012 | 2026-07-10 | `hashArgs` key-order canonicalized (idempotency dedup) | `83e9850` | `test:harness` [14] |
+| CON-006 | 2026-07-10 | Confirmation unified into the suspension store (no dual path) | `4874df3` | `test:harness` [12], phase-4 |
+| SEC-003 | 2026-07-10 | WhatsApp GET verify requires `verify_token` | `491eaf0` | code review |
+| SEC-008 | 2026-07-10 | Default SDK secret refused in `NODE_ENV=production` at boot | `491eaf0` | code review |
+
+> Still **not** run: the live real-LLM smoke (HAR-001) — blocked without a working
+> provider key. Scenarios A–D below remain the highest-value next step; nothing in
+> this session substitutes for one real-provider pass.
 
 ---
 

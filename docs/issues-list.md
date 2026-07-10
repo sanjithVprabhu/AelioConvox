@@ -31,12 +31,13 @@
 
 | Severity | Count | Ship-blocking? |
 |----------|-------|----------------|
-| **P0** | 12 | Yes — security + planner unproven |
-| **P1** | 28 | Yes for production hardening |
+| **P0** | 8 (was 12) | Yes — security + planner unproven |
+| **P1** | 25 (was 28) | Yes for production hardening |
 | **P2** | 39 | Recommended before scale |
 | **P3** | 18 | Tech debt / polish |
 | **Doc drift** | 15+ | Misleading if not corrected |
-| **Total open** | **96** | |
+| **Fixed 2026-07-10** | **7** | SEC-003/008, HAR-003/004/008/012, CON-006 (see Resolved) |
+| **Total open** | **~89** | |
 
 ### Smoke test session (2026-07-10)
 
@@ -60,12 +61,12 @@
 |----|-------|----------|-------|
 | SEC-001 | **Widget customer impersonation** — any `customerId` accepted on `init`; `authToken` logged but never verified | `server/src/routes/widget.ts:96–129` | Magic link verify returns identity but issues no bound session credential |
 | SEC-002 | **Telemetry APIs unauthenticated** — turn calls, Sunjet events expose conversation data | `server/src/routes/telemetry.ts:14–78` | `/telemetry` HTML also public |
-| SEC-003 | **WhatsApp webhook verify bypass** — if `verify_token` unset, `undefined === undefined` subscribes webhook | `server/src/routes/whatsapp.ts:20` | `verify_token` optional in config schema |
+| ✅ SEC-003 | **WhatsApp webhook verify bypass** — if `verify_token` unset, `undefined === undefined` subscribes webhook | `server/src/routes/whatsapp.ts:20` | `verify_token` optional in config schema |
 | SEC-004 | **WhatsApp HMAC on re-serialized JSON** — not raw body; signatures fail or `app_secret` disabled | `server/src/routes/whatsapp.ts:28–34` | Meta requires byte-identical body |
 | SEC-005 | **WhatsApp POST unsigned when `app_secret` unset** — fake inbound messages accepted | `server/src/routes/whatsapp.ts:30` | Entire HMAC block gated on secret |
 | SEC-006 | **Magic link issuance unauthenticated** — no SDK secret, no rate limit, email bombing | `server/src/routes/auth.ts:17–39` | Returns full URL (token in query) |
 | SEC-007 | **Production Docker ships `allowed_origins: ["*"]`** | `config.docker.yaml:17–18` | Any site can embed widget |
-| SEC-008 | **Default SDK secret not rejected at boot** — `change-me-in-production` works in `NODE_ENV=production` | `server/src/config.ts`, `server/src/main.ts` | docker-compose defaults to it |
+| ✅ SEC-008 | **Default SDK secret not rejected at boot** — `change-me-in-production` works in `NODE_ENV=production` | `server/src/config.ts`, `server/src/main.ts` | docker-compose defaults to it |
 
 ### Harness / LLM (production confidence)
 
@@ -73,8 +74,8 @@
 |----|-------|----------|-------|
 | HAR-001 | **Real-LLM planning quality unproven** — mock uses keyword heuristics only | `packages/llm/src/mock.ts` | Cannot validate `emit_turn` from Claude/GPT/Gemini |
 | HAR-002 | **Provider forced-tool mappings not live-tested** | `packages/llm/src/{anthropic,openai-compatible,gemini}.ts` | `toolChoice: { type: 'tool', name: 'emit_turn' }` per provider |
-| HAR-003 | **Failed SDK invoke still returns `complete`** — executor continues plan after tool error | `packages/core/src/harness/executor.ts:286–320` | Downstream steps may run with missing outputs; synthesis may hallucinate success |
-| HAR-004 | **`presentFields` never wired from turn** — lifecycle `requires_fields` guards always empty | `packages/core/src/harness/gates.ts`, `packages/core/src/runtime/turn.ts` | `HarnessRunInput.presentFields` optional; no caller sets it |
+| ✅ HAR-003 | **Failed SDK invoke still returns `complete`** — executor continues plan after tool error | `packages/core/src/harness/executor.ts:286–320` | Downstream steps may run with missing outputs; synthesis may hallucinate success |
+| ✅ HAR-004 | **`presentFields` never wired from turn** — lifecycle `requires_fields` guards always empty | `packages/core/src/harness/gates.ts`, `packages/core/src/runtime/turn.ts` | `HarnessRunInput.presentFields` optional; no caller sets it |
 
 ### Deployment
 
@@ -105,7 +106,7 @@
 | CON-003 | **Widget WS no per-socket turn serialization** — rapid messages interleave | `server/src/routes/widget.ts:79–206` |
 | CON-004 | **Session lock in-process only** — multi-instance races | `packages/core/src/runtime/session-lock.ts` |
 | CON-005 | **SDK connections wiped on server restart** | `server/src/sdk-bridge.ts:54` |
-| CON-006 | **Dual confirmation paths** — legacy `pendingConfirmation` in `turn.ts` runs before harness suspension resume | `packages/core/src/runtime/turn.ts:306–365` |
+| ✅ CON-006 | **Dual confirmation paths** — legacy `pendingConfirmation` in `turn.ts` runs before harness suspension resume | `packages/core/src/runtime/turn.ts:306–365` |
 
 ### Harness (logic & persistence)
 
@@ -114,7 +115,7 @@
 | HAR-005 | **`harness_ledger` table never written** — idempotency in-memory only; crash = duplicate writes | `packages/db/drizzle/0004_odd_ezekiel.sql`, `packages/core/src/harness/executor.ts` |
 | HAR-006 | **Segment replan not implemented** — `ExecOutcome` has `replan` kind but executor never returns it | `packages/core/src/harness/executor.ts:46` |
 | HAR-007 | **Resolve failure does not replan** — comment promises replan; returns static apology | `packages/core/src/harness/index.ts:166–173` |
-| HAR-008 | **`BudgetMeter.noteUsage()` never called** — `maxTurnTokens` unenforced | `packages/core/src/harness/budgets.ts:60`, LLM paths |
+| ✅ HAR-008 | **`BudgetMeter.noteUsage()` never called** — `maxTurnTokens` unenforced | `packages/core/src/harness/budgets.ts:60`, LLM paths |
 | HAR-009 | **Hard policies prompt-only** — `severity: 'hard'` never evaluated in gates | `packages/core/src/lifecycle/index.ts:200`, `packages/core/src/harness/gates.ts` |
 | HAR-010 | **Sunjet/Astrolobe E2E untested from TS harness path** — mirror, tool search, traces only hit in-process fallback | `packages/core/src/lighthouse/mirror.ts`, default `sunjet.enabled: false` |
 
@@ -180,7 +181,7 @@
 | ID | Issue | Location |
 |----|-------|----------|
 | HAR-011 | Binder ambiguity unresolved — no disambiguation LLM | `packages/core/src/harness/binder.ts` |
-| HAR-012 | `hashArgs` uses `JSON.stringify` — key order breaks idempotency dedup | `packages/core/src/harness/executor.ts` |
+| ✅ HAR-012 | `hashArgs` uses `JSON.stringify` — key order breaks idempotency dedup | `packages/core/src/harness/executor.ts` |
 | HAR-013 | Suspension `clear()` does not mirror delete to Sunjet | `packages/core/src/harness/suspension.ts` |
 | HAR-014 | Binding cache table defined but not used | `Blueprint/harness-spec.md`, `server/src/config.ts` |
 | HAR-015 | `transform` gate verdict — enum exists, no built-in rules | `packages/core/src/harness/gates.ts` |
@@ -381,9 +382,24 @@
 
 ## Resolved
 
-| ID | Date | Fix | Verified |
-|----|------|-----|----------|
-| — | — | *Populate as issues are closed* | — |
+| ID | Date | Fix | Commit | Verified |
+|----|------|-----|--------|----------|
+| SEC-003 | 2026-07-10 | WhatsApp GET verify requires `verify_token` set — closes `undefined === undefined` subscribe bypass | `491eaf0` | Build + code review |
+| SEC-008 | 2026-07-10 | `main.ts` refuses to boot in `NODE_ENV=production` with the default/empty SDK secret; warns in dev | `491eaf0` | Build + code review |
+| HAR-003 | 2026-07-10 | Failed tool whose output a later step needs now HALTS the plan (blocked, non-fatal → reason surfaced) instead of continuing/hallucinating; failures without dependents stay best-effort | `83e9850` | `test:harness` [13] |
+| HAR-004 | 2026-07-10 | `presentFields` wired end-to-end — `getCustomerPresentFields` (customer metadata keys) → `turn.ts` → harness gates, so `requires_fields` guards evaluate | `83e9850` | Build + typecheck |
+| HAR-008 | 2026-07-10 | `maxTurnTokens` enforced — planner/synthesis return usage; harness feeds every LLM call into `BudgetMeter.noteUsage`; feasibility replan gated on token + clock budgets | `83e9850` | Build + typecheck |
+| HAR-012 | 2026-07-10 | `hashArgs` canonicalizes (recursively sorts) keys — `{a,b}` and `{b,a}` dedup as one call; idempotency no longer breaks on key order | `83e9850` | `test:harness` [14] |
+| CON-006 | 2026-07-10 | Confirmation unified into the suspension store; the legacy `pendingConfirmation` path only runs for the legacy tool loop (harness owns it via the store, no dual-path conflict) | `4874df3` | `test:harness` [12], phase-4 |
+| LLM-ORG | 2026-07-10 | `@aelio/llm` reorganized into `providers/` + `embeddings/`; three chat providers (Anthropic/OpenAI/Gemini) config-selectable with loud key errors; `test:llm` proves construction | `a628463` | `test:llm` |
+
+> **Fixed this session (2026-07-10):** SEC-003, SEC-008, HAR-003, HAR-004, HAR-008,
+> HAR-012, CON-006, plus the `@aelio/llm` clean-separation refactor. All verified
+> by `pnpm build && pnpm typecheck && AELIO_TEST_MODE=1 pnpm test:all` (which now
+> also runs `test:llm` + the 14-check `test:harness`). **Remaining P0/P1 items
+> below are still open** — most notably the real-LLM smoke (HAR-001/002),
+> widget-identity binding (SEC-001), telemetry auth (SEC-002), and the remaining
+> WhatsApp HMAC hardening (SEC-004/005).
 
 ---
 
