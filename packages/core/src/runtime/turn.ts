@@ -366,14 +366,24 @@ async function executeTurn(
 
   // Semantic response cache: serve a near-identical, recent, no-tool reply for
   // this customer without calling the LLM. Only no-tool replies are cached, so a
-  // hit never returns stale account data.
+  // hit never returns stale account data. Skipped when a plan is parked awaiting
+  // this customer's input — that message is an answer to resume the plan, not a
+  // fresh question, and must reach the harness even if it resembles a cached one.
+  // (The parked-plan probe only runs when the cache is on, so the default path
+  // pays no extra read.)
   if (input.cache?.enabled) {
-    const cached = await lookupCachedResponse({
-      database: input.database,
-      customerId,
-      message: input.message,
-      threshold: input.cache.similarityThreshold,
-    });
+    const hasParkedPlan =
+      input.harness?.enabled && input.suspensionStore
+        ? (await input.suspensionStore.get(session.id)) !== null
+        : false;
+    const cached = hasParkedPlan
+      ? null
+      : await lookupCachedResponse({
+          database: input.database,
+          customerId,
+          message: input.message,
+          threshold: input.cache.similarityThreshold,
+        });
     if (cached) {
       await persistMessage(input, db, {
         sessionId: session.id,

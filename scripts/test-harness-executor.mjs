@@ -207,6 +207,20 @@ console.log('\n[10] State transition: onToolSuccess fires the declared transitio
   assert(transitions.length === 1 && transitions[0] === 'awaiting_payment', 'transitioned to awaiting_payment after create_order');
 }
 
+console.log('\n[11] Blocked outcome flags a policy denial as fatal (reason must reach the user)');
+{
+  const bound = [
+    { instruction: { id: 'a', capability: 'read' }, tool: readTool('safe_read') },
+    { instruction: { id: 'b', capability: 'nuke' }, tool: { name: 'nuke', description: 'nuke', params: {}, safety: 'destructive' } },
+  ];
+  const res = resolvePlan('mixed', undefined, bound);
+  const sdk = fakeSdk({});
+  const state = newExecutorState();
+  const outcome = await executePlan(res.plan, state, { sdk, context: ctx, safety: baseSafety, budgets: budgets() });
+  assert(outcome.kind === 'blocked' && outcome.fatal === true, 'destructive tool → blocked+fatal');
+  assert(typeof outcome.reason === 'string' && outcome.reason.length > 0, 'carries a user-facing reason');
+}
+
 // ---------------------------------------------------------------------------
 if (failures > 0) {
   console.error(`\n${failures} harness assertion(s) failed`);

@@ -39,7 +39,10 @@ export type ExecOutcome =
       pendingConfirmation?: PendingConfirmation;
       question: string;
     }
-  | { kind: 'blocked'; reason: string }
+  // `fatal` = a policy/state denial whose reason IS the user-facing message
+  // (must be surfaced even when earlier steps produced a ledger). Non-fatal =
+  // a budget/stall stop, where a graceful synthesis over the ledger reads better.
+  | { kind: 'blocked'; reason: string; fatal: boolean }
   | { kind: 'replan'; afterInstruction: string; surprise: string };
 
 export type ExecutorState = {
@@ -138,7 +141,7 @@ export async function executePlan(
     if (wave.length === 0) {
       // Nothing runnable but not everything done → unsatisfiable deps (defensive;
       // the resolver's cycle check should already have caught structural cases).
-      return { kind: 'blocked', reason: 'plan stalled: unresolved dependencies' };
+      return { kind: 'blocked', reason: 'plan stalled: unresolved dependencies', fatal: false };
     }
 
     const reads = wave.filter((i) => i.effect === 'read');
@@ -204,7 +207,7 @@ async function runInstruction(
         errorMessage: verdict.reason,
       });
     }
-    return { kind: 'blocked', reason: verdict.reason };
+    return { kind: 'blocked', reason: verdict.reason, fatal: true };
   }
 
   if (verdict.verdict === 'needs_info') {
@@ -266,7 +269,7 @@ async function runInstruction(
 
   const budgetCheck = deps.budgets.noteToolCall(instruction.tool.name, argsHash);
   if (!budgetCheck.ok) {
-    return { kind: 'blocked', reason: budgetCheck.reason };
+    return { kind: 'blocked', reason: budgetCheck.reason, fatal: false };
   }
 
   const invokeResult = await deps.sdk.invoke(instruction.tool.name, invokeArgs, deps.context);

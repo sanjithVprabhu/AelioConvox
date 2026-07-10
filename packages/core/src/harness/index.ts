@@ -13,6 +13,7 @@ import { runPlanner } from './planner.js';
 import { runSynthesis } from './synthesis.js';
 import { rehydrateSuspension, toSuspensionPayload } from './resume.js';
 import { applyStateTransition } from './transitions.js';
+import { isDenialMessage } from '../safety/confirmations.js';
 import type { SuspensionStore } from './suspension.js';
 import type { HarnessTracer, TraceKind } from './traces.js';
 import {
@@ -86,6 +87,18 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
   if (input.suspensionStore) {
     const suspended = await input.suspensionStore.get(input.context.sessionId);
     if (suspended && suspended.reason === 'awaiting_info') {
+      // Explicit "never mind / cancel / no" abandons the parked plan rather than
+      // being misread as the answer — critical when the pending arg feeds a
+      // write and its field is a free string that would coerce anything.
+      if (isDenialMessage(input.userMessage)) {
+        await input.suspensionStore.clear(input.context.sessionId);
+        trace('resume', { abandoned: 'user_declined' });
+        return {
+          reply: 'No problem — I’ve set that aside. What would you like to do instead?',
+          toolCallsExecuted: 0,
+          executedToolNames: [],
+        };
+      }
       const resumed = rehydrateSuspension(
         suspended.payload,
         input.userMessage,
@@ -224,15 +237,24 @@ function buildExecutorDeps(
     ...(input.database && input.state?.transitions?.length
       ? {
           onToolSuccess: async (toolName: string) => {
-            const applied = await applyStateTransition({
-              db: input.database!.db,
-              externalId: input.context.customerId,
-              state: input.state,
-              toolName,
-              presentFields: input.presentFields ?? new Set<string>(),
-            });
-            if (applied) {
-              trace('repair', { transitionedTo: applied.transitionedTo, afterTool: toolName });
+            // Best-effort: a transition write must never reject the executor's
+            // wave (which would crash the whole turn) — the tool already ran.
+            try {
+              const applied = await applyStateTransition({
+                db: input.database!.db,
+                externalId: input.context.customerId,
+                state: input.state,
+                toolName,
+                presentFields: input.presentFields ?? new Set<string>(),
+              });
+              if (applied) {
+                trace('repair', { transitionedTo: applied.transitionedTo, afterTool: toolName });
+              }
+            } catch (error) {
+              console.error(
+                '[aelio] state transition failed (tool already ran):',
+                error instanceof Error ? error.message : String(error),
+              );
             }
           },
         }
@@ -289,20 +311,28 @@ async function finishTurn(
   }
 
   if (outcome.kind === 'blocked') {
-    trace('budget', { blocked: outcome.reason });
-    // A policy denial is a real, user-facing reason; a budget stop is not.
-    const reply = state.ledger.length === 0
-      ? outcome.reason
-      : await runSynthesis({
-          llm: input.llm,
-          model: input.model,
-          maxTokens: input.maxTokens,
-          system: input.system,
-          history: input.history,
-          userMessage: input.userMessage,
-          goal,
-          ledger: state.ledger,
-        });
+    trace('budget', { blocked: outcome.reason, fatal: outcome.fatal });
+    // A fatal denial's reason IS the message the user needs ("can't cancel via
+    // chat") — surface it even when earlier steps ran, so it's never swallowed
+    // by a synthesis that only sees the ledger. A non-fatal (budget/stall) stop
+    // reads better as a graceful synthesis over whatever did complete.
+    let reply: string;
+    if (outcome.fatal) {
+      reply = outcome.reason;
+    } else if (state.ledger.length === 0) {
+      reply = outcome.reason;
+    } else {
+      reply = await runSynthesis({
+        llm: input.llm,
+        model: input.model,
+        maxTokens: input.maxTokens,
+        system: input.system,
+        history: input.history,
+        userMessage: input.userMessage,
+        goal,
+        ledger: state.ledger,
+      });
+    }
     return { reply, toolCallsExecuted: state.toolCallsExecuted, executedToolNames: state.executedToolNames };
   }
 
