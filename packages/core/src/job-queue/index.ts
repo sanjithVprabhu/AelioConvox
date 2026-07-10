@@ -72,6 +72,19 @@ export async function completeJob(database: AelioDatabase, jobId: string): Promi
     .where(eq(jobQueue.id, jobId));
 }
 
+/** Reclaim jobs stuck in `processing` longer than `staleAfterMs` (CON-001). */
+export function requeueStaleJobs(database: AelioDatabase, staleAfterMs = 5 * 60_000): number {
+  const cutoff = Date.now() - staleAfterMs;
+  const result = database.sqlite
+    .prepare(
+      `UPDATE job_queue
+       SET status = 'pending', locked_by = NULL, locked_at = NULL
+       WHERE status = 'processing' AND locked_at IS NOT NULL AND locked_at < ?`,
+    )
+    .run(cutoff);
+  return result.changes ?? 0;
+}
+
 export async function failJob(
   database: AelioDatabase,
   jobId: string,

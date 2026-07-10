@@ -1,6 +1,5 @@
 /**
- * Phase 6 — SDK lifecycle catalog: states, policies, flows + setCustomerState.
- * Requires Aelio server + an SDK with lifecycle definitions running.
+ * Phase 6 — SDK lifecycle catalog: states block upgradePlan for onboarding users.
  */
 import WebSocket from 'ws';
 
@@ -90,9 +89,15 @@ setTimeout(async () => {
       }
       if (msg.type === 'message' && msg.role === 'assistant') {
         console.log('[Phase 6] Assistant reply:', msg.content);
+        const blocked =
+          /not available|cannot|can't|blocked|onboarding|not allowed|only help/i.test(msg.content) ||
+          !/upgraded|upgrade complete|plan upgraded/i.test(msg.content);
+        if (!blocked) {
+          throw new Error(`Expected lifecycle gate to block upgradePlan, got: ${msg.content}`);
+        }
         widget.close();
         socket.close();
-        console.log('[Phase 6] PASSED — lifecycle catalog registered and state-scoped turn completed');
+        console.log('[Phase 6] PASSED — lifecycle state blocked upgradePlan');
         process.exit(0);
       }
     });

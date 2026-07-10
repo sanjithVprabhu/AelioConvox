@@ -66,6 +66,7 @@ import { runWithTurnContext } from '../telemetry/turn-calls.js';
 export type ProcessTurnResult = {
   reply: string;
   turnId: string;
+  awaitingConfirmation?: boolean;
 };
 
 export type ProcessTurnInput = {
@@ -564,5 +565,9 @@ async function executeTurn(
     });
   }
 
-  return { reply: loopResult.reply, turnId };
+  return {
+    reply: loopResult.reply,
+    turnId,
+    ...(loopResult.pendingConfirmation ? { awaitingConfirmation: true } : {}),
+  };
 }

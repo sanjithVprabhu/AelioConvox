@@ -7,6 +7,7 @@ import type { SafetyConfig } from '../safety/policy.js';
 import type { SdkBridge } from '../sdk-bridge/types.js';
 import { coerceArgs } from '../runtime/tool-schema.js';
 import { evaluateGate, type GateContext } from './gates.js';
+import { loadLedgerForTurn, persistLedgerEntry } from './ledger.js';
 import { nextWave } from './resolver.js';
 import type { BudgetMeter } from './budgets.js';
 import type {
@@ -82,14 +83,32 @@ export type ExecutorState = {
   toolCallsExecuted: number;
 };
 
-export function newExecutorState(): ExecutorState {
+export function newExecutorState(existingLedger: LedgerEntry[] = []): ExecutorState {
+  const outputs = new Map<string, unknown>();
+  const completed = new Set<string>();
+  for (const entry of existingLedger) {
+    if (entry.status === 'success') {
+      completed.add(entry.instructionId);
+      outputs.set(entry.instructionId, entry.result);
+    }
+  }
   return {
-    ledger: [],
-    completed: new Set(),
-    outputs: new Map(),
+    ledger: [...existingLedger],
+    completed,
+    outputs,
     executedToolNames: [],
     toolCallsExecuted: 0,
   };
+}
+
+/** Hydrate executor state from the DB ledger for a turn (HAR-005). */
+export async function hydrateExecutorState(
+  database: AelioDatabase,
+  sessionId: string,
+  turnId: string,
+): Promise<ExecutorState> {
+  const existing = await loadLedgerForTurn(database, sessionId, turnId);
+  return newExecutorState(existing);
 }
 
 export type ExecutorDeps = {
@@ -101,6 +120,7 @@ export type ExecutorDeps = {
   budgets: BudgetMeter;
   database?: AelioDatabase;
   internalCustomerId?: string;
+  turnId?: string;
   /**
    * Instruction ids the user has already confirmed (a resumed
    * awaiting_confirmation plan). Their needs_approval gate is treated as
@@ -349,6 +369,10 @@ async function runInstruction(
     toolName: instruction.tool.name,
     durationMs: invokeResult.durationMs,
   });
+  const ledgerEntry = state.ledger[state.ledger.length - 1]!;
+  if (deps.database && deps.turnId) {
+    void persistLedgerEntry(deps.database, deps.context.sessionId, deps.turnId, ledgerEntry);
+  }
   if (invokeResult.ok) {
     state.outputs.set(instruction.id, invokeResult.data);
   }

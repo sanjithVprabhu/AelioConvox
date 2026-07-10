@@ -4,6 +4,7 @@ import {
   enqueueJob,
   failJob,
   processTurn,
+  requeueStaleJobs,
   resolveWhatsAppIdentity,
 } from '@aelio/core';
 import { buildTurnInput } from '../turn-options.js';
@@ -13,12 +14,14 @@ const WORKER_ID = 'inbound-worker';
 
 export function startInboundWorker(deps: RuntimeDeps) {
   const interval = setInterval(() => {
-    void (async () => {
-      const job = claimJob(deps.database, 'inbound', WORKER_ID);
-      if (!job) {
-        return;
-      }
+    requeueStaleJobs(deps.database);
 
+    const job = claimJob(deps.database, 'inbound', WORKER_ID);
+    if (!job) {
+      return;
+    }
+
+    void (async () => {
       try {
         const channel = job.payload.channel as string;
         const text = job.payload.text as string;

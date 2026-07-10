@@ -3,6 +3,7 @@ export {
   type ProcessTurnInput,
   type ProcessTurnResult,
 } from './runtime/turn.js';
+export { withSessionLock } from './runtime/session-lock.js';
 export {
   buildLlmPromptSummary,
   createInstrumentedLlm,
@@ -114,7 +115,7 @@ export {
   type CustomerLifecycleMetadata,
   type FlowProgressRecord,
 } from './lifecycle/index.js';
-export { enqueueJob, claimJob, completeJob, failJob, type JobRecord } from './job-queue/index.js';
+export { enqueueJob, claimJob, completeJob, failJob, requeueStaleJobs, type JobRecord } from './job-queue/index.js';
 export {
   embedText,
   embed,
@@ -145,6 +146,11 @@ export {
   type MagicLinkResult,
   type VerifiedMagicLink,
 } from './identity/magic-link.js';
+export {
+  createSessionToken,
+  verifySessionToken,
+  type SessionTokenClaims,
+} from './identity/session-token.js';
 export { logFunctionCall } from './audit/function-calls.js';
 export {
   LighthouseService,

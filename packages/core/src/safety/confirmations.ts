@@ -8,8 +8,8 @@ export type PendingConfirmation = {
   createdAt: number;
 };
 
-const CONFIRM_PATTERN = /^(yes|y|yeah|yep|confirm|proceed|ok|okay|sure|go ahead)\b/i;
-const DENY_PATTERN = /^(no|n|nope|cancel|stop|deny|don't|do not)\b/i;
+const CONFIRM_PATTERN = /^(yes|y|yeah|yep|confirm|proceed|ok|okay|sure|go ahead)$/i;
+const DENY_PATTERN = /^(no|n|nope|cancel|stop|deny|don't|do not)$/i;
 
 export function isConfirmationMessage(message: string): boolean {
   const trimmed = message.trim();

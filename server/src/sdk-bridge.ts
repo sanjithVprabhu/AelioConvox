@@ -29,6 +29,7 @@ type ActiveConnection = {
   canSend: boolean;
   connectedAt: number;
   lastHeartbeatAt: number;
+  registered: boolean;
 };
 
 type PendingInvoke = {
@@ -51,14 +52,13 @@ export class ServerSdkBridge implements SdkBridge {
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     this.deleteConnectionStmt = this.database.sqlite.prepare('DELETE FROM sdk_connections WHERE id = ?');
-    this.database.sqlite.prepare('DELETE FROM sdk_connections').run();
+    // Prune stale rows from prior boots instead of wiping the whole table.
+    const staleCutoff = Date.now() - 2 * 60_000;
+    this.database.sqlite
+      .prepare('DELETE FROM sdk_connections WHERE last_heartbeat_at < ?')
+      .run(staleCutoff);
   }
 
-  /**
-   * Notify on any change to the merged registry (connect, disconnect, function
-   * update). Listeners (Lighthouse) re-hash and decide whether anything
-   * meaningful changed — a reconnect with an identical catalog is a no-op there.
-   */
   onRegistryChange(listener: () => void): () => void {
     this.registryListeners.add(listener);
     return () => this.registryListeners.delete(listener);
@@ -74,9 +74,35 @@ export class ServerSdkBridge implements SdkBridge {
     }
   }
 
-  register(connection: ActiveConnection): void {
-    this.connections.set(connection.id, connection);
-    this.persist(connection);
+  /** Accept a socket before `register` — tracked for register-timeout enforcement. */
+  registerPending(connectionId: string, socket: WebSocket): void {
+    const now = Date.now();
+    this.connections.set(connectionId, {
+      id: connectionId,
+      socket,
+      functions: [],
+      states: [],
+      policies: [],
+      flows: [],
+      persona: null,
+      productBrief: null,
+      sdkVersion: '',
+      language: 'node',
+      canSend: false,
+      connectedAt: now,
+      lastHeartbeatAt: now,
+      registered: false,
+    });
+  }
+
+  isRegistered(connectionId: string): boolean {
+    return this.connections.get(connectionId)?.registered ?? false;
+  }
+
+  register(connection: Omit<ActiveConnection, 'registered'>): void {
+    const full: ActiveConnection = { ...connection, registered: true };
+    this.connections.set(connection.id, full);
+    this.persist(full);
     this.notifyRegistryChange();
   }
 
@@ -86,11 +112,41 @@ export class ServerSdkBridge implements SdkBridge {
     this.notifyRegistryChange();
   }
 
+  /** Evict the connection with the oldest heartbeat (SDK-008). */
+  evictOldestConnection(): string | null {
+    let oldest: ActiveConnection | null = null;
+    for (const connection of this.connections.values()) {
+      if (!oldest || connection.lastHeartbeatAt < oldest.lastHeartbeatAt) {
+        oldest = connection;
+      }
+    }
+    if (!oldest) {
+      return null;
+    }
+    oldest.socket.close(1008, 'Connection limit reached');
+    this.unregister(oldest.id);
+    return oldest.id;
+  }
+
+  shutdown(): void {
+    for (const pending of this.pendingInvokes.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error('Server shutting down'));
+    }
+    this.pendingInvokes.clear();
+    for (const connection of this.connections.values()) {
+      connection.socket.close(1001, 'Server shutting down');
+    }
+    this.connections.clear();
+  }
+
   touchHeartbeat(connectionId: string): void {
     const connection = this.connections.get(connectionId);
     if (connection) {
       connection.lastHeartbeatAt = Date.now();
-      this.persist(connection);
+      if (connection.registered) {
+        this.persist(connection);
+      }
     }
   }
 
@@ -119,13 +175,13 @@ export class ServerSdkBridge implements SdkBridge {
     return [...this.connections.keys()];
   }
 
-  getConnection(connectionId: string): ActiveConnection | undefined {
+  getConnection(connectionId: string): (ActiveConnection & { registered: boolean }) | undefined {
     return this.connections.get(connectionId);
   }
 
   getFunctions(): FunctionDefinition[] {
     const seen = new Map<string, FunctionDefinition>();
-    for (const connection of this.connections.values()) {
+    for (const connection of this.registeredConnections()) {
       for (const fn of connection.functions) {
         seen.set(fn.name, fn);
       }
@@ -135,7 +191,7 @@ export class ServerSdkBridge implements SdkBridge {
 
   getStates(): StateDefinition[] {
     const seen = new Map<string, StateDefinition>();
-    for (const connection of this.connections.values()) {
+    for (const connection of this.registeredConnections()) {
       for (const state of connection.states) {
         seen.set(state.id, state);
       }
@@ -145,7 +201,7 @@ export class ServerSdkBridge implements SdkBridge {
 
   getPolicies(): PolicyDefinition[] {
     const seen = new Map<string, PolicyDefinition>();
-    for (const connection of this.connections.values()) {
+    for (const connection of this.registeredConnections()) {
       for (const policy of connection.policies) {
         seen.set(policy.id, policy);
       }
@@ -154,7 +210,7 @@ export class ServerSdkBridge implements SdkBridge {
   }
 
   getPersona(): string | null {
-    for (const connection of this.connections.values()) {
+    for (const connection of this.registeredConnections()) {
       if (connection.persona) {
         return connection.persona;
       }
@@ -163,7 +219,7 @@ export class ServerSdkBridge implements SdkBridge {
   }
 
   getProductBrief(): string | null {
-    for (const connection of this.connections.values()) {
+    for (const connection of this.registeredConnections()) {
       if (connection.productBrief) {
         return connection.productBrief;
       }
@@ -173,12 +229,16 @@ export class ServerSdkBridge implements SdkBridge {
 
   getFlows(): FlowDefinition[] {
     const seen = new Map<string, FlowDefinition>();
-    for (const connection of this.connections.values()) {
+    for (const connection of this.registeredConnections()) {
       for (const flow of connection.flows) {
         seen.set(flow.id, flow);
       }
     }
     return [...seen.values()];
+  }
+
+  private registeredConnections(): ActiveConnection[] {
+    return [...this.connections.values()].filter((entry) => entry.registered);
   }
 
   handleResult(message: ResultMessage): void {
@@ -191,22 +251,19 @@ export class ServerSdkBridge implements SdkBridge {
     pending.resolve(message);
   }
 
-  /** True when some connected SDK can deliver outbound messages itself. */
   hasSendCapability(): boolean {
-    return [...this.connections.values()].some((entry) => entry.canSend);
+    return this.registeredConnections().some((entry) => entry.canSend);
   }
 
-  /**
-   * Deliver an outbound message through a connected SDK's onSend handler
-   * (bring-your-own provider). Correlated by id, same as invoke().
-   */
   async sendViaChannel(
     channel: Channel,
     to: string,
     content: string,
     metadata?: Record<string, unknown>,
   ): Promise<SdkInvokeResult> {
-    const connection = [...this.connections.values()].find((entry) => entry.canSend);
+    const connection = [...this.registeredConnections()]
+      .filter((entry) => entry.canSend)
+      .sort((a, b) => b.lastHeartbeatAt - a.lastHeartbeatAt)[0];
     if (!connection) {
       return { ok: false, error: 'No connected SDK can deliver outbound messages', durationMs: 0 };
     }
@@ -252,9 +309,9 @@ export class ServerSdkBridge implements SdkBridge {
     args: Record<string, unknown>,
     context: InvocationContext,
   ): Promise<SdkInvokeResult> {
-    const connection = [...this.connections.values()].find((entry) =>
-      entry.functions.some((fn) => fn.name === functionName),
-    );
+    const connection = [...this.registeredConnections()]
+      .filter((entry) => entry.functions.some((fn) => fn.name === functionName))
+      .sort((a, b) => b.lastHeartbeatAt - a.lastHeartbeatAt)[0];
 
     if (!connection) {
       return {

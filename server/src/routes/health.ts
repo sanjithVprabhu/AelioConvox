@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { RuntimeDeps } from '../runtime-deps.js';
 import { resolveMigrationsFolder, resolvePublicDir } from '../paths.js';
+import { bearerToken, secretsMatch } from '../auth.js';
 
 export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeDeps) {
   app.get('/health', async () => ({
@@ -12,7 +13,7 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
     uptimeSeconds: Math.floor(process.uptime()),
   }));
 
-  app.get('/ready', async (_request, reply) => {
+  app.get('/ready', async (request: FastifyRequest, reply) => {
     if (!deps) {
       return reply.status(503).send({ ready: false, reason: 'Server not initialized' });
     }
@@ -48,15 +49,23 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
     }
 
     const ready = checks.database && checks.migrations && checks.widget && checks.sunjet;
+    const isProduction = process.env.NODE_ENV === 'production';
+    const authorized = secretsMatch(bearerToken(request), deps.config.secret);
+    const redactCatalog = isProduction && !authorized;
+
     const body = {
       ready,
       checks,
       sdk: {
         connected: deps.sdkBridge.getFunctions().length > 0,
-        functions: deps.sdkBridge.getFunctions().map((fn) => fn.name),
-        states: deps.sdkBridge.getStates().map((state) => state.id),
-        policies: deps.sdkBridge.getPolicies().map((policy) => policy.id),
-        flows: deps.sdkBridge.getFlows().map((flow) => flow.id),
+        ...(redactCatalog
+          ? {}
+          : {
+              functions: deps.sdkBridge.getFunctions().map((fn) => fn.name),
+              states: deps.sdkBridge.getStates().map((state) => state.id),
+              policies: deps.sdkBridge.getPolicies().map((policy) => policy.id),
+              flows: deps.sdkBridge.getFlows().map((flow) => flow.id),
+            }),
       },
       memory: {
         enabled: deps.config.memory.enabled,

@@ -105,10 +105,15 @@ export async function verifyMagicLink(
     return null;
   }
 
-  await database.db
-    .update(magicLinks)
-    .set({ consumedAt: now })
-    .where(eq(magicLinks.id, link.id));
+  // Atomic consume — two parallel verify requests cannot both succeed (BUG-040).
+  const consumed = database.sqlite
+    .prepare(
+      `UPDATE magic_links SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL RETURNING id`,
+    )
+    .get(now.getTime(), link.id) as { id: string } | undefined;
+  if (!consumed) {
+    return null;
+  }
 
   await database.db
     .update(channelAddresses)

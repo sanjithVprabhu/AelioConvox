@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 
 const baseUrl = process.env.AELIO_SERVER_URL ?? 'http://127.0.0.1:3000';
+const secret = process.env.AELIO_SDK_SECRET ?? 'change-me-in-production';
 
 function waitForMessage(socket, predicate, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
@@ -20,7 +21,10 @@ function waitForMessage(socket, predicate, timeoutMs = 15000) {
 try {
   const issue = await fetch(`${baseUrl}/auth/magic-link`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${secret}`,
+    },
     body: JSON.stringify({ email: 'phase4-user@example.com', externalId: 'user_phase4_123' }),
   });
   const issued = await issue.json();
@@ -31,7 +35,7 @@ try {
 
   const verify = await fetch(`${baseUrl}/auth/verify?token=${issued.token}`);
   const verified = await verify.json();
-  if (!verify.ok || verified.externalId !== 'user_phase4_123') {
+  if (!verify.ok || verified.externalId !== 'user_phase4_123' || !verified.sessionToken) {
     throw new Error(`Magic link verify failed: ${verify.status} ${JSON.stringify(verified)}`);
   }
   console.log('[Phase 4] Magic link verified:', verified.externalId);
@@ -47,6 +51,7 @@ try {
       type: 'init',
       customerId: verified.externalId,
       email: verified.email,
+      authToken: verified.sessionToken,
     }),
   );
   const ready = await waitForMessage(socket, (message) => message.type === 'ready');

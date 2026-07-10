@@ -207,11 +207,18 @@ export const ServerErrorMessageSchema = z.object({
 });
 export type ServerErrorMessage = z.infer<typeof ServerErrorMessageSchema>;
 
+export const AckMessageSchema = z.object({
+  type: z.literal('ack'),
+  op: z.enum(['set_state', 'set_flow_progress', 'ingest']),
+});
+export type AckMessage = z.infer<typeof AckMessageSchema>;
+
 export const ServerToSdkMessageSchema = z.discriminatedUnion('type', [
   InvokeMessageSchema,
   SendInvokeMessageSchema,
   PingMessageSchema,
   ServerErrorMessageSchema,
+  AckMessageSchema,
 ]);
 export type ServerToSdkMessage = z.infer<typeof ServerToSdkMessageSchema>;
 
@@ -219,3 +226,6 @@ export const DEFAULT_SDK_PATH = '/sdk';
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 export const HEARTBEAT_TIMEOUT_MS = 60_000;
 export const INVOKE_TIMEOUT_MS = 30_000;
+export const MAX_WS_FRAME_BYTES = 64 * 1024;
+export const MAX_SDK_CONNECTIONS = 32;
+export const SDK_REGISTER_TIMEOUT_MS = 15_000;
