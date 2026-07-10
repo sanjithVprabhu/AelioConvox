@@ -17,8 +17,34 @@ import type {
   ResolvedPlan,
 } from './schema.js';
 
+/** Recursively sort object keys so hashing is order-insensitive. */
+function canonicalize(value: unknown): unknown {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(value)) {
+    return value.toString('base64');
+  }
+  if (Array.isArray(value)) {
+    return value.map(canonicalize);
+  }
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, v]) => [k, canonicalize(v)]),
+    );
+  }
+  return value;
+}
+
+/**
+ * Stable content hash of a call's arguments — the idempotency key. Canonicalizes
+ * key order first: `{a,b}` and `{b,a}` are the same call, so a retry with the
+ * args in a different order still dedups against the ledger (never double-runs).
+ */
 export function hashArgs(args: Record<string, unknown>): string {
-  return createHash('sha256').update(JSON.stringify(args ?? {})).digest('hex').slice(0, 16);
+  return createHash('sha256').update(JSON.stringify(canonicalize(args ?? {}))).digest('hex').slice(0, 16);
 }
 
 /**
@@ -41,8 +67,10 @@ export type ExecOutcome =
     }
   // `fatal` = a policy/state denial whose reason IS the user-facing message
   // (must be surfaced even when earlier steps produced a ledger). Non-fatal =
-  // a budget/stall stop, where a graceful synthesis over the ledger reads better.
-  | { kind: 'blocked'; reason: string; fatal: boolean }
+  // a budget stop, where a graceful synthesis over the ledger reads better.
+  // `cause` disambiguates other non-fatal stops (dependency/stall) that must
+  // also surface their reason instead of synthesizing over a partial ledger.
+  | { kind: 'blocked'; reason: string; fatal: boolean; cause?: 'dependency' | 'budget' | 'stall' }
   | { kind: 'replan'; afterInstruction: string; surprise: string };
 
 export type ExecutorState = {
@@ -147,7 +175,12 @@ export async function executePlan(
     if (wave.length === 0) {
       // Nothing runnable but not everything done → unsatisfiable deps (defensive;
       // the resolver's cycle check should already have caught structural cases).
-      return { kind: 'blocked', reason: 'plan stalled: unresolved dependencies', fatal: false };
+      return {
+        kind: 'blocked',
+        reason: 'plan stalled: unresolved dependencies',
+        fatal: false,
+        cause: 'stall',
+      };
     }
 
     const reads = wave.filter((i) => i.effect === 'read');
@@ -168,6 +201,29 @@ export async function executePlan(
       const outcome = await runInstruction(instruction, state, deps, gateCtx);
       if (outcome && outcome.kind !== 'complete') {
         return outcome;
+      }
+    }
+
+    // Halt if a tool failed and a not-yet-run step depends on its output —
+    // continuing would feed a downstream step undefined inputs (or make the
+    // synthesis hallucinate success). Failures with no dependents are left in
+    // the ledger and the plan continues best-effort; synthesis reports them.
+    for (const instruction of wave) {
+      const entry = state.ledger.find((l) => l.instructionId === instruction.id);
+      if (entry?.status !== 'error') {
+        continue;
+      }
+      const hasPendingDependent = plan.instructions.some(
+        (other) => !state.completed.has(other.id) && other.needs.includes(instruction.id),
+      );
+      if (hasPendingDependent) {
+        deps.trace?.('gate', { failedProducer: instruction.id, halted: true });
+        return {
+          kind: 'blocked',
+          reason: `I couldn't complete "${instruction.capability}", so I stopped before the steps that depend on it.`,
+          fatal: false,
+          cause: 'dependency',
+        };
       }
     }
 
@@ -270,17 +326,15 @@ async function runInstruction(
   const prior = state.ledger.find(
     (entry) => entry.instructionId === instruction.id && entry.argsHash === argsHash,
   );
-  if (prior) {
+  if (prior?.status === 'success') {
     state.completed.add(instruction.id);
-    if (prior.status === 'success') {
-      state.outputs.set(instruction.id, prior.result);
-    }
+    state.outputs.set(instruction.id, prior.result);
     return { kind: 'complete' };
   }
 
   const budgetCheck = deps.budgets.noteToolCall(instruction.tool.name, argsHash);
   if (!budgetCheck.ok) {
-    return { kind: 'blocked', reason: budgetCheck.reason, fatal: false };
+    return { kind: 'blocked', reason: budgetCheck.reason, fatal: false, cause: 'budget' };
   }
 
   const invokeResult = await deps.sdk.invoke(instruction.tool.name, invokeArgs, deps.context);

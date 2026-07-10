@@ -60,6 +60,42 @@ export async function getCustomerLifecycleMetadata(
   return readLifecycleMetadata(rows[0]?.metadata ?? null);
 }
 
+/** Reserved lifecycle keys on `customers.metadata` — not tenant profile fields. */
+const RESERVED_METADATA_KEYS = new Set([
+  'lifecycleState',
+  'lifecycleStateUpdatedAt',
+  'lifecycleStateReason',
+  'flowProgress',
+]);
+
+/**
+ * The set of customer-profile field names currently present (truthy) on the
+ * customer, used to evaluate state/transition `requires_fields` guards. Sourced
+ * from `customers.metadata` minus the reserved lifecycle keys — so a tenant that
+ * stores e.g. `{ address: "...", payment_method: "card" }` gets those recognized
+ * by guards. Empty until a tenant populates them (the guard then holds).
+ */
+export async function getCustomerPresentFields(
+  db: AelioDatabase['db'],
+  internalCustomerId: string,
+): Promise<Set<string>> {
+  const rows = await db
+    .select({ metadata: customers.metadata })
+    .from(customers)
+    .where(eq(customers.id, internalCustomerId))
+    .limit(1);
+  const metadata = rows[0]?.metadata;
+  const present = new Set<string>();
+  if (metadata && typeof metadata === 'object') {
+    for (const [key, value] of Object.entries(metadata)) {
+      if (!RESERVED_METADATA_KEYS.has(key) && value !== null && value !== undefined && value !== false) {
+        present.add(key);
+      }
+    }
+  }
+  return present;
+}
+
 export async function upsertCustomerLifecycleState(
   db: AelioDatabase['db'],
   externalId: string,
