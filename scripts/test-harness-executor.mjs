@@ -264,6 +264,35 @@ console.log('\n[12] Confirmation unification: mid-plan confirm resumes the WHOLE
   assert(sdk.calls[2].args.charge_id === 'CH-7', 'downstream step received the confirmed write’s output');
 }
 
+console.log('\n[13] Tool failure halts the plan before a dependent step (no hallucinated success)');
+{
+  const bound = [
+    { instruction: { id: 'a', capability: 'lookup', produces: ['token'] }, tool: readTool('lookup') },
+    { instruction: { id: 'b', capability: 'use token' }, tool: writeTool('use', { token: 'string' }) },
+  ];
+  const res = resolvePlan('chained', undefined, bound);
+  // sdk.invoke returns ok:false for lookup → its output is missing for b.
+  const sdk = {
+    calls: [],
+    async invoke(name) {
+      this.calls.push(name);
+      if (name === 'lookup') return { ok: false, error: 'lookup failed', durationMs: 1 };
+      return { ok: true, data: {}, durationMs: 1 };
+    },
+  };
+  const state = newExecutorState();
+  const outcome = await executePlan(res.plan, state, { sdk, context: ctx, safety: baseSafety, budgets: budgets() });
+  assert(outcome.kind === 'blocked' && outcome.fatal === false, 'halts (blocked, non-fatal) when a producer fails');
+  assert(!sdk.calls.includes('use'), 'the dependent write never ran with a missing input');
+}
+
+console.log('\n[14] Idempotency hash is key-order insensitive (HAR-012)');
+{
+  const { hashArgs } = await import('@aelio/core');
+  assert(hashArgs({ a: 1, b: 2 }) === hashArgs({ b: 2, a: 1 }), 'same args, different key order → same hash');
+  assert(hashArgs({ a: 1 }) !== hashArgs({ a: 2 }), 'different values → different hash');
+}
+
 // ---------------------------------------------------------------------------
 if (failures > 0) {
   console.error(`\n${failures} harness assertion(s) failed`);

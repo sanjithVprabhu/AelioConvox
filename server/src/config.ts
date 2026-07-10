@@ -46,16 +46,11 @@ export const ConfigSchema = z.object({
           base_url: z.string().url().optional(),
         })
         .optional(),
-    })
-    .superRefine((value, ctx) => {
-      if (!['mock', 'ollama'].includes(value.provider) && !value.api_key) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'api_key is required unless provider is mock or ollama',
-          path: ['api_key'],
-        });
-      }
     }),
+    // A missing api_key is intentionally NOT a schema error: the default provider
+    // is OpenAI, and we want zero-config dev/test/demo to still boot. The server
+    // degrades a keyless provider to the mock LLM (with a warning) in dev, and
+    // hard-fails only in NODE_ENV=production — see resolveLlmChain in app.ts.
   channels: z.object({
     whatsapp: z
       .object({
@@ -295,5 +290,19 @@ export function loadConfig(configPath = process.env.AELIO_CONFIG ?? './config.ya
     throw new Error(`Invalid Aelio config at ${absolutePath}:\n${details}`);
   }
 
-  return result.data;
+  const config = result.data;
+
+  // Restrict widget origins at deploy time without rebuilding the image/config
+  // (SEC-007): AELIO_WEB_ALLOWED_ORIGINS is a comma-separated allowlist that
+  // overrides channels.web.allowed_origins. Set it in production so the baked
+  // docker default (["*"]) can't leave the widget embeddable anywhere.
+  const originsOverride = process.env.AELIO_WEB_ALLOWED_ORIGINS;
+  if (originsOverride !== undefined) {
+    config.channels.web.allowed_origins = originsOverride
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0);
+  }
+
+  return config;
 }

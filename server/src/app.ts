@@ -1,6 +1,6 @@
 import { createDatabase } from '@aelio/db';
 import { MetaWhatsAppSender, MockWhatsAppSender } from '@aelio/channels';
-import { createLLMProviderChain, createEmbeddingProvider } from '@aelio/llm';
+import { createLLMProviderChain, createEmbeddingProvider, type LLMProviderConfig } from '@aelio/llm';
 import {
   configureEmbedder,
   createInstrumentedLlm,
@@ -29,6 +29,55 @@ import { startDaemonWorker } from './workers/daemon.js';
 import { startInboundWorker } from './workers/inbound.js';
 import { startOutboundWorker } from './workers/outbound.js';
 
+/** Providers that don't need an API key (they run locally / are test doubles). */
+const KEYLESS_PROVIDERS = new Set(['mock', 'ollama']);
+
+/**
+ * Turn the config's LLM section into a provider chain, degrading gracefully.
+ * The default provider is OpenAI; a keyless real provider would otherwise crash
+ * zero-config dev / test / demo, so a provider whose api_key is empty degrades
+ * to the mock LLM with a loud warning. A deployment that wants a missing key to
+ * be fatal (never silently serve mock to real users) sets AELIO_REQUIRE_LLM_KEY=1.
+ */
+export function resolveLlmChain(config: AelioConfig): [LLMProviderConfig, ...LLMProviderConfig[]] {
+  const requireKey = process.env.AELIO_REQUIRE_LLM_KEY === '1';
+
+  const resolve = (
+    p: { provider: AelioConfig['llm']['provider']; model: string; api_key?: string; base_url?: string },
+    role: 'primary' | 'fallback',
+  ): LLMProviderConfig => {
+    const needsKey = !KEYLESS_PROVIDERS.has(p.provider);
+    if (needsKey && !p.api_key) {
+      if (requireKey) {
+        throw new Error(
+          `LLM ${role} provider "${p.provider}" is configured but its api_key is empty, ` +
+            `and AELIO_REQUIRE_LLM_KEY=1. Set the provider's API key (e.g. OPENAI_API_KEY).`,
+        );
+      }
+      console.warn(
+        `[aelio] LLM ${role} provider "${p.provider}" has no api_key — using the mock LLM instead. ` +
+          `Set the key (e.g. OPENAI_API_KEY) for real responses.`,
+      );
+      return { provider: 'mock', model: p.model };
+    }
+    return {
+      provider: p.provider,
+      model: p.model,
+      apiKey: p.api_key,
+      maxTokens: config.llm.max_tokens,
+      baseUrl: p.base_url,
+    };
+  };
+
+  const primary = resolve(config.llm, 'primary');
+  // If the primary degraded to mock, a fallback is unreachable (mock never
+  // throws) — skip it to avoid a second confusing warning.
+  if (primary.provider === 'mock' || !config.llm.fallback) {
+    return [primary];
+  }
+  return [primary, resolve(config.llm.fallback, 'fallback')];
+}
+
 export async function createApp(config: AelioConfig) {
   const migrationsFolder = resolveMigrationsFolder();
   const publicDir = resolvePublicDir();
@@ -36,26 +85,7 @@ export async function createApp(config: AelioConfig) {
   const database = createDatabase(config.storage.database_path);
   database.migrate(migrationsFolder);
 
-  const llm = createInstrumentedLlm(createLLMProviderChain([
-    {
-      provider: config.llm.provider,
-      model: config.llm.model,
-      apiKey: config.llm.api_key,
-      maxTokens: config.llm.max_tokens,
-      baseUrl: config.llm.base_url,
-    },
-    ...(config.llm.fallback
-      ? [
-          {
-            provider: config.llm.fallback.provider,
-            model: config.llm.fallback.model,
-            apiKey: config.llm.fallback.api_key,
-            maxTokens: config.llm.max_tokens,
-            baseUrl: config.llm.fallback.base_url,
-          },
-        ]
-      : []),
-  ]));
+  const llm = createInstrumentedLlm(createLLMProviderChain(resolveLlmChain(config)));
 
   // Wire a real embedding model if configured; otherwise the built-in hash
   // embedding stays in use. Failures at call time fall back to the hash.
@@ -158,6 +188,28 @@ export async function createApp(config: AelioConfig) {
       level: config.logging.level,
     },
   });
+
+  // Capture the exact request bytes on JSON parse so webhook HMAC verification
+  // (WhatsApp) can sign the RAW body — Meta signs the bytes it sent, and
+  // re-serializing via JSON.stringify would not byte-match (SEC-004).
+  app.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (req, body, done) => {
+      (req as unknown as { rawBody?: string }).rawBody =
+        typeof body === 'string' ? body : Buffer.from(body).toString('utf8');
+      const text = typeof body === 'string' ? body : Buffer.from(body).toString('utf8');
+      if (text.trim() === '') {
+        done(null, {});
+        return;
+      }
+      try {
+        done(null, JSON.parse(text));
+      } catch (error) {
+        done(error as Error, undefined);
+      }
+    },
+  );
 
   await app.register(websocket);
   await registerHealthRoutes(app, deps);

@@ -1,4 +1,4 @@
-import type { ChatMessage, LLMProvider } from '@aelio/llm';
+import type { ChatMessage, LLMProvider, LLMUsage } from '@aelio/llm';
 import { EMIT_TURN_INPUT_SCHEMA, EmitTurnSchema, type EmitTurn } from './schema.js';
 
 const EMIT_TURN_DESCRIPTION = `Decide how to handle the user's message.
@@ -10,7 +10,15 @@ export type PlannerResult = {
   turn: EmitTurn;
   /** True when the model failed structured output twice and we degraded. */
   degraded: boolean;
+  /** Summed token usage across this call's attempts, for budget accounting. */
+  usage?: LLMUsage;
 };
+
+function addUsage(a: LLMUsage | undefined, b: LLMUsage | undefined): LLMUsage | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return { inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens };
+}
 
 /**
  * Pass 1: the merged router+planner. One forced `emit_turn` call decides
@@ -40,6 +48,7 @@ export async function runPlanner(input: {
     { role: 'user', content: input.userMessage },
   ];
 
+  let usage: LLMUsage | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const result = await input.llm.complete({
       model: input.model,
@@ -50,12 +59,13 @@ export async function runPlanner(input: {
       toolChoice: { type: 'tool', name: 'emit_turn' },
       telemetry: { purpose: input.purpose ?? 'plan', iteration: attempt },
     });
+    usage = addUsage(usage, result.usage);
 
     const call = result.toolCalls.find((entry) => entry.name === 'emit_turn');
     if (call) {
       const parsed = EmitTurnSchema.safeParse(call.args);
       if (parsed.success) {
-        return { turn: parsed.data, degraded: false };
+        return { turn: parsed.data, degraded: false, ...(usage ? { usage } : {}) };
       }
       if (attempt === 0) {
         messages.push({ role: 'assistant', content: '', toolCalls: [call] });
@@ -87,6 +97,7 @@ export async function runPlanner(input: {
             reason: 'I could not work out how to handle that request — please rephrase it.',
           },
       degraded: true,
+      ...(usage ? { usage } : {}),
     };
   }
 
@@ -94,5 +105,6 @@ export async function runPlanner(input: {
   return {
     turn: { mode: 'refuse', reason: 'Planning failed.' },
     degraded: true,
+    ...(usage ? { usage } : {}),
   };
 }

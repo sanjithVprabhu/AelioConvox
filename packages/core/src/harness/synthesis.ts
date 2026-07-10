@@ -1,5 +1,7 @@
-import type { ChatMessage, LLMProvider } from '@aelio/llm';
+import type { ChatMessage, LLMProvider, LLMUsage } from '@aelio/llm';
 import type { LedgerEntry } from './schema.js';
+
+export type SynthesisResult = { text: string; usage?: LLMUsage };
 
 const MAX_RESULT_CHARS = 4000;
 
@@ -26,7 +28,7 @@ export async function runSynthesis(input: {
   userMessage: string;
   goal: string;
   ledger: LedgerEntry[];
-}): Promise<string> {
+}): Promise<SynthesisResult> {
   const messages: ChatMessage[] = [
     ...input.history,
     { role: 'user', content: input.userMessage },
@@ -64,5 +66,8 @@ export async function runSynthesis(input: {
     telemetry: { purpose: 'synthesis' },
   });
 
-  return result.text.trim() || 'I could not generate a response right now.';
+  return {
+    text: result.text.trim() || 'I could not generate a response right now.',
+    ...(result.usage ? { usage: result.usage } : {}),
+  };
 }

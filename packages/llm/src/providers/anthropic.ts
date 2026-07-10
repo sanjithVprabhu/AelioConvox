@@ -5,7 +5,7 @@ import type {
   LLMProvider,
   LLMToolCall,
   LLMToolChoice,
-} from './types.js';
+} from '../types.js';
 
 type AnthropicContentBlock =
   | { type: 'text'; text: string }

@@ -1,4 +1,4 @@
-import type { LLMCompleteOptions, LLMCompleteResult, LLMProvider } from './types.js';
+import type { LLMCompleteOptions, LLMCompleteResult, LLMProvider } from '../types.js';
 
 export class FallbackProvider implements LLMProvider {
   constructor(private readonly providers: LLMProvider[]) {}

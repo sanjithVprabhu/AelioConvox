@@ -107,6 +107,7 @@ export {
   buildLifecycleSystemPrompt,
   filterFunctionsByState,
   getCustomerLifecycleMetadata,
+  getCustomerPresentFields,
   readLifecycleMetadata,
   upsertCustomerFlowProgress,
   upsertCustomerLifecycleState,

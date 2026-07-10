@@ -105,25 +105,25 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
     history: input.history,
     userMessage: input.userMessage,
   });
+  budgets.noteUsage(planner.usage);
   trace('plan', { turn: planner.turn, degraded: planner.degraded });
 
   // ---- Refusal: fail-open on feasibility ----
   if (planner.turn.mode === 'refuse' && input.lighthouse && !planner.degraded) {
     const score = await input.lighthouse.probeFeasibility(input.userMessage);
-    if (score >= binding.scoreMin) {
-      const replanCheck = budgets.noteReplan();
-      if (replanCheck.ok) {
-        planner = await runPlanner({
-          llm: input.llm,
-          model: input.model,
-          maxTokens: input.maxTokens,
-          system: `${input.system}\n\nNote: the capability index suggests this request MAY be servable with the available tools. Refuse only if you are certain it is not; otherwise emit a plan.`,
-          history: input.history,
-          userMessage: input.userMessage,
-          purpose: 'replan',
-        });
-        trace('repair', { reason: 'feasibility_probe', score, turn: planner.turn });
-      }
+    // Only spend a second planner call if both the replan and token budgets allow.
+    if (score >= binding.scoreMin && budgets.noteReplan().ok && budgets.checkClock().ok) {
+      planner = await runPlanner({
+        llm: input.llm,
+        model: input.model,
+        maxTokens: input.maxTokens,
+        system: `${input.system}\n\nNote: the capability index suggests this request MAY be servable with the available tools. Refuse only if you are certain it is not; otherwise emit a plan.`,
+        history: input.history,
+        userMessage: input.userMessage,
+        purpose: 'replan',
+      });
+      budgets.noteUsage(planner.usage);
+      trace('repair', { reason: 'feasibility_probe', score, turn: planner.turn });
     }
   }
 
@@ -403,15 +403,19 @@ async function finishTurn(
     trace('budget', { blocked: outcome.reason, fatal: outcome.fatal });
     // A fatal denial's reason IS the message the user needs ("can't cancel via
     // chat") — surface it even when earlier steps ran, so it's never swallowed
-    // by a synthesis that only sees the ledger. A non-fatal (budget/stall) stop
-    // reads better as a graceful synthesis over whatever did complete.
+    // by a synthesis that only sees the ledger. Dependency/stall stops must
+    // also surface their reason. Only budget exhaustion synthesizes over a
+    // partial ledger.
     let reply: string;
-    if (outcome.fatal) {
-      reply = outcome.reason;
-    } else if (state.ledger.length === 0) {
+    if (
+      outcome.fatal ||
+      outcome.cause === 'dependency' ||
+      outcome.cause === 'stall' ||
+      state.ledger.length === 0
+    ) {
       reply = outcome.reason;
     } else {
-      reply = await runSynthesis({
+      const synthesized = await runSynthesis({
         llm: input.llm,
         model: input.model,
         maxTokens: input.maxTokens,
@@ -421,12 +425,14 @@ async function finishTurn(
         goal,
         ledger: state.ledger,
       });
+      budgets.noteUsage(synthesized.usage);
+      reply = synthesized.text;
     }
     return { reply, toolCallsExecuted: state.toolCallsExecuted, executedToolNames: state.executedToolNames };
   }
 
   // Complete → synthesize final reply from the ledger.
-  const reply = await runSynthesis({
+  const synthesized = await runSynthesis({
     llm: input.llm,
     model: input.model,
     maxTokens: input.maxTokens,
@@ -436,6 +442,8 @@ async function finishTurn(
     goal,
     ledger: state.ledger,
   });
+  budgets.noteUsage(synthesized.usage);
+  const reply = synthesized.text;
   trace('synthesis', { replyPreview: reply.slice(0, 200) });
   return { reply, toolCallsExecuted: state.toolCallsExecuted, executedToolNames: state.executedToolNames };
 }

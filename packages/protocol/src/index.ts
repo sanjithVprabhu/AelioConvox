@@ -197,10 +197,21 @@ export const SdkToServerMessageSchema = z.discriminatedUnion('type', [
 ]);
 export type SdkToServerMessage = z.infer<typeof SdkToServerMessageSchema>;
 
+// Server → SDK: a protocol-level error (e.g. a malformed frame the SDK sent).
+// Diagnostic only — the SDK surfaces it so integrators aren't left guessing why
+// a message had no effect.
+export const ServerErrorMessageSchema = z.object({
+  type: z.literal('error'),
+  code: z.string().min(1),
+  message: z.string().min(1),
+});
+export type ServerErrorMessage = z.infer<typeof ServerErrorMessageSchema>;
+
 export const ServerToSdkMessageSchema = z.discriminatedUnion('type', [
   InvokeMessageSchema,
   SendInvokeMessageSchema,
   PingMessageSchema,
+  ServerErrorMessageSchema,
 ]);
 export type ServerToSdkMessage = z.infer<typeof ServerToSdkMessageSchema>;
 

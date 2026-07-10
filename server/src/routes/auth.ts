@@ -8,16 +8,54 @@ const MagicLinkRequestSchema = z.object({
   externalId: z.string().optional(),
 });
 
+/**
+ * Minimal in-memory sliding-window limiter for the unauthenticated magic-link
+ * endpoint — stops email-bombing / link-farming (SEC-006). Keyed by IP and by
+ * email; both must pass. In-process is right for the single-container deploy.
+ */
+function makeRateLimiter(maxHits: number, windowMs: number) {
+  const hits = new Map<string, number[]>();
+  return (key: string, now = Date.now()): boolean => {
+    const recent = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
+    if (recent.length >= maxHits) {
+      hits.set(key, recent);
+      return false;
+    }
+    recent.push(now);
+    hits.set(key, recent);
+    // Opportunistic cleanup so the map can't grow unbounded.
+    if (hits.size > 10_000) {
+      for (const [k, ts] of hits) {
+        if (ts.every((t) => now - t >= windowMs)) hits.delete(k);
+      }
+    }
+    return true;
+  };
+}
+
 export async function registerAuthRoutes(app: FastifyInstance, deps: RuntimeDeps) {
   const magicLink = deps.config.channels.web.magic_link;
   if (!magicLink?.enabled) {
     return;
   }
 
+  const perIp = makeRateLimiter(10, 60_000); // 10 / minute / IP
+  const perEmail = makeRateLimiter(5, 60 * 60_000); // 5 / hour / email
+  const clientIp = (request: { ip: string; headers: Record<string, unknown> }): string =>
+    process.env.AELIO_TRUST_PROXY === '1'
+      ? (String(request.headers['x-forwarded-for'] ?? '').split(',')[0]?.trim() || request.ip)
+      : request.ip;
+
   app.post('/auth/magic-link', async (request, reply) => {
     const parsed = MagicLinkRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Invalid request body' });
+    }
+
+    const ip = clientIp(request);
+    if (!perIp(ip) || !perEmail(parsed.data.email.toLowerCase())) {
+      app.log.warn({ ip, email: parsed.data.email }, 'Magic-link request rate-limited');
+      return reply.status(429).send({ error: 'Too many requests — try again later.' });
     }
 
     const host = request.headers.host ?? `localhost:${deps.config.server.port}`;

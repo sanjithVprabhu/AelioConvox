@@ -6,6 +6,22 @@ import { createApp } from './app.js';
 import { registerGracefulShutdown } from './shutdown.js';
 
 const config = loadConfig();
+
+// SEC-008: never run in production with the throwaway default secret. In dev we
+// only warn, so getting started stays frictionless.
+const DEFAULT_SECRET = 'change-me-in-production';
+if (config.secret === DEFAULT_SECRET || !config.secret) {
+  if (process.env.NODE_ENV === 'production') {
+    console.error(
+      `[aelio] Refusing to start in production with the default SDK secret. Set AELIO_SDK_SECRET (config \`secret\`) to a strong value.`,
+    );
+    process.exit(1);
+  }
+  console.warn(
+    `[aelio] Using the default SDK secret "${DEFAULT_SECRET}". Set AELIO_SDK_SECRET before deploying.`,
+  );
+}
+
 const { app } = await createApp(config);
 const { host, port } = config.server;
 

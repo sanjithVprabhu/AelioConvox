@@ -49,6 +49,7 @@ import {
   buildLifecycleSystemPrompt,
   filterFunctionsByState,
   getCustomerLifecycleMetadata,
+  getCustomerPresentFields,
   type CustomerLifecycleMetadata,
 } from '../lifecycle/index.js';
 import { composeSystemPrompt } from './prompt-composer.js';
@@ -113,6 +114,8 @@ type PersistMessageInput = {
 type TurnRuntimeSnapshot = {
   intentStack: IntentStack;
   lifecycle: CustomerLifecycleMetadata;
+  /** Customer-profile fields present, for state/transition `requires_fields` guards. */
+  presentFields: Set<string>;
 };
 
 function buildTurnContext(
@@ -147,7 +150,8 @@ async function loadTurnSnapshot(
 ): Promise<TurnRuntimeSnapshot> {
   const intentStack = input.intent?.enabled ? await loadIntentStack(db, sessionId) : [];
   const lifecycle = await getCustomerLifecycleMetadata(db, customerId);
-  return { intentStack, lifecycle };
+  const presentFields = await getCustomerPresentFields(db, customerId);
+  return { intentStack, lifecycle, presentFields };
 }
 
 async function persistMessage(
@@ -493,6 +497,7 @@ async function executeTurn(
     ? await runHarness({
         ...engineInput,
         ...(stateDef ? { state: stateDef } : {}),
+        presentFields: preTurnSnapshot.presentFields,
         lighthouse: input.lighthouse,
         tracer: input.tracer,
         suspensionStore: input.suspensionStore,

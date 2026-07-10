@@ -1,4 +1,4 @@
-import { AnthropicEmbeddingProvider } from './anthropic-embeddings.js';
+import { AnthropicEmbeddingProvider } from './anthropic.js';
 
 export interface EmbeddingProvider {
   embed(text: string): Promise<number[]>;

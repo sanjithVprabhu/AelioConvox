@@ -78,11 +78,17 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           },
           'SDK sent invalid JSON payload',
         );
+        socket.send(
+          JSON.stringify({ type: 'error', code: 'invalid_json', message: 'Message was not valid JSON' }),
+        );
         return;
       }
 
       const result = SdkToServerMessageSchema.safeParse(parsed);
       if (!result.success) {
+        const detail = result.error.issues
+          .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+          .join('; ');
         app.log.warn(
           {
             connectionId,
@@ -93,6 +99,13 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
             })),
           },
           'SDK payload failed schema validation',
+        );
+        socket.send(
+          JSON.stringify({
+            type: 'error',
+            code: 'invalid_message',
+            message: `Message failed validation: ${detail}`,
+          }),
         );
         return;
       }

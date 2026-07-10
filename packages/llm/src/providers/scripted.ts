@@ -1,4 +1,4 @@
-import type { LLMCompleteOptions, LLMCompleteResult, LLMProvider } from './types.js';
+import type { LLMCompleteOptions, LLMCompleteResult, LLMProvider } from '../types.js';
 
 /**
  * Test-only provider that replays a scripted queue of results in order.

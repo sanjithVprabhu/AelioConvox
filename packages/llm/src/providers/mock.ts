@@ -1,4 +1,4 @@
-import type { ChatMessage, LLMCompleteOptions, LLMCompleteResult, LLMProvider } from './types.js';
+import type { ChatMessage, LLMCompleteOptions, LLMCompleteResult, LLMProvider } from '../types.js';
 
 function lastUserMessage(messages: ChatMessage[]): string {
   const message = [...messages].reverse().find((entry) => entry.role === 'user' && entry.content.trim());
