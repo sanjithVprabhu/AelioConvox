@@ -3,8 +3,11 @@ secret: ${AELIO_SDK_SECRET}
 
 llm:
   # anthropic | openai | gemini | groq | ollama | mock
-  provider: mock
-  model: mock-model
+  # Default: OpenAI (GPT). Set OPENAI_API_KEY for real responses; without a key
+  # the server degrades to the mock LLM in dev (and hard-fails in production).
+  provider: openai
+  model: gpt-4o-mini
+  api_key: ${OPENAI_API_KEY}
   max_tokens: 4096
 
 # Semantic embeddings for memory + Sunjet vectors (hash = local, no API).

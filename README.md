@@ -51,7 +51,11 @@ AelioConvox/
 └── config.yaml        # single source of runtime config
 ```
 
-## Quick start (local, mock LLM)
+## Quick start (local)
+
+The default LLM provider is **OpenAI**. Set `OPENAI_API_KEY` for real responses;
+without it the server degrades to a built-in mock LLM (with a warning) so you can
+try everything with zero config.
 
 ```bash
 pnpm install
@@ -59,6 +63,7 @@ pnpm build
 
 # Terminal 1 — Aelio server
 export AELIO_SDK_SECRET=change-me-in-production
+export OPENAI_API_KEY=sk-...        # optional; omit to run on the mock LLM
 pnpm --filter @aelio/server dev
 
 # Terminal 2 — example SaaS backend wired with the Convox SDK
@@ -106,20 +111,26 @@ await aelio.listen({
 });
 ```
 
-## Use a real LLM
+## Choosing an LLM provider
 
-Set in `config.yaml`:
+OpenAI is the default (`config.yaml`). To use a different provider, either point
+`AELIO_CONFIG` at a ready-made profile — `config.openai.yaml`, `config.anthropic.yaml`,
+or `config.gemini.yaml` — or edit the `llm` block:
 
 ```yaml
 llm:
-  provider: anthropic
-  model: claude-sonnet-4-20250514
-  api_key: ${ANTHROPIC_API_KEY}
-  fallback:
-    provider: openai
-    model: gpt-4.1-mini
-    api_key: ${OPENAI_API_KEY}
+  provider: openai            # openai | anthropic | gemini | groq | ollama | mock
+  model: gpt-4o-mini
+  api_key: ${OPENAI_API_KEY}
+  fallback:                   # optional — takes over if the primary fails
+    provider: anthropic
+    model: claude-sonnet-4-6
+    api_key: ${ANTHROPIC_API_KEY}
 ```
+
+A keyless real provider degrades to the mock LLM with a warning; set
+`AELIO_REQUIRE_LLM_KEY=1` to make a missing key a hard boot error instead. See
+[`packages/llm/README.md`](packages/llm/README.md) for the provider matrix.
 
 ## Docker deploy
 

@@ -46,16 +46,11 @@ export const ConfigSchema = z.object({
           base_url: z.string().url().optional(),
         })
         .optional(),
-    })
-    .superRefine((value, ctx) => {
-      if (!['mock', 'ollama'].includes(value.provider) && !value.api_key) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'api_key is required unless provider is mock or ollama',
-          path: ['api_key'],
-        });
-      }
     }),
+    // A missing api_key is intentionally NOT a schema error: the default provider
+    // is OpenAI, and we want zero-config dev/test/demo to still boot. The server
+    // degrades a keyless provider to the mock LLM (with a warning) in dev, and
+    // hard-fails only in NODE_ENV=production — see resolveLlmChain in app.ts.
   channels: z.object({
     whatsapp: z
       .object({

@@ -2,8 +2,12 @@ name: aelio-docker
 secret: ${AELIO_SDK_SECRET}
 
 llm:
-  provider: mock
-  model: mock-model
+  # Default: OpenAI (GPT). Provide OPENAI_API_KEY to the container for real
+  # responses; without it the server degrades to the mock LLM (dev) or refuses
+  # to start (NODE_ENV=production).
+  provider: openai
+  model: gpt-4o-mini
+  api_key: ${OPENAI_API_KEY}
   max_tokens: 4096
 
 channels:
