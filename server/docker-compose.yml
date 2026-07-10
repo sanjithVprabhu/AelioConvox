@@ -14,6 +14,9 @@ services:
       # (without it the server degrades to the mock LLM and logs a warning).
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Restrict which sites may embed the widget (comma-separated). Strongly
+      # recommended in production instead of the permissive default.
+      AELIO_WEB_ALLOWED_ORIGINS: ${AELIO_WEB_ALLOWED_ORIGINS:-}
     healthcheck:
       test: ["CMD", "/nodejs/bin/node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

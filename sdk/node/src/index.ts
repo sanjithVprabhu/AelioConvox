@@ -474,6 +474,16 @@ export class Aelio {
 
   private send(message: Parameters<typeof SdkToServerMessageSchema.parse>[0]): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      // Dropped rather than queued (the server is the source of truth and will
+      // re-request on reconnect). Warn so a caller pushing state/ingest while
+      // disconnected isn't left wondering why nothing happened. `result` and
+      // `pong` are responses to server prompts — noisy and safe to drop quietly.
+      const type = (message as { type?: string }).type;
+      if (type !== 'result' && type !== 'pong') {
+        console.warn(
+          `[aelio-sdk] not connected — dropped "${type}" message. It was not delivered to the Aelio server.`,
+        );
+      }
       return;
     }
     this.ws.send(JSON.stringify(message));

@@ -290,5 +290,19 @@ export function loadConfig(configPath = process.env.AELIO_CONFIG ?? './config.ya
     throw new Error(`Invalid Aelio config at ${absolutePath}:\n${details}`);
   }
 
-  return result.data;
+  const config = result.data;
+
+  // Restrict widget origins at deploy time without rebuilding the image/config
+  // (SEC-007): AELIO_WEB_ALLOWED_ORIGINS is a comma-separated allowlist that
+  // overrides channels.web.allowed_origins. Set it in production so the baked
+  // docker default (["*"]) can't leave the widget embeddable anywhere.
+  const originsOverride = process.env.AELIO_WEB_ALLOWED_ORIGINS;
+  if (originsOverride !== undefined) {
+    config.channels.web.allowed_origins = originsOverride
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0);
+  }
+
+  return config;
 }

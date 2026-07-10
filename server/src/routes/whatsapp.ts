@@ -30,14 +30,29 @@ export async function registerWhatsAppRoutes(app: FastifyInstance, deps: Runtime
     return reply.status(403).send('Forbidden');
   });
 
+  // A live Meta integration MUST verify signatures. Only skip when explicitly in
+  // mock mode or using the bring-your-own-provider path (no Meta creds here).
+  const requiresSignature = !wa.mock_mode && wa.provider === 'meta';
+  if (requiresSignature && !wa.app_secret) {
+    app.log.error(
+      'WhatsApp provider is "meta" but channels.whatsapp.app_secret is not set — inbound webhooks cannot be verified (SEC-005).',
+    );
+  }
+
   app.post(webhookPath, async (request, reply) => {
-    const rawBody = JSON.stringify(request.body ?? {});
+    // Sign the RAW bytes Meta sent (captured by the content-type parser), not a
+    // re-serialized copy (SEC-004).
+    const rawBody = (request as unknown as { rawBody?: string }).rawBody ?? JSON.stringify(request.body ?? {});
+    const signature = request.headers['x-hub-signature-256'] as string | undefined;
 
     if (wa.app_secret) {
-      const signature = request.headers['x-hub-signature-256'] as string | undefined;
       if (!verifyWhatsAppSignature(rawBody, signature, wa.app_secret)) {
         return reply.status(401).send('Invalid signature');
       }
+    } else if (requiresSignature) {
+      // Live Meta channel with no secret configured → reject unsigned inbound
+      // rather than trusting forged messages (SEC-005).
+      return reply.status(401).send('Signature verification not configured');
     }
 
     const messages = parseWhatsAppWebhook(request.body);

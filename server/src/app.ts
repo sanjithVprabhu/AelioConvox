@@ -189,6 +189,28 @@ export async function createApp(config: AelioConfig) {
     },
   });
 
+  // Capture the exact request bytes on JSON parse so webhook HMAC verification
+  // (WhatsApp) can sign the RAW body — Meta signs the bytes it sent, and
+  // re-serializing via JSON.stringify would not byte-match (SEC-004).
+  app.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (req, body, done) => {
+      (req as unknown as { rawBody?: string }).rawBody =
+        typeof body === 'string' ? body : Buffer.from(body).toString('utf8');
+      const text = typeof body === 'string' ? body : Buffer.from(body).toString('utf8');
+      if (text.trim() === '') {
+        done(null, {});
+        return;
+      }
+      try {
+        done(null, JSON.parse(text));
+      } catch (error) {
+        done(error as Error, undefined);
+      }
+    },
+  );
+
   await app.register(websocket);
   await registerHealthRoutes(app, deps);
   await registerSdkRoutes(app, deps);

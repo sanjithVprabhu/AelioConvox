@@ -18,6 +18,9 @@ channels:
     webhook_path: /wa/webhook
   web:
     enabled: true
+    # DEV DEFAULT is permissive. In production set AELIO_WEB_ALLOWED_ORIGINS
+    # (comma-separated) to your site origin(s) — it overrides this list so the
+    # widget can't be embedded anywhere (SEC-007).
     allowed_origins:
       - "*"
     magic_link:
