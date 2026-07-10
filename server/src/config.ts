@@ -188,6 +188,29 @@ export const ConfigSchema = z.object({
       ttl_minutes: z.number().int().positive().default(60),
     })
     .default({ enabled: false, similarity_threshold: 0.92, ttl_minutes: 60 }),
+  harness: z
+    .object({
+      // The plan-execute-replan engine. false → legacy single-loop tool calling.
+      enabled: z.boolean().default(true),
+      budgets: z
+        .object({
+          max_instructions: z.number().int().positive().default(12),
+          max_replans: z.number().int().nonnegative().default(2),
+          max_recoils_per_intent: z.number().int().positive().default(3),
+          max_tool_calls: z.number().int().positive().default(15),
+          wall_clock_ms: z.number().int().positive().default(60_000),
+          max_turn_tokens: z.number().int().positive().default(30_000),
+        })
+        .default({}),
+      binding: z
+        .object({
+          score_min: z.number().min(0).max(1).default(0.55),
+          ambiguity_gap: z.number().min(0).max(1).default(0.08),
+          cache_ttl_minutes: z.number().int().positive().default(1440),
+        })
+        .default({}),
+    })
+    .default({}),
   sunjet: z
     .object({
       enabled: z.boolean().default(false),
@@ -204,6 +227,12 @@ export const ConfigSchema = z.object({
           memories: z.string().min(1).default('convox_memories'),
           compactions: z.string().min(1).default('convox_compactions'),
           runtime_state: z.string().min(1).default('runtime_state'),
+          harness_tools: z.string().min(1).default('harness_tools'),
+          harness_capabilities: z.string().min(1).default('harness_capabilities'),
+          harness_bindings: z.string().min(1).default('harness_bindings'),
+          harness_suspensions: z.string().min(1).default('harness_suspensions'),
+          harness_ledger: z.string().min(1).default('harness_ledger'),
+          harness_traces: z.string().min(1).default('harness_traces'),
         })
         .default({}),
     })

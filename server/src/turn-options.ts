@@ -23,6 +23,10 @@ export function baseTurnOptions(
   | 'intent'
   | 'messageStore'
   | 'persona'
+  | 'harness'
+  | 'lighthouse'
+  | 'tracer'
+  | 'suspensionStore'
 > {
   return {
     database: deps.database,
@@ -60,6 +64,25 @@ export function baseTurnOptions(
     },
     messageStore: deps.messageStore ?? undefined,
     persona: deps.config.llm.system_prompt ?? null,
+    harness: {
+      enabled: deps.config.harness.enabled,
+      budgets: {
+        maxInstructions: deps.config.harness.budgets.max_instructions,
+        maxReplans: deps.config.harness.budgets.max_replans,
+        maxRecoilsPerIntent: deps.config.harness.budgets.max_recoils_per_intent,
+        maxToolCalls: deps.config.harness.budgets.max_tool_calls,
+        wallClockMs: deps.config.harness.budgets.wall_clock_ms,
+        maxTurnTokens: deps.config.harness.budgets.max_turn_tokens,
+      },
+      binding: {
+        scoreMin: deps.config.harness.binding.score_min,
+        ambiguityGap: deps.config.harness.binding.ambiguity_gap,
+        cacheTtlMinutes: deps.config.harness.binding.cache_ttl_minutes,
+      },
+    },
+    lighthouse: deps.lighthouse,
+    tracer: deps.tracer ?? undefined,
+    suspensionStore: deps.suspensionStore,
   };
 }
 

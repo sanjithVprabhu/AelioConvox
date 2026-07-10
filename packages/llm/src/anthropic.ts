@@ -1,4 +1,11 @@
-import type { ChatMessage, LLMCompleteOptions, LLMCompleteResult, LLMProvider, LLMToolCall } from './types.js';
+import type {
+  ChatMessage,
+  LLMCompleteOptions,
+  LLMCompleteResult,
+  LLMProvider,
+  LLMToolCall,
+  LLMToolChoice,
+} from './types.js';
 
 type AnthropicContentBlock =
   | { type: 'text'; text: string }
@@ -52,6 +59,16 @@ function toAnthropicMessages(messages: ChatMessage[]) {
     });
 }
 
+function toAnthropicToolChoice(choice: LLMToolChoice | undefined) {
+  if (!choice) {
+    return undefined;
+  }
+  if (choice.type === 'tool') {
+    return { type: 'tool' as const, name: choice.name };
+  }
+  return { type: choice.type };
+}
+
 export class AnthropicProvider implements LLMProvider {
   constructor(
     private readonly apiKey: string,
@@ -59,6 +76,7 @@ export class AnthropicProvider implements LLMProvider {
   ) {}
 
   async complete(opts: LLMCompleteOptions): Promise<LLMCompleteResult> {
+    const toolChoice = toAnthropicToolChoice(opts.toolChoice);
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -77,6 +95,7 @@ export class AnthropicProvider implements LLMProvider {
           description: tool.description,
           input_schema: tool.input_schema,
         })),
+        ...(toolChoice ? { tool_choice: toolChoice } : {}),
       }),
     });
 

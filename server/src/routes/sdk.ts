@@ -107,6 +107,7 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           policies: message.policies ?? [],
           flows: message.flows ?? [],
           persona: message.persona?.trim() || null,
+          productBrief: message.productBrief?.trim() || null,
           sdkVersion: message.sdkVersion,
           language: message.language,
           canSend: message.canSend ?? false,

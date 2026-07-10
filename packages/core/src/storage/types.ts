@@ -6,6 +6,13 @@ export type SunjetTableNames = {
   memories: string;
   compactions: string;
   runtimeState: string;
+  // Harness tables
+  harnessTools: string;
+  harnessCapabilities: string;
+  harnessBindings: string;
+  harnessSuspensions: string;
+  harnessLedger: string;
+  harnessTraces: string;
 };
 
 export type SunjetStorageConfig = {

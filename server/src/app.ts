@@ -1,7 +1,13 @@
 import { createDatabase } from '@aelio/db';
 import { MetaWhatsAppSender, MockWhatsAppSender } from '@aelio/channels';
 import { createLLMProviderChain, createEmbeddingProvider } from '@aelio/llm';
-import { configureEmbedder, createInstrumentedLlm } from '@aelio/core';
+import {
+  configureEmbedder,
+  createInstrumentedLlm,
+  HarnessTracer,
+  LighthouseService,
+  SuspensionStore,
+} from '@aelio/core';
 import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
@@ -96,11 +102,52 @@ export async function createApp(config: AelioConfig) {
             })
           : new MockWhatsAppSender();
 
+  // Lighthouse: the harness's read model over the SDK registry. Registry
+  // changes re-hash immediately; the Sunjet mirror (when available) resyncs
+  // in the background, keyed by that hash.
+  const lighthouse = new LighthouseService({
+    bridge: sdkBridge,
+    tenant: config.name,
+    ...(sunjet
+      ? {
+          sunjet: {
+            client: sunjet.client,
+            toolsTable: sunjet.tables.harnessTools,
+            capabilitiesTable: sunjet.tables.harnessCapabilities,
+            embedDim: sunjet.embedDim,
+          },
+        }
+      : {}),
+  });
+  sdkBridge.onRegistryChange(() => lighthouse.refresh());
+
+  // Harness trace firehose — Sunjet-only, lossy-tolerant; null without Sunjet.
+  const tracer = sunjet
+    ? new HarnessTracer({
+        client: sunjet.client,
+        table: sunjet.tables.harnessTraces,
+        tenant: config.name,
+        embedDim: sunjet.embedDim,
+      })
+    : null;
+
+  // Suspended-plan store: SQLite is authoritative (always present); Sunjet
+  // mirrors when available so parked plans are visible in Astrolobe too.
+  const suspensionStore = new SuspensionStore({
+    database,
+    ...(sunjet
+      ? { sunjet: { client: sunjet.client, table: sunjet.tables.harnessSuspensions, tenant: config.name } }
+      : {}),
+  });
+
   const deps: RuntimeDeps = {
     config,
     database,
     llm,
     sdkBridge,
+    lighthouse,
+    tracer,
+    suspensionStore,
     whatsappSender,
     sunjetClient: sunjet?.client ?? null,
     messageStore: sunjet?.messageStore ?? null,

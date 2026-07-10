@@ -54,6 +54,7 @@ class Aelio:
         self.flows: Dict[str, FlowSchema] = {}
         self._send_handler: Optional[SendHandler] = None
         self._persona: Optional[str] = None
+        self._product_brief: Optional[str] = None
         self._ws = None
         self._last_pong_at = int(time.time() * 1000)
 
@@ -103,6 +104,11 @@ class Aelio:
     def persona(self, text: str) -> None:
         """Set the assistant persona/voice; becomes the stable head of the system prompt."""
         self._persona = text.strip()
+
+    def describe(self, text: str) -> None:
+        """Describe what your product does. Grounds the Aelio harness planner —
+        plans are drawn against this brief plus your registered tools/flows."""
+        self._product_brief = text.strip()
 
     def on_send(self, handler: SendHandler) -> None:
         """Deliver outbound messages through your own provider (bring-your-own
@@ -180,6 +186,8 @@ class Aelio:
         }
         if self._persona:
             payload["persona"] = self._persona
+        if self._product_brief:
+            payload["productBrief"] = self._product_brief
         if states:
             payload["states"] = states
         if policies:

@@ -138,6 +138,14 @@ aelio.state('active', {
   description: 'Fully onboarded customer. Full product support.',
 })
 
+// Declarative lifecycle transitions: the harness advances the customer's state
+// automatically when a tool succeeds (guard-checked). Your set_state push always
+// overrides. `guards.requiresFields` gates a state on customer-profile fields.
+aelio.state('cart', {
+  description: 'Building an order.',
+  transitions: [{ onToolSuccess: 'createOrder', to: 'awaiting_payment' }],
+})
+
 aelio.policy('stay-in-lifecycle', {
   description: 'Only discuss topics appropriate for the current lifecycle state.',
   severity: 'hard',
@@ -160,7 +168,11 @@ aelio.setFlowProgress(userId, 'onboarding_setup', 1, ['review_orders'])
 ## API
 
 - `aelio.expose(name, handler, schema)` — register a callable function.
-- `aelio.state(id, schema)` — declare a lifecycle state and its boundaries.
+- `aelio.persona(text)` — set the assistant's voice (head of the system prompt).
+- `aelio.describe(text)` — describe what your product does; grounds the harness
+  planner so it plans well and declines the impossible gracefully.
+- `aelio.state(id, schema)` — declare a lifecycle state, its tool boundaries, and
+  optional `transitions` / `guards`.
 - `aelio.policy(id, schema)` — declare a conversation policy.
 - `aelio.flow(id, schema)` — declare a guided multi-step flow for a state.
 - `aelio.setCustomerState(customerId, stateId, reason?)` — push current state to Aelio.

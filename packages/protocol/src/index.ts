@@ -25,11 +25,31 @@ export const FunctionDefinitionSchema = z.object({
 });
 export type FunctionDefinition = z.infer<typeof FunctionDefinitionSchema>;
 
+// Guard conditions a customer must satisfy for a state (or transition) to apply.
+// v1 guards are presence checks on named customer-profile fields; richer
+// predicates can be added later without breaking the wire format.
+export const StateGuardSchema = z.object({
+  requires_fields: z.array(z.string().min(1)).optional(),
+});
+export type StateGuard = z.infer<typeof StateGuardSchema>;
+
+// Declarative lifecycle transition: when the named tool succeeds (and the guard,
+// if any, passes), the customer moves to state `to`. Applied deterministically by
+// the server's harness executor; an SDK `set_state` push always overrides.
+export const StateTransitionSchema = z.object({
+  on_tool_success: z.string().min(1),
+  to: z.string().min(1),
+  guard: StateGuardSchema.optional(),
+});
+export type StateTransition = z.infer<typeof StateTransitionSchema>;
+
 export const StateDefinitionSchema = z.object({
   id: z.string().min(1),
   description: z.string().min(1),
   allowedTools: z.array(z.string().min(1)).optional(),
   blockedTools: z.array(z.string().min(1)).optional(),
+  guards: StateGuardSchema.optional(),
+  transitions: z.array(StateTransitionSchema).optional(),
 });
 export type StateDefinition = z.infer<typeof StateDefinitionSchema>;
 
@@ -79,6 +99,9 @@ export const RegisterMessageSchema = z.object({
   // Client-supplied assistant persona/voice; becomes the stable head of the
   // system prompt (see runtime/prompt-composer).
   persona: z.string().optional(),
+  // Client-written description of what the product does — grounds the harness
+  // planner's capability taxonomy. Falls back to a registry-generated brief.
+  productBrief: z.string().optional(),
   // True when the SDK has registered an onSend handler — i.e. it can deliver
   // outbound channel messages itself (bring-your-own WhatsApp/SMS provider).
   canSend: z.boolean().optional(),

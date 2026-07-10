@@ -75,10 +75,25 @@ export type FunctionSchema = {
   intent?: string;
 };
 
+export type StateGuardSchema = {
+  requiresFields?: string[];
+};
+
+export type StateTransitionSchema = {
+  /** Move to `to` when this tool succeeds (and the guard, if any, passes). */
+  onToolSuccess: string;
+  to: string;
+  guard?: StateGuardSchema;
+};
+
 export type StateSchema = {
   description: string;
   allowedTools?: string[];
   blockedTools?: string[];
+  /** Presence requirements for this state to apply (customer-profile fields). */
+  guards?: StateGuardSchema;
+  /** Declarative lifecycle transitions applied on tool success by the harness. */
+  transitions?: StateTransitionSchema[];
 };
 
 export type PolicySchema = {
@@ -112,6 +127,7 @@ export class Aelio {
   private readonly flows = new Map<string, FlowSchema>();
   private sendHandler: SendHandler | null = null;
   private personaText: string | null = null;
+  private productBriefText: string | null = null;
   private ws: WebSocket | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastPongAt = 0;
@@ -136,6 +152,16 @@ export class Aelio {
    */
   persona(text: string): void {
     this.personaText = text.trim();
+  }
+
+  /**
+   * Describe what your product does, in your own words. Grounds the Aelio
+   * harness planner: plans are drawn against this brief plus your registered
+   * tools/flows, so a clear description improves both what the assistant
+   * attempts and how gracefully it declines the impossible.
+   */
+  describe(text: string): void {
+    this.productBriefText = text.trim();
   }
 
   /**
@@ -282,6 +308,20 @@ export class Aelio {
       description: entry.description,
       ...(entry.allowedTools ? { allowedTools: entry.allowedTools } : {}),
       ...(entry.blockedTools ? { blockedTools: entry.blockedTools } : {}),
+      ...(entry.guards?.requiresFields
+        ? { guards: { requires_fields: entry.guards.requiresFields } }
+        : {}),
+      ...(entry.transitions
+        ? {
+            transitions: entry.transitions.map((transition) => ({
+              on_tool_success: transition.onToolSuccess,
+              to: transition.to,
+              ...(transition.guard?.requiresFields
+                ? { guard: { requires_fields: transition.guard.requiresFields } }
+                : {}),
+            })),
+          }
+        : {}),
     }));
 
     const policies: PolicyDefinition[] = [...this.policies.entries()].map(([id, entry]) => ({
@@ -310,6 +350,7 @@ export class Aelio {
       ...(policies.length > 0 ? { policies } : {}),
       ...(flows.length > 0 ? { flows } : {}),
       ...(this.personaText ? { persona: this.personaText } : {}),
+      ...(this.productBriefText ? { productBrief: this.productBriefText } : {}),
       canSend: this.sendHandler != null,
     };
 

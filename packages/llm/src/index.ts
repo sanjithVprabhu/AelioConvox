@@ -9,6 +9,8 @@ import type { LLMProvider, LLMProviderConfig } from './types.js';
 
 export * from './types.js';
 export { FallbackProvider } from './fallback.js';
+export { ScriptedProvider } from './scripted.js';
+export { MockProvider } from './mock.js';
 export {
   createEmbeddingProvider,
   type EmbeddingProvider,

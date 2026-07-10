@@ -44,7 +44,7 @@ function readI64(values: Record<string, ApiValue>, key: string): number {
 
 const warnedDims = new Set<string>();
 
-function normalizeEmbedding(vector: number[], dim: number): number[] {
+export function normalizeEmbedding(vector: number[], dim: number): number[] {
   if (vector.length === dim) {
     return vector;
   }

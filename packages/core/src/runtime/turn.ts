@@ -53,7 +53,13 @@ import {
 } from '../lifecycle/index.js';
 import { composeSystemPrompt } from './prompt-composer.js';
 import { selectRelevantTools } from './tool-retrieval.js';
+import { withSessionLock } from './session-lock.js';
 import { runToolLoop } from './tool-loop.js';
+import { runHarness } from '../harness/index.js';
+import type { HarnessBindingConfig, HarnessBudgets } from '../harness/schema.js';
+import type { HarnessTracer } from '../harness/traces.js';
+import type { SuspensionStore } from '../harness/suspension.js';
+import type { LighthouseService } from '../lighthouse/index.js';
 import { runWithTurnContext } from '../telemetry/turn-calls.js';
 
 export type ProcessTurnResult = {
@@ -84,6 +90,15 @@ export type ProcessTurnInput = {
   messageStore?: ConvoxMessageStore;
   /** Config-level persona override (SDK-registered persona wins when present). */
   persona?: string | null;
+  /** Harness engine (plan-execute-replan). When absent/disabled, the legacy tool loop runs. */
+  harness?: {
+    enabled: boolean;
+    budgets: HarnessBudgets;
+    binding: HarnessBindingConfig;
+  };
+  lighthouse?: LighthouseService;
+  tracer?: HarnessTracer;
+  suspensionStore?: SuspensionStore;
 };
 
 type PersistMessageInput = {
@@ -207,12 +222,22 @@ arguments, call the tool directly. The platform automatically asks the user to c
 before any write executes, so a second confirmation question from you is redundant.`;
 
 export async function processTurn(input: ProcessTurnInput): Promise<ProcessTurnResult> {
-  const db = input.database.db;
   const externalId = resolveCustomerExternalId(
     input.channel,
     input.customerExternalId,
     input.identity,
   );
+  // Serialize turns for this customer+channel: a second message that arrives
+  // mid-turn queues behind the first, so intent stack / suspension / lifecycle
+  // never mutate concurrently.
+  return withSessionLock(`${input.channel}:${externalId}`, () => processTurnLocked(input, externalId));
+}
+
+async function processTurnLocked(
+  input: ProcessTurnInput,
+  externalId: string,
+): Promise<ProcessTurnResult> {
+  const db = input.database.db;
 
   const customerId = await ensureCustomer(
     db,
@@ -341,14 +366,24 @@ async function executeTurn(
 
   // Semantic response cache: serve a near-identical, recent, no-tool reply for
   // this customer without calling the LLM. Only no-tool replies are cached, so a
-  // hit never returns stale account data.
+  // hit never returns stale account data. Skipped when a plan is parked awaiting
+  // this customer's input — that message is an answer to resume the plan, not a
+  // fresh question, and must reach the harness even if it resembles a cached one.
+  // (The parked-plan probe only runs when the cache is on, so the default path
+  // pays no extra read.)
   if (input.cache?.enabled) {
-    const cached = await lookupCachedResponse({
-      database: input.database,
-      customerId,
-      message: input.message,
-      threshold: input.cache.similarityThreshold,
-    });
+    const hasParkedPlan =
+      input.harness?.enabled && input.suspensionStore
+        ? (await input.suspensionStore.get(session.id)) !== null
+        : false;
+    const cached = hasParkedPlan
+      ? null
+      : await lookupCachedResponse({
+          database: input.database,
+          customerId,
+          message: input.message,
+          threshold: input.cache.similarityThreshold,
+        });
     if (cached) {
       await persistMessage(input, db, {
         sessionId: session.id,
@@ -419,16 +454,28 @@ async function executeTurn(
   // Stable sections form a cache-friendly prefix; volatile context renders last
   // and is trimmed first under budget pressure (see prompt-composer.ts).
   const persona = input.sdk.getPersona?.() ?? input.persona ?? DEFAULT_PERSONA;
+  const harnessEnabled = input.harness?.enabled ?? false;
+  // The harness planner sees tools as prompt cards (name — intent — description),
+  // not as native tool definitions: Pass 1 plans at capability level and never
+  // needs full schemas. The capability brief grounds what the product can do.
+  const brief = harnessEnabled ? (input.lighthouse?.getBrief() ?? '') : '';
+  const toolCards = harnessEnabled
+    ? scopedFunctions
+        .map((fn) => `- ${fn.name} (${fn.intent ?? fn.name})${fn.safety !== 'read' ? ` [${fn.safety}]` : ''}: ${fn.description}`)
+        .join('\n')
+    : '';
   const system = composeSystemPrompt([
     { id: 'persona', content: persona, stability: 'stable', priority: 100, maxTokens: 800 },
     { id: 'guidance', content: TOOL_GUIDANCE, stability: 'stable', priority: 95 },
+    { id: 'brief', content: brief, stability: 'stable', priority: 92, maxTokens: 1500 },
     { id: 'lifecycle', content: lifecyclePrompt ?? '', stability: 'stable', priority: 90, maxTokens: 1200 },
+    { id: 'tools', content: toolCards ? `Available tools for this turn:\n${toolCards}` : '', stability: 'volatile', priority: 70, maxTokens: 1500 },
     { id: 'summary', content: summary ? `Rolling session summary:\n${summary}` : '', stability: 'volatile', priority: 60, maxTokens: 600 },
     { id: 'memories', content: memoriesPrompt, stability: 'volatile', priority: 50, maxTokens: 600 },
     { id: 'intent', content: intentPrompt, stability: 'volatile', priority: 40, maxTokens: 400 },
   ]);
 
-  const loopResult = await runToolLoop({
+  const engineInput = {
     database: input.database,
     internalCustomerId: customerId,
     llm: input.llm,
@@ -441,7 +488,19 @@ async function executeTurn(
     userMessage: input.message,
     context,
     safety: input.safety,
-  });
+  };
+  const loopResult = input.harness?.enabled
+    ? await runHarness({
+        ...engineInput,
+        ...(stateDef ? { state: stateDef } : {}),
+        lighthouse: input.lighthouse,
+        tracer: input.tracer,
+        suspensionStore: input.suspensionStore,
+        budgets: input.harness.budgets,
+        binding: input.harness.binding,
+        turnId,
+      })
+    : await runToolLoop(engineInput);
 
   if (loopResult.pendingConfirmation) {
     await setPendingConfirmation(db, session.id, loopResult.pendingConfirmation);
