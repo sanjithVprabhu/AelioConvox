@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { aelioHttpUrl, aelioWsUrl, resolveAelioPort } from './lib/aelio-port.mjs';
 
 const root = process.cwd();
 const secret = process.env.AELIO_SDK_SECRET ?? 'change-me-in-production';
@@ -47,10 +48,15 @@ if (useMock) {
   console.log('Using OpenAI (gpt-4o-mini) for real tool selection.\n');
 }
 
+const serverPort = resolveAelioPort();
+const serverBaseUrl = aelioHttpUrl();
+
 const childEnv = {
   ...process.env,
   AELIO_CONFIG: join(root, config),
   AELIO_SDK_SECRET: secret,
+  AELIO_PORT: String(serverPort),
+  AELIO_SERVER_URL: process.env.AELIO_SERVER_URL ?? aelioWsUrl(),
   OPENAI_API_KEY: openaiKey,
   AELIO_TEST_MODE: '1',
 };
@@ -76,12 +82,12 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 run('server', 'npx', ['tsx', 'src/main.ts'], join(root, 'server'));
-await waitFor('http://127.0.0.1:3000/health');
+await waitFor(`${serverBaseUrl}/health`);
 run('shopco', 'npx', ['tsx', 'src/index.ts'], join(root, 'examples/sample-saas'));
-await waitFor('http://127.0.0.1:3000/__test__/sdk/functions');
+await waitFor(`${serverBaseUrl}/__test__/sdk/functions`);
 
 console.log('\n────────────────────────────────────────────────────────');
 console.log('  ✅ AelioConvox is live');
-console.log('  💬 Open the chat demo:  http://localhost:3000/demo.html');
+console.log(`  💬 Open the chat demo:  ${serverBaseUrl}/demo.html`);
 console.log('  (Ctrl+C to stop both processes)');
 console.log('────────────────────────────────────────────────────────\n');

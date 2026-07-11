@@ -5,6 +5,7 @@
   "scripts": {
     "build": "tsup src/main.ts --format esm",
     "dev": "tsx watch src/main.ts",
+    "dev:once": "tsx src/main.ts",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit"
   },

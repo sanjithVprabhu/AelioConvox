@@ -12,8 +12,10 @@ const migrationsFolder = join(
   '../packages/db/drizzle',
 );
 
-const serverUrl = (process.env.AELIO_WS_URL ?? process.env.AELIO_SERVER_URL ?? 'ws://127.0.0.1:3000')
-  .replace(/^http/, 'ws');
+import WebSocket from 'ws';
+import { aelioWsUrl } from './lib/aelio-port.mjs';
+
+const serverUrl = (process.env.AELIO_WS_URL ?? aelioWsUrl()).replace(/^http/, 'ws');
 
 async function testAnalystUnit() {
   const dir = mkdtempSync(join(tmpdir(), 'aelio-memory-'));

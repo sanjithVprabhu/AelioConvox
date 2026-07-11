@@ -1,6 +1,8 @@
 import WebSocket from 'ws';
 
-const baseUrl = process.env.AELIO_SERVER_URL ?? 'http://127.0.0.1:3000';
+import { aelioHttpUrl } from './lib/aelio-port.mjs';
+
+const baseUrl = process.env.AELIO_SERVER_URL ?? aelioHttpUrl();
 const secret = process.env.AELIO_SDK_SECRET ?? 'change-me-in-production';
 
 function waitForMessage(socket, predicate, timeoutMs = 15000) {

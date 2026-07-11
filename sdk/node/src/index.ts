@@ -257,7 +257,9 @@ export class Aelio {
       throw new Error('listen() must be called before connecting');
     }
 
-    const baseUrl = this.listenOptions.url ?? 'ws://127.0.0.1:3000';
+    const baseUrl =
+      this.listenOptions.url ??
+      `ws://127.0.0.1:${process.env.AELIO_PORT ?? process.env.AELIO_SERVER_PORT ?? '3010'}`;
     const url = new URL(DEFAULT_SDK_PATH, baseUrl);
 
     await new Promise<void>((resolve, reject) => {

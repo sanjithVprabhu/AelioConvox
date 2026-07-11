@@ -3,10 +3,11 @@ import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { aelioHttpUrl } from './lib/aelio-port.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-const baseUrl = process.env.AELIO_SERVER_URL ?? 'http://127.0.0.1:3000';
+const baseUrl = process.env.AELIO_SERVER_URL ?? aelioHttpUrl();
 const secret = process.env.AELIO_SDK_SECRET ?? 'change-me-in-production';
 const containerName = process.env.AELIO_DOCKER_CONTAINER ?? 'aelio-verify';
 const results = [];

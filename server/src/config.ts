@@ -6,6 +6,18 @@ import { z } from 'zod';
 
 const envRef = /\$\{([A-Z0-9_]+)\}/g;
 
+/** Default HTTP port — override with AELIO_PORT (or legacy AELIO_SERVER_PORT). */
+export const DEFAULT_AELIO_PORT = 3010;
+
+export function resolveAelioPort(yamlPort?: number): number {
+  const raw = process.env.AELIO_PORT ?? process.env.AELIO_SERVER_PORT;
+  if (raw !== undefined && raw !== '') {
+    const port = Number(raw);
+    if (Number.isInteger(port) && port > 0) return port;
+  }
+  return yamlPort ?? DEFAULT_AELIO_PORT;
+}
+
 function resolveEnvRefs(value: string): string {
   return value.replace(envRef, (_, name: string) => process.env[name] ?? '');
 }
@@ -252,7 +264,7 @@ export const ConfigSchema = z.object({
   server: z
     .object({
       host: z.string().default('0.0.0.0'),
-      port: z.number().int().positive().default(3000),
+      port: z.number().int().positive().default(DEFAULT_AELIO_PORT),
     })
     .default({}),
 });
@@ -292,6 +304,7 @@ export function loadConfig(configPath = process.env.AELIO_CONFIG ?? './config.ya
   }
 
   const config = result.data;
+  config.server.port = resolveAelioPort(config.server.port);
 
   // Restrict widget origins at deploy time without rebuilding the image/config
   // (SEC-007): AELIO_WEB_ALLOWED_ORIGINS is a comma-separated allowlist that

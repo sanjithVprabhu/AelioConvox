@@ -76,13 +76,14 @@ aelio.expose(
 
 await aelio.listen({
   secret: process.env.AELIO_SDK_SECRET ?? 'change-me-in-production',
-  url: process.env.AELIO_SERVER_URL ?? 'ws://127.0.0.1:3000',
+  url: process.env.AELIO_SERVER_URL ?? `ws://127.0.0.1:${process.env.AELIO_PORT ?? '3010'}`,
 });
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(8080, () => {
-  console.log('Example SaaS backend listening on :8080 with Aelio SDK connected');
+const port = Number(process.env.PORT ?? 8080);
+app.listen(port, () => {
+  console.log(`Example SaaS backend listening on :${port} with Aelio SDK connected`);
 });
