@@ -1,6 +1,6 @@
 {
   "name": "@aelio/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Aelio SDK — expose your backend functions to the Aelio conversational runtime over a single outbound WebSocket. Your auth, DB, and business logic stay in your process.",
   "license": "Apache-2.0",
   "type": "module",
