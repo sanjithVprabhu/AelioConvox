@@ -57,6 +57,7 @@ export {
   appendMessage,
   ensureCustomer,
   findOrCreateSession,
+  loadCustomerChannelHistory,
   loadHistory,
   touchSessionActivity,
 } from './session/lifecycle.js';

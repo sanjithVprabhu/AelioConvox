@@ -174,3 +174,31 @@ export async function loadHistory(
       content: row.content ?? '',
     }));
 }
+
+/** Recent user/assistant messages for a customer on one channel (cross-session). */
+export async function loadCustomerChannelHistory(
+  db: AelioDatabase['db'],
+  customerId: string,
+  channel: Channel,
+  limit: number,
+): Promise<HistoryMessage[]> {
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.customerId, customerId), eq(messages.channel, channel)))
+    .orderBy(desc(messages.createdAt))
+    .limit(limit);
+
+  return rows
+    .reverse()
+    .filter(
+      (row) =>
+        (row.role === 'user' || row.role === 'assistant') &&
+        typeof row.content === 'string' &&
+        row.content.trim().length > 0,
+    )
+    .map((row) => ({
+      role: row.role as 'user' | 'assistant',
+      content: row.content ?? '',
+    }));
+}

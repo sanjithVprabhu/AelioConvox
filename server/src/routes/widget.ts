@@ -1,6 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { processTurn, verifySessionToken, withSessionLock } from '@aelio/core';
+import {
+  ensureCustomer,
+  findOrCreateSession,
+  loadCustomerChannelHistory,
+  processTurn,
+  verifySessionToken,
+  withSessionLock,
+} from '@aelio/core';
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { resolvePublicDir } from '../paths.js';
@@ -11,6 +18,8 @@ import { MAX_WS_FRAME_BYTES } from '@aelio/protocol';
 
 const WIDGET_WS_PATH = '/widget/ws';
 const MAX_MESSAGE_LENGTH = 4096;
+/** How many past user/assistant turns to hydrate into the widget on connect. */
+const WIDGET_HISTORY_LIMIT = 50;
 
 const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
@@ -173,7 +182,27 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
             },
             'Widget client initialized',
           );
-          socket.send(JSON.stringify({ type: 'ready', customerId }));
+
+          const internalCustomerId = await ensureCustomer(
+            deps.database.db,
+            customerId,
+            'web',
+            channelAddress,
+          );
+          await findOrCreateSession(
+            deps.database.db,
+            internalCustomerId,
+            'web',
+            deps.config.session.idle_timeout_minutes,
+          );
+          const history = await loadCustomerChannelHistory(
+            deps.database.db,
+            internalCustomerId,
+            'web',
+            WIDGET_HISTORY_LIMIT,
+          );
+
+          socket.send(JSON.stringify({ type: 'ready', customerId, history }));
           return;
         }
 
