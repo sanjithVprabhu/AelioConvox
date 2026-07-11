@@ -59,6 +59,12 @@ type AelioChatOptions = {
 - `unmountAelioChat(handle)` removes a mounted widget.
 - Script-tag users can call `window.AelioChat.mount(options)`.
 
+## Chat history
+
+On connect the widget receives prior user/assistant messages from the Aelio server
+(in the `ready` frame's `history` field) and renders them automatically. Requires an
+Aelio server that sends history on init (v0.1.2+ widget with a matching server build).
+
 ## Connection status & reconnect
 
 The widget surfaces its connection state in the panel (a status dot + label) instead of sitting silently on "Connecting…":

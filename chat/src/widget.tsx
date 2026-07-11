@@ -1,5 +1,6 @@
 import { render } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { renderMarkdown } from './markdown.js';
 
 type ChatMessage = {
   role: 'user' | 'assistant';
@@ -7,7 +8,11 @@ type ChatMessage = {
 };
 
 type ServerMessage =
-  | { type: 'ready'; customerId: string }
+  | {
+      type: 'ready';
+      customerId: string;
+      history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+    }
   | { type: 'message'; role: 'assistant'; content: string }
   | { type: 'confirmation'; prompt: string; turnId?: string }
   | { type: 'typing'; active: boolean }
@@ -95,6 +100,18 @@ function getScriptOptions(): AelioChatOptions | null {
     launcherLabel: script.dataset.launcherLabel,
     initialMessage: script.dataset.initialMessage,
   };
+}
+
+function MessageBody({ role, content }: { role: ChatMessage['role']; content: string }) {
+  if (role === 'user') {
+    return <span class="aelio-plain">{content}</span>;
+  }
+  return (
+    <div
+      class="aelio-md"
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+    />
+  );
 }
 
 function ChatWidget({ options }: { options: NormalizedOptions }) {
@@ -222,6 +239,9 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
           attempt = 0;
           setStatus('connected');
           setStatusDetail('');
+          if (data.history?.length) {
+            setMessages(data.history);
+          }
           return;
         }
         if (data.type === 'typing') {
@@ -348,7 +368,7 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
             {messages.length === 0 ? <div class="aelio-hint">{options.initialMessage}</div> : null}
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} class={`aelio-msg aelio-${message.role}`}>
-                {message.content}
+                <MessageBody role={message.role} content={message.content} />
                 {pendingConfirmationIndex === index ? (
                   <div class="aelio-confirm-actions">
                     <button
@@ -401,9 +421,24 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
         .aelio-header strong { min-width: 0; overflow-wrap: anywhere; font-size: 15px; }
         .aelio-close { background: transparent; border: none; font-size: 20px; line-height: 1; cursor: pointer; color: #374151; }
         .aelio-messages { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; background: #f9fafb; }
-        .aelio-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; line-height: 1.4; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .aelio-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; line-height: 1.5; font-size: 14px; overflow-wrap: anywhere; }
+        .aelio-plain { white-space: pre-wrap; }
         .aelio-user { align-self: flex-end; background: #111827; color: #fff; }
         .aelio-assistant { align-self: flex-start; background: #fff; border: 1px solid #e5e7eb; color: #111827; }
+        .aelio-md p { margin: 0 0 0.55em; }
+        .aelio-md p:last-child { margin-bottom: 0; }
+        .aelio-md ul, .aelio-md ol { margin: 0.35em 0 0.55em; padding-left: 1.2em; }
+        .aelio-md li { margin: 0.15em 0; }
+        .aelio-md li > p { margin: 0; }
+        .aelio-md strong { font-weight: 600; }
+        .aelio-md em { font-style: italic; }
+        .aelio-md code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: #f3f4f6; padding: 0.1em 0.35em; border-radius: 4px; }
+        .aelio-md pre { margin: 0.5em 0; padding: 8px 10px; background: #f3f4f6; border-radius: 8px; overflow-x: auto; }
+        .aelio-md pre code { background: transparent; padding: 0; }
+        .aelio-md a { color: #2563eb; text-decoration: underline; }
+        .aelio-md h1, .aelio-md h2, .aelio-md h3 { margin: 0.6em 0 0.35em; font-size: 1em; font-weight: 600; }
+        .aelio-md h1:first-child, .aelio-md h2:first-child, .aelio-md h3:first-child { margin-top: 0; }
+        .aelio-md blockquote { margin: 0.5em 0; padding-left: 0.75em; border-left: 3px solid #e5e7eb; color: #4b5563; }
         .aelio-confirm-actions { display: flex; gap: 8px; margin-top: 10px; }
         .aelio-confirm-yes, .aelio-confirm-no { border: none; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
         .aelio-confirm-yes { background: #111827; color: #fff; }
