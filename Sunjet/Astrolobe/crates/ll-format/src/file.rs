@@ -249,9 +249,15 @@ pub fn write_file_with<P: AsRef<Path>>(
     write_atomic(path.as_ref(), &buf)
 }
 
-/// Read and validate a complete file.
+/// Read and validate a complete file from a path.
 pub fn read_file<P: AsRef<Path>>(path: P) -> Result<LlFile> {
     let bytes = fs::read(path.as_ref())?;
+    read_file_bytes(&bytes)
+}
+
+/// Read and validate a complete file from an in-memory byte buffer
+/// (used when segments are fetched from an object store).
+pub fn read_file_bytes(bytes: &[u8]) -> Result<LlFile> {
     let len = bytes.len();
     if len < PREAMBLE_LEN + TRAILER_LEN {
         return Err(FormatError::Truncated("file shorter than preamble+trailer"));

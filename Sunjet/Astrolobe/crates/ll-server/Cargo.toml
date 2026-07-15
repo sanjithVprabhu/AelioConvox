@@ -14,6 +14,7 @@ path = "src/main.rs"
 ll-query = { path = "../ll-query" }
 ll-engine = { path = "../ll-engine" }
 ll-catalog = { path = "../ll-catalog" }
+ll-storage = { path = "../ll-storage" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 serde = { version = "1", features = ["derive"] }

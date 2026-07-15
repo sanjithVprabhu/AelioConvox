@@ -13,3 +13,8 @@ ll-text = { path = "../ll-text" } # tokenizer + TextView
 ll-graph = { path = "../ll-graph" }
 ll-catalog = { path = "../ll-catalog" }
 ll-cost = { path = "../ll-cost" } # selectivity-driven filtered-vector strategy selection
+ll-storage = { path = "../ll-storage" }
+
+[dev-dependencies]
+tempfile = "3"
+ll-storage = { path = "../ll-storage" }

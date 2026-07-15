@@ -30,8 +30,8 @@ pub use checksum::crc32c;
 pub use column::{Column, DEFAULT_ROWS_PER_PAGE};
 pub use error::{FormatError, Result};
 pub use file::{
-    read_file, write_file, write_file_with, FileMeta, LlFile, RawSection, WriteOptions,
-    TRAILER_LEN,
+    read_file, read_file_bytes, write_file, write_file_with, FileMeta, LlFile, RawSection,
+    WriteOptions, TRAILER_LEN,
 };
 pub use footer::{Footer, MvccSummary, SectionEncoding, SectionEntry, SectionType, ZoneMap};
 pub use preamble::{Preamble, FORMAT_VERSION, MAGIC, PREAMBLE_LEN};

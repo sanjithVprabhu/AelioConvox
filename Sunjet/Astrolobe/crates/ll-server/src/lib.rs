@@ -62,6 +62,8 @@ pub struct AppState {
     keys: Arc<KeySet>,
     llm: Option<Arc<dyn LlmClient>>,
     embedder: Option<Arc<dyn Embedder>>,
+    /// `local` / `s3` / `cached` / … — snapshotted at boot for `/v1/health`.
+    segment_backend: &'static str,
 }
 
 impl AppState {
@@ -70,6 +72,7 @@ impl AppState {
     /// language and embedding are disabled until [`with_llm`](Self::with_llm) /
     /// [`with_embedder`](Self::with_embedder) supply backends.
     pub fn new(db: Database, api_keys: Vec<String>) -> Self {
+        let segment_backend = db.segment_backend();
         let keys = if api_keys.is_empty() {
             KeySet::Open
         } else {
@@ -80,6 +83,7 @@ impl AppState {
             keys: Arc::new(keys),
             llm: None,
             embedder: None,
+            segment_backend,
         }
     }
 
@@ -137,9 +141,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/flush", post(flush))
         .route("/v1/admin/compact", post(compact))
         .layer(middleware::from_fn_with_state(state.clone(), auth))
-        .with_state(state);
+        .with_state(state.clone());
 
-    Router::new().route("/v1/health", get(health)).merge(api)
+    Router::new()
+        .route("/v1/health", get(health))
+        .with_state(state)
+        .merge(api)
 }
 
 /// Bearer-token gate. In open mode every request passes; otherwise the `Authorization: Bearer
@@ -159,8 +166,13 @@ async fn auth(State(state): State<AppState>, req: Request, next: Next) -> Result
     }
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "ok", "service": "ll-server", "version": env!("CARGO_PKG_VERSION") }))
+async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "ok",
+        "service": "ll-server",
+        "version": env!("CARGO_PKG_VERSION"),
+        "segment_backend": state.segment_backend,
+    }))
 }
 
 async fn create_table(

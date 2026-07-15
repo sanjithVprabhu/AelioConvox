@@ -29,3 +29,7 @@ pub use source::Source;
 // Re-exports for ergonomic query construction.
 pub use ll_catalog::ColumnKind;
 pub use ll_engine::Value;
+pub use ll_storage::{
+    build_store, from_env as storage_from_env, LocalSegmentStore, S3SegmentStore, SegmentBackend,
+    SegmentStore, StorageConfig,
+};

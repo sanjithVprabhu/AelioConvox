@@ -20,6 +20,7 @@ use std::sync::Arc;
 use ll_catalog::{Catalog, ColumnKind};
 use ll_engine::{Engine, Memtable, Op, Row, Value};
 use ll_format::read_file;
+use ll_storage::{LocalSegmentStore, SegmentStore};
 
 use crate::exec::{execute, explain_plan, PredOp, Query};
 use crate::file_source::FileSource;
@@ -155,6 +156,9 @@ pub struct Database {
     seg_names: Vec<String>,
     next_row_id: u64,
     seg_seq: u64,
+    /// Where immutable `.vss` segments are published / fetched / pruned.
+    /// Local-only by default; cloud backends write-through to object storage.
+    store: Arc<dyn SegmentStore>,
 }
 
 impl Database {
@@ -162,6 +166,12 @@ impl Database {
     /// WAL; use [`Database::open`] to reopen a persisted database.
     pub fn create<P: AsRef<Path>>(dir: P) -> io::Result<Self> {
         let dir = dir.as_ref().to_path_buf();
+        let store: Arc<dyn SegmentStore> = Arc::new(LocalSegmentStore::new(&dir));
+        Self::create_with_store(dir, store)
+    }
+
+    /// Like [`create`](Self::create) but with an explicit segment store (e.g. S3-backed).
+    pub fn create_with_store(dir: PathBuf, store: Arc<dyn SegmentStore>) -> io::Result<Self> {
         let engine = Engine::create(dir.join(WAL_NAME), 1)?;
         Ok(Database {
             dir,
@@ -171,6 +181,7 @@ impl Database {
             seg_names: Vec::new(),
             next_row_id: 1,
             seg_seq: 0,
+            store,
         })
     }
 
@@ -179,9 +190,16 @@ impl Database {
     /// memtable. If there is no WAL yet, behaves like [`Database::create`].
     pub fn open<P: AsRef<Path>>(dir: P) -> io::Result<Self> {
         let dir = dir.as_ref().to_path_buf();
+        let store: Arc<dyn SegmentStore> = Arc::new(LocalSegmentStore::new(&dir));
+        Self::open_with_store(dir, store)
+    }
+
+    /// Like [`open`](Self::open) but with an explicit segment store. Missing local
+    /// segments are fetched via [`SegmentStore::ensure_local`] (cloud download).
+    pub fn open_with_store(dir: PathBuf, store: Arc<dyn SegmentStore>) -> io::Result<Self> {
         let wal_path = dir.join(WAL_NAME);
         if !wal_path.exists() {
-            return Self::create(&dir);
+            return Self::create_with_store(dir, store);
         }
         let manifest = std::fs::read(dir.join(MANIFEST_NAME))
             .ok()
@@ -195,7 +213,9 @@ impl Database {
         let mut max_id = manifest.next_row_id.saturating_sub(1);
         let mut segments = Vec::new();
         for name in &manifest.segments {
-            let f = read_file(dir.join(name)).map_err(io::Error::other)?;
+            let path = dir.join(name);
+            store.ensure_local(name, &path)?;
+            let f = read_file(&path).map_err(io::Error::other)?;
             if let Some(m) = f.translation_table.iter().copied().max() {
                 max_id = max_id.max(m);
             }
@@ -214,7 +234,13 @@ impl Database {
             seg_names,
             next_row_id: max_id + 1,
             seg_seq: manifest.seg_seq,
+            store,
         })
+    }
+
+    /// The active segment backend label (`local`, `s3`, `cached`, …).
+    pub fn segment_backend(&self) -> &'static str {
+        self.store.backend_name()
     }
 
     /// Define a table and persist the updated schema so a reopened database can resolve its
@@ -320,9 +346,10 @@ impl Database {
     }
 
     /// Flush the memtable to a new `.vss` segment and reset it, crash-safely: write+fsync the
-    /// segment, record it (with the new checkpoint LSN) in the manifest atomically, then
-    /// truncate the WAL. A crash between any of these steps is safe — recovery filters the
-    /// WAL by the manifest's checkpoint LSN, so nothing is double-applied or lost.
+    /// segment, publish it to the configured [`SegmentStore`] (local and/or cloud), record it
+    /// (with the new checkpoint LSN) in the manifest atomically, then truncate the WAL. A crash
+    /// between any of these steps is safe — recovery filters the WAL by the manifest's
+    /// checkpoint LSN, so nothing is double-applied or lost.
     pub fn flush(&mut self) -> io::Result<()> {
         if self.engine.memtable().is_empty() {
             return Ok(()); // nothing to persist
@@ -333,6 +360,9 @@ impl Database {
         if n == 0 {
             return Ok(());
         }
+        // Publish BEFORE swinging the manifest so a crash never leaves the manifest pointing
+        // at a segment that isn't durable in the configured store.
+        self.store.publish(&name, &path)?;
         self.seg_seq += 1;
         let f = read_file(&path).map_err(io::Error::other)?;
         self.segments.push(FileSource::new(Arc::new(f)));
@@ -405,6 +435,7 @@ impl Database {
             let path = self.dir.join(&name);
             let n = Engine::flush_memtable_to(&mem, &path)?;
             if n > 0 {
+                self.store.publish(&name, &path)?;
                 self.seg_seq += 1;
                 let f = read_file(&path).map_err(io::Error::other)?;
                 self.segments.push(FileSource::new(Arc::new(f)));
@@ -430,10 +461,11 @@ impl Database {
         self.engine.reset_memtable();
 
         // Now that the manifest no longer references them, the old segment files are
-        // unreachable — safe to unlink. A crash before this just leaves harmless orphans.
+        // unreachable — safe to prune from local disk AND the cloud store. A crash before
+        // this just leaves harmless orphans (local and/or remote).
         for name in &old_names {
             if !self.seg_names.contains(name) {
-                let _ = std::fs::remove_file(self.dir.join(name));
+                let _ = self.store.remove(name, &self.dir.join(name));
             }
         }
         Ok(())

@@ -15,7 +15,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use ll_query::Database;
+use ll_query::{storage_from_env, Database};
 use ll_server::embed::HttpEmbedder;
 use ll_server::nl::AnthropicClient;
 use ll_server::{router, AppState};
@@ -32,8 +32,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     std::fs::create_dir_all(&data_dir)?;
-    let db = Database::open(&data_dir)?;
+    let (storage_config, store) = storage_from_env(std::path::PathBuf::from(&data_dir))?;
+    let db = Database::open_with_store(std::path::PathBuf::from(&data_dir), store)?;
     let mut state = AppState::new(db, api_keys);
+
+    eprintln!(
+        "segment store: {}  (prefix={:?})",
+        match storage_config.backend {
+            ll_query::SegmentBackend::Local => "local",
+            ll_query::SegmentBackend::S3 => "s3 (write-through cache)",
+        },
+        storage_config.prefix
+    );
 
     // Enable natural-language queries when an Anthropic key is present.
     let nl_enabled = match std::env::var("ANTHROPIC_API_KEY") {
