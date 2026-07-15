@@ -7,19 +7,31 @@ name = "aelio-sdk"
 version = "0.1.0"
 description = "Aelio SDK for Python — expose backend functions to the Aelio conversational runtime over a single outbound WebSocket."
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 requires-python = ">=3.9"
 authors = [{ name = "Aelio" }]
 keywords = ["aelio", "sdk", "conversational", "ai", "agent", "whatsapp", "chatbot"]
 dependencies = ["websockets>=12.0"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries",
+]
 
 [project.urls]
-Homepage = "https://github.com/aelio-dev/aelio"
-Repository = "https://github.com/aelio-dev/aelio"
-Issues = "https://github.com/aelio-dev/aelio/issues"
+Homepage = "https://github.com/sanjithVprabhu/AelioConvox"
+Repository = "https://github.com/sanjithVprabhu/AelioConvox"
+Issues = "https://github.com/sanjithVprabhu/AelioConvox/issues"
+Documentation = "https://github.com/sanjithVprabhu/AelioConvox/tree/main/sdk/python"
 
 [tool.hatch.build.targets.wheel]
-include = ["sdk.py"]
+packages = ["aelio"]
 
 [tool.hatch.build.targets.sdist]
-include = ["sdk.py", "README.md"]
+include = ["aelio", "README.md", "LICENSE", "pyproject.toml"]

@@ -31,8 +31,9 @@ export function resolvePublicDir(): string {
   ].filter((value): value is string => Boolean(value));
 
   for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
+    const absolute = resolve(candidate);
+    if (existsSync(absolute)) {
+      return absolute;
     }
   }
 

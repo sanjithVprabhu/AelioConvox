@@ -21,6 +21,7 @@ import { registerTestRoutes } from './routes/test.js';
 import { registerWidgetRoutes } from './routes/widget.js';
 import { registerProactiveRoutes } from './routes/proactive.js';
 import { registerTelemetryRoutes } from './routes/telemetry.js';
+import { registerAdminDbRoutes } from './routes/admin-db.js';
 import type { RuntimeDeps } from './runtime-deps.js';
 import { ServerSdkBridge } from './sdk-bridge.js';
 import { initSunjet } from './sunjet.js';
@@ -219,6 +220,7 @@ export async function createApp(config: AelioConfig) {
   await registerWhatsAppRoutes(app, deps);
   await registerProactiveRoutes(app, deps);
   await registerTelemetryRoutes(app, deps);
+  await registerAdminDbRoutes(app, deps);
   await registerTestRoutes(app, sdkBridge);
   await app.register(fastifyStatic, {
     root: publicDir,

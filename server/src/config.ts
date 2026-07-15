@@ -228,6 +228,20 @@ export const ConfigSchema = z.object({
       timeout_ms: z.number().int().positive().default(30_000),
       dual_write_sqlite: z.boolean().default(true),
       fallback_sqlite_on_error: z.boolean().default(true),
+      // Segment durability for Astrolobe `.vss` files. Secrets must stay in env —
+      // never commit cloud credentials to YAML.
+      segment_storage: z
+        .object({
+          // local = disk only under LL_DATA_DIR; s3 = S3-compatible write-through cache.
+          // Override at deploy time with AELIO_SUNJET_SEGMENT_BACKEND — applied after parse.
+          backend: z.enum(['local', 's3']).default('local'),
+          prefix: z.string().optional(),
+          // Non-secret hints only; credentials stay in AELIO_SUNJET_S3_* / LL_S3_* env.
+          bucket: z.string().optional(),
+          region: z.string().optional(),
+          endpoint: z.string().optional(),
+        })
+        .default({}),
       tables: z
         .object({
           messages: z.string().min(1).default('convox_messages'),
@@ -306,6 +320,10 @@ export function loadConfig(configPath = process.env.AELIO_CONFIG ?? './config.ya
   const config = result.data;
   config.server.port = resolveAelioPort(config.server.port);
 
+  applyLlmEnvOverrides(config);
+  applySunjetEnvOverrides(config);
+  applySegmentStorageEnvOverrides(config);
+
   // Restrict widget origins at deploy time without rebuilding the image/config
   // (SEC-007): AELIO_WEB_ALLOWED_ORIGINS is a comma-separated allowlist that
   // overrides channels.web.allowed_origins. Set it in production so the baked
@@ -319,4 +337,108 @@ export function loadConfig(configPath = process.env.AELIO_CONFIG ?? './config.ya
   }
 
   return config;
+}
+
+type LlmProviderName = 'anthropic' | 'openai' | 'gemini' | 'groq' | 'ollama' | 'mock';
+
+const DEFAULT_LLM_MODELS: Record<LlmProviderName, string> = {
+  openai: 'gpt-4o-mini',
+  anthropic: 'claude-sonnet-4-6',
+  gemini: 'gemini-2.0-flash',
+  groq: 'llama-3.3-70b-versatile',
+  ollama: 'llama3.2',
+  mock: 'mock',
+};
+
+function isLlmProviderName(value: string): value is LlmProviderName {
+  return value in DEFAULT_LLM_MODELS;
+}
+
+function apiKeyEnvForProvider(provider: LlmProviderName): string | undefined {
+  switch (provider) {
+    case 'openai':
+      return process.env.OPENAI_API_KEY?.trim() || undefined;
+    case 'anthropic':
+      return process.env.ANTHROPIC_API_KEY?.trim() || undefined;
+    case 'gemini':
+      return process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || undefined;
+    case 'groq':
+      return process.env.GROQ_API_KEY?.trim() || undefined;
+    case 'ollama':
+    case 'mock':
+      return undefined;
+  }
+}
+
+/** Docker / deploy overrides so customers don't need a custom YAML per provider. */
+function applyLlmEnvOverrides(config: AelioConfig): void {
+  const providerRaw = process.env.AELIO_LLM_PROVIDER?.trim().toLowerCase();
+  if (providerRaw && isLlmProviderName(providerRaw)) {
+    if (providerRaw !== config.llm.provider && !process.env.AELIO_LLM_MODEL?.trim()) {
+      config.llm.model = DEFAULT_LLM_MODELS[providerRaw];
+    }
+    config.llm.provider = providerRaw;
+  }
+
+  const model = process.env.AELIO_LLM_MODEL?.trim();
+  if (model) {
+    config.llm.model = model;
+  }
+
+  const fromEnv = apiKeyEnvForProvider(config.llm.provider as LlmProviderName);
+  if (fromEnv) {
+    config.llm.api_key = fromEnv;
+  }
+
+  if (config.llm.fallback) {
+    const fbKey = apiKeyEnvForProvider(config.llm.fallback.provider as LlmProviderName);
+    if (fbKey) {
+      config.llm.fallback.api_key = fbKey;
+    }
+  }
+}
+
+/** Enable / point at ll-server without editing YAML (Docker Compose). */
+function applySunjetEnvOverrides(config: AelioConfig): void {
+  const enabled = process.env.AELIO_SUNJET_ENABLED?.trim().toLowerCase();
+  if (enabled === '1' || enabled === 'true' || enabled === 'yes' || enabled === 'on') {
+    config.sunjet.enabled = true;
+  } else if (enabled === '0' || enabled === 'false' || enabled === 'no' || enabled === 'off') {
+    config.sunjet.enabled = false;
+  }
+
+  const url = process.env.AELIO_SUNJET_URL?.trim();
+  if (url) {
+    config.sunjet.url = url;
+  }
+
+  const apiKey =
+    process.env.AELIO_SUNJET_API_KEY?.trim() || process.env.SUNJET_API_KEY?.trim() || undefined;
+  if (apiKey) {
+    config.sunjet.api_key = apiKey;
+  }
+}
+
+function applySegmentStorageEnvOverrides(config: AelioConfig): void {
+  // Env wins for segment backend so secrets never need to live in YAML.
+  const segmentBackend = process.env.AELIO_SUNJET_SEGMENT_BACKEND?.trim().toLowerCase();
+  if (segmentBackend === 'local' || segmentBackend === 's3') {
+    config.sunjet.segment_storage.backend = segmentBackend;
+  }
+  const segmentPrefix = process.env.AELIO_SUNJET_SEGMENT_PREFIX?.trim();
+  if (segmentPrefix) {
+    config.sunjet.segment_storage.prefix = segmentPrefix;
+  }
+  const segmentBucket = process.env.AELIO_SUNJET_S3_BUCKET?.trim();
+  if (segmentBucket) {
+    config.sunjet.segment_storage.bucket = segmentBucket;
+  }
+  const segmentRegion = process.env.AELIO_SUNJET_S3_REGION?.trim();
+  if (segmentRegion) {
+    config.sunjet.segment_storage.region = segmentRegion;
+  }
+  const segmentEndpoint = process.env.AELIO_SUNJET_S3_ENDPOINT?.trim();
+  if (segmentEndpoint) {
+    config.sunjet.segment_storage.endpoint = segmentEndpoint;
+  }
 }

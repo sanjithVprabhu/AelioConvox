@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image/SDK version tag (e.g. 0.1.0)'
+        required: true
+        default: '0.1.0'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: aelio-server
+
+jobs:
+  docker:
+    name: Build & push server image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+          OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "owner_lc=${OWNER_LC}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.ver.outputs.owner_lc }}/${{ env.IMAGE_NAME }}:latest
+            ghcr.io/${{ steps.ver.outputs.owner_lc }}/${{ env.IMAGE_NAME }}:${{ steps.ver.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Log in to Docker Hub
+        continue-on-error: true
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Mirror to Docker Hub (if credentials present)
+        continue-on-error: true
+        run: |
+          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "DOCKERHUB_* secrets not set — skipping Hub mirror"
+            exit 0
+          fi
+          SRC="ghcr.io/${{ steps.ver.outputs.owner_lc }}/${{ env.IMAGE_NAME }}"
+          DST="${{ secrets.DOCKERHUB_USERNAME }}/aelio-server"
+          docker buildx imagetools create \
+            --tag "${DST}:latest" \
+            --tag "${DST}:${{ steps.ver.outputs.version }}" \
+            "${SRC}:${{ steps.ver.outputs.version }}"
+
+  npm:
+    name: Publish @aelio/sdk (optional — already on npm)
+    runs-on: ubuntu-latest
+    # Skip by default; set secrets.NPM_TOKEN and inputs.publish_npm to refresh.
+    if: ${{ false }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @aelio/sdk build
+      - name: Publish to npm
+        working-directory: sdk/node
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  pypi:
+    name: Publish aelio-sdk (PyPI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install build twine
+      - run: python -m build
+        working-directory: sdk/python
+      - name: Upload to PyPI
+        working-directory: sdk/python
+        continue-on-error: true
+        run: |
+          if [ -z "$TWINE_PASSWORD" ]; then
+            echo "PYPI_API_TOKEN not set — skipping PyPI upload"
+            exit 0
+          fi
+          twine upload dist/*
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}

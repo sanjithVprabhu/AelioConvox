@@ -1,15 +1,20 @@
 # syntax=docker/dockerfile:1
+#
+# All-in-one Aelio image: Node harness + Astrolobe ll-server in one container.
+# Customers: docker pull + docker run — no compose required.
 
-# ---- build stage: install everything, build the workspace, prune to prod ----
-FROM node:22-bookworm-slim AS build
+# ---- Astrolobe (ll-server) ----
+FROM rust:1-bookworm AS sunjet-build
+WORKDIR /src
+COPY Sunjet/Astrolobe/ .
+RUN cargo build --release -p ll-server
 
+# ---- Aelio Node server ----
+FROM node:22-bookworm-slim AS node-build
 WORKDIR /app
 RUN corepack enable
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json tsconfig.base.json ./
-# The server workspace plus the widget (chat) — the root build compiles @aelio/chat
-# first and its postbuild copies widget.js into server/public, which pnpm deploy
-# bundles. The client SDKs (sdk/) are not needed to build or run the server.
 COPY server ./server
 COPY chat ./chat
 COPY packages ./packages
@@ -18,14 +23,14 @@ COPY config.docker.yaml ./config.docker.yaml
 
 RUN pnpm install --frozen-lockfile
 RUN pnpm build
-
-# Produce a self-contained, production-only deployment of the server.
-# pnpm deploy flattens the workspace deps (@aelio/*) and their prod deps
-# (incl. the compiled better-sqlite3 / sqlite-vec native bindings) into one tree.
 RUN pnpm --filter @aelio/server deploy --prod /app/bundle
 
-# ---- runtime stage: distroless, node-only, no shell ----
-FROM gcr.io/distroless/nodejs22-debian12 AS runtime
+# ---- Runtime: both processes via entrypoint ----
+FROM node:22-bookworm-slim AS runtime
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl tini \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -33,18 +38,28 @@ ENV NODE_ENV=production
 ENV AELIO_CONFIG=/app/config.yaml
 ENV AELIO_MIGRATIONS_PATH=/app/node_modules/@aelio/db/drizzle
 ENV AELIO_PUBLIC_PATH=/app/public
+ARG AELIO_VERSION=0.1.2
+ENV AELIO_VERSION=$AELIO_VERSION
 
-COPY --from=build /app/bundle/node_modules ./node_modules
-COPY --from=build /app/bundle/dist ./dist
-COPY --from=build /app/bundle/public ./public
-COPY --from=build /app/config.docker.yaml ./config.yaml
+# All-in-one defaults (override with -e …)
+ENV LL_DATA_DIR=/data/sunjet
+ENV LL_BIND=127.0.0.1:8080
+ENV AELIO_SUNJET_ENABLED=1
+ENV AELIO_SUNJET_URL=http://127.0.0.1:8080
+ENV AELIO_SUNJET_SEGMENT_BACKEND=local
+
+COPY --from=sunjet-build /src/target/release/ll-server /usr/local/bin/ll-server
+COPY --from=node-build /app/bundle/node_modules ./node_modules
+COPY --from=node-build /app/bundle/dist ./dist
+COPY --from=node-build /app/bundle/public ./public
+COPY --from=node-build /app/config.docker.yaml ./config.yaml
+COPY server/docker-entrypoint.sh /usr/local/bin/aelio-entrypoint.sh
+RUN chmod +x /usr/local/bin/aelio-entrypoint.sh /usr/local/bin/ll-server
 
 VOLUME ["/data"]
-EXPOSE 3000
+EXPOSE 3000 8080
 
-# distroless has no shell, so the healthcheck must be exec-form with the node path.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD ["/nodejs/bin/node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
+  CMD ["curl", "-fsS", "http://127.0.0.1:3000/health"]
 
-# The distroless nodejs image's entrypoint is already node, so CMD is just the script.
-CMD ["dist/main.js"]
+ENTRYPOINT ["tini", "--", "/usr/local/bin/aelio-entrypoint.sh"]

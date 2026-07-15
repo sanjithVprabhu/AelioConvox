@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AelioConvox — Astrolobe Database</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0b0f14;
+        --panel: #121820;
+        --panel-2: #171f2a;
+        --border: #243041;
+        --text: #e8edf4;
+        --muted: #8b9bb0;
+        --accent: #3b82f6;
+        --accent-dim: #1e3a5f;
+        --green: #22c55e;
+        --amber: #f59e0b;
+        --violet: #a855f7;
+        --red: #ef4444;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: 'Instrument Sans', system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 24px;
+        border-bottom: 1px solid var(--border);
+        background: linear-gradient(180deg, #10161f, var(--bg));
+        position: sticky;
+        top: 0;
+        z-index: 20;
+      }
+      header h1 { margin: 0; font-size: 1.1rem; font-weight: 700; letter-spacing: -0.02em; }
+      header p { margin: 3px 0 0; font-size: 0.8rem; color: var(--muted); }
+      .header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .pill {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 6px 12px; border-radius: 999px; font-size: 0.78rem;
+        border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+      }
+      .pill.live { color: #86efac; border-color: #166534; background: #052e16; }
+      .pill.off { color: #fca5a5; border-color: #7f1d1d; background: #450a0a; }
+      .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+      .pill.live .dot { animation: pulse 1.4s ease-in-out infinite; }
+      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+      button, input, select, textarea { font: inherit; }
+      .btn {
+        border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+        border-radius: 10px; padding: 8px 14px; cursor: pointer; font-size: 0.85rem;
+      }
+      .btn:hover { border-color: #3d5168; }
+      .btn.primary { background: var(--accent-dim); border-color: #2563eb; color: #dbeafe; }
+      .btn.danger { background: #450a0a; border-color: #7f1d1d; color: #fca5a5; }
+      .btn.small { padding: 5px 9px; font-size: 0.75rem; border-radius: 8px; }
+      a.btn { text-decoration: none; }
+
+      .layout { display: grid; grid-template-columns: 300px 1fr; flex: 1; min-height: 0; }
+      aside {
+        border-right: 1px solid var(--border); background: var(--panel);
+        overflow-y: auto; padding: 16px;
+      }
+      aside h2 {
+        margin: 0 0 12px; font-size: 0.72rem; text-transform: uppercase;
+        letter-spacing: 0.08em; color: var(--muted);
+      }
+      .coll {
+        border: 1px solid var(--border); background: var(--panel-2); border-radius: 12px;
+        padding: 11px 12px; margin-bottom: 9px; cursor: pointer; transition: border-color 0.15s;
+      }
+      .coll:hover { border-color: #3d5168; }
+      .coll.active { border-color: #2563eb; background: var(--accent-dim); }
+      .coll .name { font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; }
+      .coll .tname { font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; color: var(--muted); margin-top: 3px; }
+      .coll .desc { font-size: 0.75rem; color: var(--muted); margin-top: 6px; line-height: 1.4; }
+      .tag {
+        font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em;
+        padding: 2px 6px; border-radius: 5px; font-weight: 700;
+      }
+      .tag.active { background: #052e16; color: #86efac; }
+      .tag.mirror { background: #422006; color: #fcd34d; }
+      .tag.schema-only { background: #1e293b; color: #94a3b8; }
+      .tag.missing { background: #450a0a; color: #fca5a5; }
+
+      main { overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+      .table-head {
+        padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--panel);
+      }
+      .table-head h2 { margin: 0; font-size: 1rem; display: flex; align-items: center; gap: 10px; }
+      .table-head .sub {
+        font-size: 0.78rem; color: var(--muted); margin-top: 5px; line-height: 1.5;
+        font-family: 'IBM Plex Mono', monospace;
+      }
+      .toolbar {
+        display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+        padding: 12px 24px; border-bottom: 1px solid var(--border); background: var(--panel);
+      }
+      .toolbar input, .toolbar select {
+        background: var(--bg); border: 1px solid var(--border); color: var(--text);
+        border-radius: 9px; padding: 8px 11px; font-size: 0.82rem;
+      }
+      .toolbar .grow { flex: 1; min-width: 120px; }
+      .spacer { flex: 1; }
+
+      .scroll { flex: 1; overflow: auto; padding: 0; }
+      table.grid { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
+      table.grid th {
+        position: sticky; top: 0; background: var(--panel-2); text-align: left;
+        padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap;
+        font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); z-index: 5;
+      }
+      table.grid th .kind { display: block; font-size: 0.62rem; color: #5f7089; text-transform: none; letter-spacing: 0; margin-top: 2px; }
+      table.grid td {
+        padding: 9px 12px; border-bottom: 1px solid #1a2430; vertical-align: top;
+        max-width: 360px; overflow: hidden; text-overflow: ellipsis;
+      }
+      table.grid tr:hover td { background: #10171f; }
+      td.rowid { font-family: 'IBM Plex Mono', monospace; color: var(--accent); font-weight: 600; }
+      .cell-val { white-space: pre-wrap; word-break: break-word; max-height: 84px; overflow: auto; }
+      .cell-null { color: #5f7089; font-style: italic; }
+      .cell-vec { font-family: 'IBM Plex Mono', monospace; color: var(--violet); font-size: 0.74rem; }
+      .cell-num { font-family: 'IBM Plex Mono', monospace; }
+      .cell-time { color: var(--muted); font-size: 0.72rem; }
+      .actions-col { white-space: nowrap; }
+
+      .empty { margin: 70px auto; max-width: 460px; text-align: center; color: var(--muted); line-height: 1.6; }
+      .banner {
+        padding: 10px 24px; font-size: 0.8rem; display: none; align-items: center; gap: 10px;
+        border-bottom: 1px solid var(--border);
+      }
+      .banner.show { display: flex; }
+      .banner.err { background: #450a0a; color: #fca5a5; }
+      .banner.ok { background: #052e16; color: #86efac; }
+
+      /* Secret gate */
+      #gate {
+        display: none; align-items: center; gap: 10px; padding: 12px 24px;
+        background: #422006; border-bottom: 1px solid #713f12; color: #fcd34d; font-size: 0.82rem;
+      }
+      #gate.show { display: flex; }
+      #gate input {
+        background: var(--bg); border: 1px solid var(--border); color: var(--text);
+        border-radius: 9px; padding: 8px 11px; font-size: 0.82rem; min-width: 260px;
+      }
+
+      /* Modal */
+      .modal-bg {
+        display: none; position: fixed; inset: 0; background: rgba(3,6,10,0.7);
+        z-index: 100; align-items: center; justify-content: center; padding: 20px;
+      }
+      .modal-bg.show { display: flex; }
+      .modal {
+        background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+        width: min(720px, 100%); max-height: 88vh; overflow: hidden; display: flex; flex-direction: column;
+      }
+      .modal-head {
+        padding: 16px 20px; border-bottom: 1px solid var(--border);
+        display: flex; align-items: center; justify-content: space-between;
+      }
+      .modal-head h3 { margin: 0; font-size: 1rem; }
+      .modal-body { padding: 16px 20px; overflow-y: auto; }
+      .modal-foot {
+        padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end;
+      }
+      .field { margin-bottom: 14px; }
+      .field label { display: block; font-size: 0.8rem; margin-bottom: 5px; font-weight: 600; }
+      .field label .k { font-family: 'IBM Plex Mono', monospace; color: var(--muted); font-weight: 400; font-size: 0.72rem; margin-left: 6px; }
+      .field input, .field select, .field textarea {
+        width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+        border-radius: 9px; padding: 9px 11px; font-size: 0.85rem;
+      }
+      .field textarea { min-height: 70px; resize: vertical; font-family: 'IBM Plex Mono', monospace; font-size: 0.78rem; }
+      .field .hint { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+      .close-x { background: none; border: none; color: var(--muted); font-size: 1.4rem; cursor: pointer; }
+
+      @media (max-width: 900px) {
+        .layout { grid-template-columns: 1fr; }
+        aside { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Astrolobe Database Admin</h1>
+        <p>Browse &amp; edit the Sunjet (Astrolobe) collections — live via ll-server</p>
+      </div>
+      <div class="header-actions">
+        <span class="pill" id="status-pill"><span class="dot"></span><span id="status-text">Connecting…</span></span>
+        <a class="btn" href="/telemetry">Telemetry</a>
+        <a class="btn" href="/demo.html">Chat demo</a>
+        <button class="btn" id="secret-btn" type="button">Set secret</button>
+      </div>
+    </header>
+
+    <div id="gate">
+      <span>Enter the SDK secret (<code>AELIO_SDK_SECRET</code>) to access the database:</span>
+      <input id="gate-input" type="password" placeholder="SDK secret" />
+      <button class="btn primary" id="gate-save" type="button">Save</button>
+    </div>
+
+    <div class="banner" id="banner"></div>
+
+    <div class="layout">
+      <aside>
+        <h2>Collections</h2>
+        <div id="collections"><div class="empty" style="margin:20px 0">Loading…</div></div>
+      </aside>
+
+      <main>
+        <div class="table-head">
+          <h2 id="tbl-title">Select a collection</h2>
+          <div class="sub" id="tbl-sub">Choose a collection on the left to view stored rows.</div>
+        </div>
+
+        <div class="toolbar" id="toolbar" style="display:none">
+          <select id="filter-col" title="Filter column"></select>
+          <select id="filter-op" title="Operator">
+            <option value="eq">=</option>
+            <option value="ne">≠</option>
+            <option value="gt">&gt;</option>
+            <option value="ge">≥</option>
+            <option value="lt">&lt;</option>
+            <option value="le">≤</option>
+          </select>
+          <input id="filter-val" class="grow" type="text" placeholder="Filter value (leave blank for none)" />
+          <select id="limit-select" title="Max rows">
+            <option value="50">50 rows</option>
+            <option value="100" selected>100 rows</option>
+            <option value="500">500 rows</option>
+            <option value="2000">2000 rows</option>
+          </select>
+          <button class="btn" id="refresh-btn" type="button">Refresh</button>
+          <div class="spacer"></div>
+          <button class="btn primary" id="add-btn" type="button">+ Add row</button>
+          <button class="btn" id="flush-btn" type="button" title="Persist memtable → segment">Flush</button>
+          <button class="btn" id="compact-btn" type="button" title="Merge segments, reclaim space">Compact</button>
+        </div>
+
+        <div class="scroll" id="scroll">
+          <div class="empty">No collection selected.</div>
+        </div>
+      </main>
+    </div>
+
+    <!-- Row editor modal -->
+    <div class="modal-bg" id="modal-bg">
+      <div class="modal">
+        <div class="modal-head">
+          <h3 id="modal-title">Edit row</h3>
+          <button class="close-x" id="modal-close" type="button">&times;</button>
+        </div>
+        <div class="modal-body" id="modal-body"></div>
+        <div class="modal-foot">
+          <button class="btn" id="modal-cancel" type="button">Cancel</button>
+          <button class="btn primary" id="modal-save" type="button">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const SECRET_KEY = 'aelio_admin_secret';
+      let secret = localStorage.getItem(SECRET_KEY) || '';
+      let catalog = [];
+      let current = null; // selected table entry {name, columns, ...}
+      let editState = null; // { mode:'insert'|'edit', rowId }
+
+      const $ = (id) => document.getElementById(id);
+      const statusPill = $('status-pill');
+      const statusText = $('status-text');
+
+      function esc(v) {
+        return String(v)
+          .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+      }
+      function setStatus(mode, text) {
+        statusText.textContent = text;
+        statusPill.classList.remove('live', 'off');
+        if (mode) statusPill.classList.add(mode);
+      }
+      function banner(kind, msg) {
+        const b = $('banner');
+        b.className = 'banner show ' + kind;
+        b.textContent = msg;
+        if (kind === 'ok') setTimeout(() => b.classList.remove('show'), 3000);
+      }
+      function clearBanner() { $('banner').classList.remove('show'); }
+
+      function showGate(show) { $('gate').classList.toggle('show', show); }
+
+      async function api(method, path, body) {
+        const headers = { Authorization: 'Bearer ' + secret };
+        if (body !== undefined) headers['content-type'] = 'application/json';
+        const res = await fetch(path, {
+          method, headers,
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        if (res.status === 401) {
+          showGate(true);
+          throw new Error('Unauthorized — set the SDK secret.');
+        }
+        const text = await res.text();
+        const data = text ? JSON.parse(text) : {};
+        if (!res.ok) throw new Error(data.error || data.message || ('HTTP ' + res.status));
+        return data;
+      }
+
+      // ---- Column kind helpers ------------------------------------------------
+      function kindOf(col) { return (col && col.kind) || 'utf8'; }
+      const TIME_COLS = ['created_at', 'updated_at', 'expires_at', 'covers_from', 'covers_to'];
+
+      function fmtTime(ms) {
+        if (ms === null || ms === undefined || ms === 0) return '—';
+        try { return new Date(Number(ms)).toLocaleString(); } catch { return String(ms); }
+      }
+
+      function renderCell(col, value) {
+        if (!value || value.type === 'null' || value.value === undefined || value.value === null) {
+          return '<span class="cell-null">null</span>';
+        }
+        const kind = kindOf(col);
+        if (value.type === 'vector') {
+          const omitted = value.__omitted;
+          const preview = Array.isArray(value.value) ? value.value.slice(0, 4).map((n) => Number(n).toFixed(3)).join(', ') : '';
+          const dim = omitted || (Array.isArray(value.value) ? value.value.length : '?');
+          return `<span class="cell-vec">vec[${dim}] · ${esc(preview)}…</span>`;
+        }
+        if (value.type === 'edges') {
+          const arr = Array.isArray(value.value) ? value.value : [];
+          return `<span class="cell-vec">edges[${arr.length}] ${esc(JSON.stringify(arr.slice(0, 12)))}</span>`;
+        }
+        if (value.type === 'i64' && TIME_COLS.includes(col.name)) {
+          return `<span class="cell-time">${esc(fmtTime(value.value))}<br><span style="color:#5f7089">${esc(value.value)}</span></span>`;
+        }
+        if (value.type === 'i64' || value.type === 'f64') {
+          return `<span class="cell-num">${esc(value.value)}</span>`;
+        }
+        if (value.type === 'bool') {
+          return `<span class="cell-num">${value.value ? 'true' : 'false'}</span>`;
+        }
+        return `<div class="cell-val">${esc(value.value)}</div>`;
+      }
+
+      // ---- Collections sidebar -----------------------------------------------
+      function statusTag(entry) {
+        if (!entry.exists) return '<span class="tag missing">not created</span>';
+        return `<span class="tag ${entry.status}">${entry.status.replace('-', ' ')}</span>`;
+      }
+
+      function renderCollections() {
+        const el = $('collections');
+        if (!catalog.length) { el.innerHTML = '<div class="empty" style="margin:20px 0">No collections.</div>'; return; }
+        el.innerHTML = catalog.map((entry) => `
+          <div class="coll ${current && current.name === entry.name ? 'active' : ''}" data-name="${esc(entry.name)}">
+            <div class="name">${esc(entry.label)} ${statusTag(entry)}</div>
+            <div class="tname">${esc(entry.name)} · ${entry.columns.length} cols</div>
+            <div class="desc">${esc(entry.description)}</div>
+          </div>`).join('');
+        el.querySelectorAll('.coll').forEach((node) => {
+          node.addEventListener('click', () => selectTable(node.dataset.name));
+        });
+      }
+
+      async function loadCatalog() {
+        try {
+          const data = await api('GET', '/api/v1/admin/db/tables');
+          catalog = data.tables || [];
+          if (!data.enabled) {
+            setStatus('off', 'Sunjet disabled');
+            renderCollections();
+            $('scroll').innerHTML = `<div class="empty"><strong>Sunjet is not enabled</strong><br>Set <code>sunjet.enabled: true</code> in <code>config.yaml</code>, start <code>ll-server</code>, and restart Aelio to browse the Astrolobe database.</div>`;
+            return;
+          }
+          setStatus('live', `Live · ${esc(data.dataset)} · ${esc(data.url)}`);
+          renderCollections();
+          showGate(false);
+        } catch (err) {
+          setStatus('off', 'Error');
+          if (!secret) showGate(true);
+          banner('err', err.message);
+        }
+      }
+
+      // ---- Selecting / scanning a table --------------------------------------
+      async function selectTable(name) {
+        current = catalog.find((e) => e.name === name);
+        if (!current) return;
+        renderCollections();
+        $('tbl-title').innerHTML = `${esc(current.label)} ${statusTag(current)}`;
+        $('tbl-sub').innerHTML = `<code>${esc(current.name)}</code> · ${current.columns.length} columns · written by <code>${esc(current.writtenBy)}</code>`;
+        $('toolbar').style.display = current.exists ? 'flex' : 'none';
+
+        // Populate filter columns.
+        const fcol = $('filter-col');
+        fcol.innerHTML = '<option value="">(no filter)</option>' +
+          current.columns
+            .filter((c) => ['utf8', 'i64', 'f64', 'bool', 'timestamp', 'text'].includes(c.kind))
+            .map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`)
+            .join('');
+
+        if (!current.exists) {
+          $('scroll').innerHTML = `<div class="empty"><strong>Table not created yet</strong><br>This collection has a defined schema but has not been created in Astrolobe (no rows written).</div>`;
+          return;
+        }
+        await scan();
+      }
+
+      function buildApiValue(kind, raw) {
+        const s = String(raw);
+        if (kind === 'bool') return { type: 'bool', value: s === 'true' };
+        if (kind === 'i64' || kind === 'timestamp') return { type: 'i64', value: Math.trunc(Number(s)) };
+        if (kind === 'f64') return { type: 'f64', value: Number(s) };
+        if (kind === 'vector') {
+          const t = s.trim();
+          if (t.startsWith('[')) return { type: 'vector', value: JSON.parse(t) };
+          return { type: 'embed', value: s }; // let ll-server embed the text
+        }
+        if (kind === 'edge') return { type: 'edges', value: JSON.parse(s.trim() || '[]') };
+        return { type: 'utf8', value: s }; // utf8 + text
+      }
+
+      async function scan() {
+        if (!current) return;
+        clearBanner();
+        $('scroll').innerHTML = '<div class="empty">Loading rows…</div>';
+        const limit = Number($('limit-select').value);
+        const fcol = $('filter-col').value;
+        const fop = $('filter-op').value;
+        const fval = $('filter-val').value.trim();
+
+        const body = { limit };
+        if (fcol && fval !== '') {
+          const col = current.columns.find((c) => c.name === fcol);
+          try {
+            body.filters = [{ col: fcol, op: fop, value: buildApiValue(kindOf(col), fval) }];
+          } catch (e) {
+            banner('err', 'Invalid filter value: ' + e.message);
+            return;
+          }
+        }
+
+        try {
+          const data = await api('POST', `/api/v1/admin/db/tables/${encodeURIComponent(current.name)}/scan`, body);
+          renderRows(data);
+        } catch (err) {
+          $('scroll').innerHTML = `<div class="empty"><strong>Could not load rows</strong><br>${esc(err.message)}</div>`;
+        }
+      }
+
+      function renderRows(data) {
+        const cols = current.columns;
+        if (!data.rows.length) {
+          $('scroll').innerHTML = `<div class="empty"><strong>No rows</strong><br>This collection is empty (or the filter matched nothing).</div>`;
+          return;
+        }
+        const header = `<tr><th>row_id</th>${cols.map((c) => `<th>${esc(c.name)}<span class="kind">${esc(c.kind)}${c.dim ? '(' + c.dim + ')' : ''}</span></th>`).join('')}<th>actions</th></tr>`;
+        const rows = data.rows.map((row) => {
+          const cells = cols.map((c) => `<td>${renderCell(c, row.values[c.name])}</td>`).join('');
+          return `<tr data-id="${row.row_id}">
+            <td class="rowid">${row.row_id}</td>
+            ${cells}
+            <td class="actions-col">
+              <button class="btn small" data-act="edit" data-id="${row.row_id}">Edit</button>
+              <button class="btn small danger" data-act="del" data-id="${row.row_id}">Del</button>
+            </td>
+          </tr>`;
+        }).join('');
+        const note = data.capped ? `<div style="padding:8px 24px;color:var(--amber);font-size:0.78rem">Showing first ${data.count} rows (limit reached — narrow with a filter to see more).</div>` : '';
+        $('scroll').innerHTML = `${note}<table class="grid"><thead>${header}</thead><tbody>${rows}</tbody></table>`;
+        $('scroll').querySelectorAll('button[data-act]').forEach((b) => {
+          b.addEventListener('click', () => {
+            const id = Number(b.dataset.id);
+            if (b.dataset.act === 'edit') openEditor('edit', id);
+            else deleteRow(id);
+          });
+        });
+      }
+
+      // ---- Editor modal -------------------------------------------------------
+      function fieldFor(col, value) {
+        const kind = col.kind;
+        const name = col.name;
+        let control;
+        const cur = value && value.value !== undefined ? value.value : '';
+        if (kind === 'bool') {
+          const v = value && value.type === 'bool' ? String(value.value) : '';
+          control = `<select data-col="${esc(name)}" data-kind="${kind}">
+            <option value=""${v === '' ? ' selected' : ''}>(unset)</option>
+            <option value="true"${v === 'true' ? ' selected' : ''}>true</option>
+            <option value="false"${v === 'false' ? ' selected' : ''}>false</option>
+          </select>`;
+        } else if (kind === 'text' || kind === 'vector' || kind === 'edge') {
+          let display = cur;
+          if (kind === 'vector' && value && value.type === 'vector') display = JSON.stringify(value.value);
+          if (kind === 'edge' && value && value.type === 'edges') display = JSON.stringify(value.value);
+          control = `<textarea data-col="${esc(name)}" data-kind="${kind}">${esc(display)}</textarea>`;
+        } else {
+          const type = (kind === 'i64' || kind === 'f64' || kind === 'timestamp') ? 'number' : 'text';
+          const step = kind === 'f64' ? ' step="any"' : '';
+          control = `<input data-col="${esc(name)}" data-kind="${kind}" type="${type}"${step} value="${esc(cur)}" />`;
+        }
+        let hint = '';
+        if (kind === 'vector') hint = '<div class="hint">JSON array of numbers, or plain text to auto-embed (requires embedder). Leave blank to skip.</div>';
+        if (kind === 'edge') hint = '<div class="hint">JSON array of row ids, e.g. [1, 2, 3]. Leave blank to skip.</div>';
+        if (TIME_COLS.includes(name)) hint = '<div class="hint">Epoch milliseconds. Leave blank to skip.</div>';
+        return `<div class="field">
+          <label>${esc(name)}<span class="k">${esc(kind)}${col.dim ? '(' + col.dim + ')' : ''}</span></label>
+          ${control}${hint}
+        </div>`;
+      }
+
+      async function openEditor(mode, rowId) {
+        editState = { mode, rowId };
+        $('modal-title').textContent = mode === 'insert'
+          ? `Insert row into ${current.name}`
+          : `Edit row #${rowId} · ${current.name}`;
+        let values = {};
+        if (mode === 'edit') {
+          try {
+            const row = await api('GET', `/api/v1/admin/db/tables/${encodeURIComponent(current.name)}/rows/${rowId}`);
+            values = row.values || {};
+          } catch (err) { banner('err', err.message); return; }
+        }
+        $('modal-body').innerHTML = current.columns.map((c) => fieldFor(c, values[c.name])).join('');
+        $('modal-bg').classList.add('show');
+      }
+
+      function closeModal() { $('modal-bg').classList.remove('show'); editState = null; }
+
+      async function saveRow() {
+        if (!editState) return;
+        const controls = $('modal-body').querySelectorAll('[data-col]');
+        const values = {};
+        try {
+          controls.forEach((ctrl) => {
+            const col = ctrl.dataset.col;
+            const kind = ctrl.dataset.kind;
+            const raw = ctrl.value;
+            if (raw === '' || raw === null) return; // skip unset fields
+            values[col] = buildApiValue(kind, raw);
+          });
+        } catch (e) {
+          banner('err', 'Invalid value: ' + e.message);
+          return;
+        }
+        if (Object.keys(values).length === 0) {
+          banner('err', 'Nothing to save — fill at least one field.');
+          return;
+        }
+        try {
+          if (editState.mode === 'insert') {
+            const r = await api('POST', `/api/v1/admin/db/tables/${encodeURIComponent(current.name)}/rows`, { values });
+            banner('ok', `Inserted row #${r.row_id}.`);
+          } else {
+            await api('PATCH', `/api/v1/admin/db/tables/${encodeURIComponent(current.name)}/rows/${editState.rowId}`, { values });
+            banner('ok', `Updated row #${editState.rowId}.`);
+          }
+          closeModal();
+          await scan();
+        } catch (err) {
+          banner('err', err.message);
+        }
+      }
+
+      async function deleteRow(rowId) {
+        if (!confirm(`Delete row #${rowId} from ${current.name}? This writes a tombstone (space reclaimed on compaction).`)) return;
+        try {
+          await api('DELETE', `/api/v1/admin/db/tables/${encodeURIComponent(current.name)}/rows/${rowId}`);
+          banner('ok', `Deleted row #${rowId}.`);
+          await scan();
+        } catch (err) { banner('err', err.message); }
+      }
+
+      async function adminOp(op) {
+        if (!confirm(`Run ${op} on the whole database now?`)) return;
+        try {
+          await api('POST', `/api/v1/admin/db/${op}`);
+          banner('ok', `${op} complete.`);
+        } catch (err) { banner('err', err.message); }
+      }
+
+      // ---- Wiring -------------------------------------------------------------
+      $('refresh-btn').addEventListener('click', scan);
+      $('limit-select').addEventListener('change', scan);
+      $('filter-col').addEventListener('change', scan);
+      $('filter-op').addEventListener('change', () => { if ($('filter-val').value.trim()) scan(); });
+      $('filter-val').addEventListener('keydown', (e) => { if (e.key === 'Enter') scan(); });
+      $('add-btn').addEventListener('click', () => openEditor('insert'));
+      $('flush-btn').addEventListener('click', () => adminOp('flush'));
+      $('compact-btn').addEventListener('click', () => adminOp('compact'));
+      $('modal-close').addEventListener('click', closeModal);
+      $('modal-cancel').addEventListener('click', closeModal);
+      $('modal-save').addEventListener('click', saveRow);
+      $('modal-bg').addEventListener('click', (e) => { if (e.target === $('modal-bg')) closeModal(); });
+
+      function promptSecret() {
+        showGate(true);
+        $('gate-input').focus();
+      }
+      $('secret-btn').addEventListener('click', promptSecret);
+      $('gate-save').addEventListener('click', () => {
+        secret = $('gate-input').value.trim();
+        localStorage.setItem(SECRET_KEY, secret);
+        showGate(false);
+        loadCatalog();
+      });
+      $('gate-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('gate-save').click(); });
+
+      if (!secret) promptSecret();
+      loadCatalog();
+    </script>
+  </body>
+</html>

@@ -84,6 +84,19 @@ harness:
 
 # Sunjet (ll-server) — primary message store when enabled.
 # Start ll-server first: LL_DATA_DIR=./data/sunjet LL_API_KEYS=secret cargo run --release -p ll-server
+#
+# Segment storage (immutable .vss index blobs — local disk or S3-compatible cloud):
+# Set these in the Aelio/.env only (never commit secrets). Forward the same vars
+# into the ll-server process; LL_* aliases are also accepted by Astrolobe.
+#   AELIO_SUNJET_SEGMENT_BACKEND=local|s3          (default local)
+#   AELIO_SUNJET_SEGMENT_PREFIX=prod/aelio/         (optional object-key prefix)
+#   AELIO_SUNJET_S3_BUCKET=my-bucket
+#   AELIO_SUNJET_S3_REGION=us-east-1
+#   AELIO_SUNJET_S3_ENDPOINT=http://127.0.0.1:9000 # MinIO / R2 / custom
+#   AELIO_SUNJET_S3_ACCESS_KEY_ID=...
+#   AELIO_SUNJET_S3_SECRET_ACCESS_KEY=...
+#   AELIO_SUNJET_S3_ALLOW_HTTP=1                   # local MinIO
+#   AELIO_SUNJET_S3_PATH_STYLE=1                   # MinIO path-style
 sunjet:
   enabled: false
   url: http://127.0.0.1:8080
@@ -91,6 +104,8 @@ sunjet:
   embed_dim: 1536
   dual_write_sqlite: true
   fallback_sqlite_on_error: true
+  segment_storage:
+    backend: local
   tables:
     messages: convox_messages
     conversations: convox_conversations

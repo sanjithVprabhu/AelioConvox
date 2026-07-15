@@ -26,6 +26,23 @@ Config is `config.yaml` at the repo root (schema in [`src/config.ts`](src/config
 
 ## Docker
 
+### Pull (after a release publish)
+
+```bash
+docker pull ghcr.io/sanjithvprabhu/aelio-server:latest
+
+docker run -d --name aelio \
+  -p 3010:3000 \
+  -v aelio-data:/data \
+  -e AELIO_SDK_SECRET=change-me \
+  -e OPENAI_API_KEY=sk-... \
+  ghcr.io/sanjithvprabhu/aelio-server:latest
+```
+
+Point your Convox SDK at `ws://127.0.0.1:3010` (or `wss://…` in production). See [docs/GETTING_STARTED.md](../docs/GETTING_STARTED.md).
+
+### Build locally
+
 ```bash
 pnpm docker:build                    # docker build -f server/Dockerfile -t aelio/server:latest .
 pnpm docker:up                       # docker compose -f server/docker-compose.yml up --build
@@ -35,6 +52,8 @@ pnpm docker:verify                   # build, run container, run all phase tests
 The [Dockerfile](Dockerfile) is a two-stage build (build context is the **repo root**): install the workspace, `pnpm build` (which compiles `@aelio/chat` first so `widget.js` lands in `public/`), then `pnpm --filter @aelio/server deploy --prod` into a distroless runtime. Inside the container the config is `config.docker.yaml`.
 
 Environment: `AELIO_CONFIG`, `AELIO_SDK_SECRET`, `AELIO_MIGRATIONS_PATH`, `AELIO_PUBLIC_PATH`, plus whatever your config references via `${...}`. Data volume is `/data`.
+
+Release automation (GHCR + optional Docker Hub / npm / PyPI) lives in [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
 ## Deploy templates
 

@@ -48,6 +48,12 @@ sunjet:
     memories: convox_memories
     compactions: convox_compactions
     runtime_state: runtime_state
+    harness_tools: harness_tools
+    harness_capabilities: harness_capabilities
+    harness_bindings: harness_bindings
+    harness_suspensions: harness_suspensions
+    harness_ledger: harness_ledger
+    harness_traces: harness_traces
 
 storage:
   database_path: ./data/aelio-sunjet-test.db

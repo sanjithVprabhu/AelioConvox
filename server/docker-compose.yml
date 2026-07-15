@@ -1,29 +1,94 @@
+# Optional split deploy (two containers). Prefer the all-in-one image:
+#   docker run -d -p 3010:3000 -v aelio-data:/data \
+#     -e AELIO_SDK_SECRET=... -e OPENAI_API_KEY=... \
+#     sanjithvprabhu/aelio-server:latest
+#
+# Cloud segments on the all-in-one image:
+#   -e AELIO_SUNJET_SEGMENT_BACKEND=s3 -e AELIO_SUNJET_S3_BUCKET=... etc.
+
+x-segment-env: &segment-env
+  AELIO_SUNJET_SEGMENT_BACKEND: ${AELIO_SUNJET_SEGMENT_BACKEND:-local}
+  AELIO_SUNJET_SEGMENT_PREFIX: ${AELIO_SUNJET_SEGMENT_PREFIX:-}
+  AELIO_SUNJET_S3_BUCKET: ${AELIO_SUNJET_S3_BUCKET:-}
+  AELIO_SUNJET_S3_REGION: ${AELIO_SUNJET_S3_REGION:-}
+  AELIO_SUNJET_S3_ENDPOINT: ${AELIO_SUNJET_S3_ENDPOINT:-}
+  AELIO_SUNJET_S3_ACCESS_KEY_ID: ${AELIO_SUNJET_S3_ACCESS_KEY_ID:-}
+  AELIO_SUNJET_S3_SECRET_ACCESS_KEY: ${AELIO_SUNJET_S3_SECRET_ACCESS_KEY:-}
+  AELIO_SUNJET_S3_ALLOW_HTTP: ${AELIO_SUNJET_S3_ALLOW_HTTP:-}
+  AELIO_SUNJET_S3_PATH_STYLE: ${AELIO_SUNJET_S3_PATH_STYLE:-}
+  LL_SEGMENT_BACKEND: ${AELIO_SUNJET_SEGMENT_BACKEND:-local}
+  LL_S3_BUCKET: ${AELIO_SUNJET_S3_BUCKET:-}
+  LL_S3_REGION: ${AELIO_SUNJET_S3_REGION:-}
+  LL_S3_ENDPOINT: ${AELIO_SUNJET_S3_ENDPOINT:-}
+  LL_S3_ACCESS_KEY_ID: ${AELIO_SUNJET_S3_ACCESS_KEY_ID:-}
+  LL_S3_SECRET_ACCESS_KEY: ${AELIO_SUNJET_S3_SECRET_ACCESS_KEY:-}
+  LL_S3_ALLOW_HTTP: ${AELIO_SUNJET_S3_ALLOW_HTTP:-}
+  LL_S3_PATH_STYLE: ${AELIO_SUNJET_S3_PATH_STYLE:-}
+
 services:
-  aelio:
+  sunjet:
+    image: ${SUNJET_IMAGE:-sanjithvprabhu/aelio-sunjet:latest}
     build:
-      context: ..
-      dockerfile: server/Dockerfile
+      context: ../Sunjet/Astrolobe
+      dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "${SUNJET_PORT:-8080}:8080"
+    volumes:
+      - sunjet-data:/data
+    environment:
+      LL_DATA_DIR: /data
+      LL_BIND: 0.0.0.0:8080
+      LL_API_KEYS: ${SUNJET_API_KEY:-change-me-sunjet}
+      <<: *segment-env
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  aelio:
+    image: ${AELIO_IMAGE:-sanjithvprabhu/aelio-server:latest}
+    # Split mode: disable the in-image ll-server; use the sunjet service instead.
+    ports:
+      - "${AELIO_PUBLISH_PORT:-3010}:3000"
     volumes:
       - aelio-data:/data
+    depends_on:
+      sunjet:
+        condition: service_healthy
     environment:
       AELIO_CONFIG: /app/config.yaml
       AELIO_SDK_SECRET: ${AELIO_SDK_SECRET:-change-me-in-production}
-      # Default provider is OpenAI; provide OPENAI_API_KEY for real responses
-      # (without it the server degrades to the mock LLM and logs a warning).
+      AELIO_LLM_PROVIDER: ${AELIO_LLM_PROVIDER:-openai}
+      AELIO_LLM_MODEL: ${AELIO_LLM_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # Restrict which sites may embed the widget (comma-separated). Strongly
-      # recommended in production instead of the permissive default.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
       AELIO_WEB_ALLOWED_ORIGINS: ${AELIO_WEB_ALLOWED_ORIGINS:-}
+      AELIO_REQUIRE_LLM_KEY: ${AELIO_REQUIRE_LLM_KEY:-}
+      AELIO_SUNJET_ENABLED: "1"
+      AELIO_SUNJET_URL: ${AELIO_SUNJET_URL:-http://sunjet:8080}
+      SUNJET_API_KEY: ${SUNJET_API_KEY:-change-me-sunjet}
+      # Prevent the all-in-one entrypoint from also binding a local ll-server
+      # when this image is still the unified build — entrypoint respects this
+      # only if we skip nested start; for split compose use aelio-server with
+      # AELIO_SUNJET_ENABLED=1 pointing at external sunjet. Nested start is OK
+      # if AELIO_SUNJET_URL is external... Actually entrypoint always starts
+      # local ll-server when ENABLED=1. For split mode set:
+      # AELIO_SUNJET_ENABLED=0 is wrong. Need SKIP flag.
+      AELIO_SKIP_EMBEDDED_SUNJET: "1"
+      <<: *segment-env
     healthcheck:
-      test: ["CMD", "/nodejs/bin/node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     restart: unless-stopped
 
 volumes:
   aelio-data:
+  sunjet-data:

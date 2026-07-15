@@ -1,47 +1,65 @@
-# Aelio Python SDK
+# aelio-sdk (Python)
 
-Minimal Python SDK for exposing backend functions to the Aelio server over the same WebSocket protocol as `@aelio/sdk`.
+Expose your backend functions to the [Aelio](https://github.com/sanjithVprabhu/AelioConvox)
+conversational runtime over a single outbound WebSocket.
 
 ## Install
 
 ```bash
-pip install websockets
+pip install aelio-sdk
 ```
 
 ## Usage
 
 ```python
-from sdk import Aelio
+import asyncio
+import os
+from aelio import Aelio
 
-aelio = Aelio(secret="change-me-in-production", url="ws://127.0.0.1:3000")
+aelio = Aelio()
 
 @aelio.expose(
-    "getOrderStatus",
+    "get_order_status",
     description="Get the status of a customer order",
     params={"orderId": "string"},
     safety="read",
 )
 async def get_order_status(args, ctx):
-    return {"orderId": args["orderId"], "status": "shipped", "customerId": ctx["customerId"]}
+    return {"status": "shipped", "orderId": args["orderId"]}
 
-aelio.run()
+async def main():
+    await aelio.listen(
+        secret=os.environ["AELIO_SDK_SECRET"],
+        url=os.environ.get("AELIO_SERVER_URL", "ws://127.0.0.1:3010"),
+    )
+
+asyncio.run(main())
 ```
 
-## Bring your own messaging channel
-
-Same wire protocol as the Node SDK — deliver replies through your own provider and
-push inbound messages from your own webhook. Aelio holds no provider credentials.
+## Bring-your-own channel
 
 ```python
-# Deliver outbound replies through your provider (called automatically, not a tool).
 async def deliver(msg):
     await my_provider.send(to=msg["to"], body=msg["content"])
 
 aelio.on_send(deliver)
 
-# In your async webhook handler, hand Aelio the inbound message:
-await aelio.ingest(channel="whatsapp", from_="+15551234567", text="where's my order?")
+# In your webhook:
+await aelio.ingest(channel="whatsapp", from_=from_number, text=body)
 ```
 
-On the Aelio server set `channels.whatsapp.provider: sdk`. Any channel string works
-(`telegram`, `slack`, `sms`, …), not just `whatsapp`/`web`.
+## API
+
+| Method | Purpose |
+|--------|---------|
+| `expose(name, description, params, safety)` | Register a tool (decorator) |
+| `persona(text)` / `describe(text)` | Assistant voice + product brief |
+| `state` / `policy` / `flow` | Lifecycle catalog |
+| `set_customer_state` / `set_flow_progress` | Push lifecycle updates |
+| `on_send` / `ingest` | BYO messaging |
+| `listen(secret=..., url=...)` | Connect (auto-reconnect) |
+| `disconnect()` | Stop reconnecting and close |
+
+## License
+
+Apache-2.0

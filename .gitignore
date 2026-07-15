@@ -1,5 +1,11 @@
 node_modules/
 dist/
+*.egg-info/
+*.tgz
+sdk/python/dist/
+__pycache__/
+*.pyc
+.venv/
 .turbo/
 *.db
 *.db-shm

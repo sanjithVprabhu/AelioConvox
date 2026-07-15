@@ -23,11 +23,11 @@ Aelio ships as three cleanly separated pieces that talk to each other over WebSo
 
 | Product | Package | Where it runs | Role |
 |---|---|---|---|
-| **Convox SDK** | [`@aelio/sdk`](sdk/node) (npm) · [Python](sdk/python) | Your server | Expose your backend functions as tools. Dials **out** to the Aelio server over one WebSocket (`/sdk`, `Authorization: Bearer <secret>`). Your auth, DB, and business logic stay in your process. |
-| **Chat SDK** | [`@aelio/chat`](chat) (npm) | Your website (browser) | Drop-in embeddable chat widget. Connects to the server's `/widget/ws`, handles reconnect + connection status. |
-| **Aelio Server** | [`@aelio/server`](server) (Docker) | Your infra | The agentic harness: LLM tool loop, safety rails, identity, memory, and the Sunjet/Astrolobe Rust storage engine. Pull the image, point the other two at it. |
+| **Convox SDK** | [`@aelio/sdk`](sdk/node) · [`aelio-sdk`](sdk/python) · [`sdk/go`](sdk/go) | Your server | Expose backend functions as tools over outbound WebSocket `/sdk`. |
+| **Chat SDK** | [`@aelio/chat`](chat) (npm) | Your website | Embeddable chat widget → `/widget/ws`. |
+| **Aelio Server** | Docker `aelio-server` | Your infra | Agentic harness — pull the image, point SDKs at it. |
 
-> 📖 **Full setup, configuration, API-wrapping, channels, and deployment: [docs/MANUAL.md](docs/MANUAL.md)**
+> 📖 **Docker + SDK quickstart:** [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) · Full manual: [docs/MANUAL.md](docs/MANUAL.md)
 
 ## Repository layout
 
@@ -35,7 +35,8 @@ Aelio ships as three cleanly separated pieces that talk to each other over WebSo
 AelioConvox/
 ├── sdk/
 │   ├── node/          # @aelio/sdk — Convox SDK for Node backends (npm)
-│   └── python/        # aelio-sdk — Python SDK (PyPI)
+│   ├── python/        # aelio-sdk — Python SDK (PyPI)
+│   └── go/            # Go SDK module
 ├── chat/              # @aelio/chat — embeddable browser widget (npm) → dist/{index.js, widget.js}
 ├── server/            # @aelio/server — Fastify runtime + Dockerfile + deploy templates
 ├── packages/          # internal workspace libs (not published on their own):
@@ -46,10 +47,27 @@ AelioConvox/
 │   ├── channels/      #   WhatsApp adapter
 │   └── sunjet-client/ #   HTTP client for the Sunjet (ll-server) Rust engine
 ├── Sunjet/Astrolobe/  # Rust storage engine (git submodule) — the .vss database + ll-server
-├── examples/          # nodejs-express, sample-saas, python-fastapi, python-django
+├── examples/          # nodejs-express, sample-saas, python-fastapi, python-django, go-http
 ├── docs/  scripts/  Blueprint/
 └── config.yaml        # single source of runtime config
 ```
+
+## Quick start (Docker)
+
+```bash
+docker pull sanjithvprabhu/aelio-server:latest
+
+docker run -d --name aelio -p 3010:3000 -v aelio-data:/data \
+  -e AELIO_SDK_SECRET=change-me \
+  -e AELIO_LLM_PROVIDER=openai \
+  -e OPENAI_API_KEY=sk-... \
+  sanjithvprabhu/aelio-server:latest
+```
+
+One image runs **Aelio + Sunjet**. Swap LLM with `AELIO_LLM_PROVIDER` / provider API key;
+cloud `.vss` with `AELIO_SUNJET_SEGMENT_BACKEND=s3` + `AELIO_SUNJET_S3_*`.
+Full matrix: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
+
 
 ## Quick start (local)
 

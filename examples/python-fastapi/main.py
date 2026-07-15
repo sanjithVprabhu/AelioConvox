@@ -4,7 +4,7 @@ import threading
 import uvicorn
 from fastapi import FastAPI
 
-from sdk import Aelio
+from aelio import Aelio
 
 app = FastAPI()
 aelio = Aelio(secret=os.getenv("AELIO_SDK_SECRET", "change-me-in-production"))

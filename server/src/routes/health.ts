@@ -81,6 +81,19 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
         url: deps.config.sunjet.url,
         dualWriteSqlite: deps.config.sunjet.dual_write_sqlite,
         messageBackend: deps.messageStore ? 'sunjet' : 'sqlite',
+        segmentStorage: {
+          backend: deps.config.sunjet.segment_storage.backend,
+          prefix: deps.config.sunjet.segment_storage.prefix ?? null,
+          bucket: deps.config.sunjet.segment_storage.bucket ?? null,
+          region: deps.config.sunjet.segment_storage.region ?? null,
+          endpoint: deps.config.sunjet.segment_storage.endpoint ?? null,
+          // Secrets never echoed — only whether they are set.
+          credentialsConfigured: Boolean(
+            process.env.AELIO_SUNJET_S3_ACCESS_KEY_ID ||
+              process.env.LL_S3_ACCESS_KEY_ID ||
+              process.env.AWS_ACCESS_KEY_ID,
+          ),
+        },
       },
     };
 

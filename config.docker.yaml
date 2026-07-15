@@ -2,9 +2,9 @@ name: aelio-docker
 secret: ${AELIO_SDK_SECRET}
 
 llm:
-  # Default: OpenAI (GPT). Provide OPENAI_API_KEY to the container for real
-  # responses; without it the server degrades to the mock LLM (dev) or refuses
-  # to start (NODE_ENV=production).
+  # -e AELIO_LLM_PROVIDER=anthropic|openai|gemini|groq|ollama|mock
+  # -e AELIO_LLM_MODEL=...
+  # Keys: OPENAI_API_KEY | ANTHROPIC_API_KEY | GEMINI_API_KEY | GROQ_API_KEY
   provider: openai
   model: gpt-4o-mini
   api_key: ${OPENAI_API_KEY}
@@ -18,9 +18,6 @@ channels:
     webhook_path: /wa/webhook
   web:
     enabled: true
-    # DEV DEFAULT is permissive. In production set AELIO_WEB_ALLOWED_ORIGINS
-    # (comma-separated) to your site origin(s) — it overrides this list so the
-    # widget can't be embedded anywhere (SEC-007).
     allowed_origins:
       - "*"
     magic_link:
@@ -47,6 +44,19 @@ session:
 memory:
   enabled: true
   recall_limit: 5
+
+# All-in-one image starts ll-server locally and sets AELIO_SUNJET_ENABLED=1.
+# Disable with -e AELIO_SUNJET_ENABLED=0 (SQLite only).
+# Segments: -e AELIO_SUNJET_SEGMENT_BACKEND=local|s3 (+ AELIO_SUNJET_S3_* for cloud).
+sunjet:
+  enabled: false
+  url: http://127.0.0.1:8080
+  api_key: ${SUNJET_API_KEY}
+  embed_dim: 1536
+  dual_write_sqlite: true
+  fallback_sqlite_on_error: true
+  segment_storage:
+    backend: local
 
 storage:
   database_path: /data/aelio.db

@@ -27,14 +27,14 @@
     "llm",
     "websocket"
   ],
-  "homepage": "https://github.com/aelio-dev/aelio#readme",
+  "homepage": "https://github.com/sanjithVprabhu/AelioConvox#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aelio-dev/aelio.git",
+    "url": "git+https://github.com/sanjithVprabhu/AelioConvox.git",
     "directory": "sdk/node"
   },
   "bugs": {
-    "url": "https://github.com/aelio-dev/aelio/issues"
+    "url": "https://github.com/sanjithVprabhu/AelioConvox/issues"
   },
   "engines": {
     "node": ">=20"
