@@ -6,7 +6,7 @@ const WORKER_ID = 'outbound-worker';
 export function startOutboundWorker(deps: RuntimeDeps) {
   const interval = setInterval(() => {
     void (async () => {
-      const job = claimJob(deps.database, 'outbound', WORKER_ID);
+      const job = await claimJob('outbound', WORKER_ID, deps.jobStore);
       if (!job) {
         return;
       }
@@ -41,12 +41,12 @@ export function startOutboundWorker(deps: RuntimeDeps) {
           throw new Error(`No delivery method configured for channel "${channel}"`);
         }
 
-        await completeJob(deps.database, job.id);
+        await completeJob(job.id, deps.jobStore);
       } catch (error) {
         await failJob(
-          deps.database,
           job.id,
           error instanceof Error ? error.message : 'Outbound worker failed',
+          deps.jobStore,
         );
       }
     })();

@@ -14,14 +14,14 @@ const WORKER_ID = 'inbound-worker';
 
 export function startInboundWorker(deps: RuntimeDeps) {
   const interval = setInterval(() => {
-    requeueStaleJobs(deps.database);
-
-    const job = claimJob(deps.database, 'inbound', WORKER_ID);
-    if (!job) {
-      return;
-    }
-
     void (async () => {
+      await requeueStaleJobs(deps.jobStore);
+
+      const job = await claimJob('inbound', WORKER_ID, deps.jobStore);
+      if (!job) {
+        return;
+      }
+
       try {
         const channel = job.payload.channel as string;
         const text = job.payload.text as string;
@@ -45,18 +45,22 @@ export function startInboundWorker(deps: RuntimeDeps) {
           }),
         );
 
-        await enqueueJob(deps.database, 'outbound', {
-          channel,
-          to: from,
-          text: reply,
-        });
+        await enqueueJob(
+          'outbound',
+          {
+            channel,
+            to: from,
+            text: reply,
+          },
+          deps.jobStore,
+        );
 
-        await completeJob(deps.database, job.id);
+        await completeJob(job.id, deps.jobStore);
       } catch (error) {
         await failJob(
-          deps.database,
           job.id,
           error instanceof Error ? error.message : 'Inbound worker failed',
+          deps.jobStore,
         );
       }
     })();

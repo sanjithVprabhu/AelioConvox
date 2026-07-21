@@ -6,7 +6,6 @@ export function baseTurnOptions(
   deps: RuntimeDeps,
 ): Pick<
   ProcessTurnInput,
-  | 'database'
   | 'llm'
   | 'sdk'
   | 'model'
@@ -22,14 +21,26 @@ export function baseTurnOptions(
   | 'cache'
   | 'intent'
   | 'messageStore'
+  | 'memoryStore'
+  | 'sessionStore'
+  | 'customerStore'
+  | 'responseCacheStore'
+  | 'functionCallStore'
   | 'persona'
   | 'harness'
   | 'lighthouse'
   | 'tracer'
   | 'suspensionStore'
+  | 'ledgerSunjet'
+  | 'bindingCache'
+  | 'turnApiCallsSunjet'
+  | 'contextEngine'
+  | 'pathwayEngine'
+  | 'archetypeEngine'
+  | 'axisStore'
+  | 'tracePrompt'
 > {
   return {
-    database: deps.database,
     llm: deps.llm,
     sdk: deps.sdkBridge,
     model: deps.config.llm.model,
@@ -62,7 +73,12 @@ export function baseTurnOptions(
       ttlMinutes: deps.config.intent.ttl_minutes,
       maxDepth: deps.config.intent.max_depth,
     },
-    messageStore: deps.messageStore ?? undefined,
+    messageStore: deps.messageStore,
+    memoryStore: deps.memoryStore,
+    sessionStore: deps.sessionStore,
+    customerStore: deps.customerStore,
+    responseCacheStore: deps.responseCacheStore,
+    functionCallStore: deps.functionCallStore,
     persona: deps.config.llm.system_prompt ?? null,
     harness: {
       enabled: deps.config.harness.enabled,
@@ -83,6 +99,21 @@ export function baseTurnOptions(
     lighthouse: deps.lighthouse,
     tracer: deps.tracer ?? undefined,
     suspensionStore: deps.suspensionStore,
+    ledgerSunjet: { client: deps.sunjetClient, table: deps.config.sunjet.tables.harness_ledger },
+    bindingCache: {
+      client: deps.sunjetClient,
+      table: deps.config.sunjet.tables.harness_bindings,
+      tenant: deps.config.name,
+      registryHash: deps.lighthouse.getHash(),
+      embedDim: deps.config.sunjet.embed_dim,
+      ttlMinutes: deps.config.harness.binding.cache_ttl_minutes,
+    },
+    turnApiCallsSunjet: { client: deps.sunjetClient, table: deps.config.sunjet.tables.turn_api_calls },
+    contextEngine: deps.contextEngine,
+    pathwayEngine: deps.pathwayEngine,
+    archetypeEngine: deps.archetypeEngine,
+    axisStore: deps.axisStore,
+    tracePrompt: deps.config.logging.trace_prompt,
   };
 }
 

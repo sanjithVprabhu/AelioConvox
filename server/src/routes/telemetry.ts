@@ -30,14 +30,6 @@ export async function registerTelemetryRoutes(app: FastifyInstance, deps: Runtim
       customer_id?: string;
     };
 
-    if (!deps.config.sunjet.enabled || !deps.sunjetClient) {
-      return reply.status(503).send({
-        enabled: false,
-        events: [],
-        message: 'Sunjet is not enabled — enable sunjet in config to stream conversation telemetry.',
-      });
-    }
-
     const limit = query.limit ? Number.parseInt(query.limit, 10) : 100;
     const since = query.since ? Number.parseInt(query.since, 10) : undefined;
 
@@ -71,22 +63,29 @@ export async function registerTelemetryRoutes(app: FastifyInstance, deps: Runtim
     };
 
     const limit = query.limit ? Number.parseInt(query.limit, 10) : 200;
+    const turnApiCallsSunjet = {
+      client: deps.sunjetClient,
+      table: deps.config.sunjet.tables.turn_api_calls,
+    };
 
     if (query.turn_id) {
-      const summary = await summarizeTurnApiCalls(deps.database, query.turn_id);
+      const summary = await summarizeTurnApiCalls(query.turn_id, turnApiCallsSunjet);
       return {
         ...summary,
-        source: 'sqlite',
+        source: 'sunjet',
       };
     }
 
-    const calls = await listTurnApiCalls(deps.database, {
-      sessionId: query.session_id,
-      limit: Number.isFinite(limit) ? limit : 200,
-    });
+    const calls = await listTurnApiCalls(
+      {
+        sessionId: query.session_id,
+        limit: Number.isFinite(limit) ? limit : 200,
+      },
+      turnApiCallsSunjet,
+    );
 
     return {
-      source: 'sqlite',
+      source: 'sunjet',
       count: calls.length,
       calls,
     };

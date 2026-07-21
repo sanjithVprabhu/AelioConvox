@@ -79,7 +79,7 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
     let channelAddress = `web:${remoteAddress}`;
     let initialized = false;
 
-    socket.on('message', (raw) => {
+    socket.on('message', (raw: Buffer | ArrayBuffer | Buffer[]) => {
       if (raw.toString().length > MAX_WS_FRAME_BYTES) {
         socket.send(JSON.stringify({ type: 'error', message: 'Message too large' }));
         socket.close(1009, 'Frame too large');

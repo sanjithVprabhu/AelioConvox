@@ -86,7 +86,6 @@ const serverEnv = {
   AELIO_PORT: String(serverPort),
   AELIO_TEST_MODE: '1',
   AELIO_DIAGNOSTICS: '1',
-  AELIO_MIGRATIONS_PATH: join(root, 'packages/db/drizzle'),
   AELIO_PUBLIC_PATH: join(root, 'server/public'),
 };
 
@@ -150,10 +149,10 @@ try {
     'server/public/widget.js',
     'server/public/demo.html',
     'packages/core/dist/index.js',
-    'packages/db/drizzle/meta/_journal.json',
     'packages/protocol/dist/index.js',
     'packages/llm/dist/index.js',
     'packages/channels/dist/index.js',
+    'packages/sunjet-client/dist/index.js',
     'sdk/node/dist/index.js',
   ];
   for (const artifact of artifacts) {

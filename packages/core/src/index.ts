@@ -14,6 +14,7 @@ export {
   summarizeTurnApiCalls,
   type TurnApiCallPurpose,
   type TurnApiCallRecord,
+  type TurnApiCallsSunjetConfig,
   type TurnContext,
 } from './telemetry/index.js';
 export { runToolLoop, type ToolLoopResult } from './runtime/tool-loop.js';
@@ -35,10 +36,86 @@ export {
   type ComposeOptions,
 } from './runtime/prompt-composer.js';
 export {
+  buildTurnSystemPrompt,
+  type SystemPromptIngredients,
+} from './runtime/prompt-factory.js';
+export {
+  ImmediateContextEngine,
+  createImmediateContextEngine,
+  tierForAge,
+  CONTEXT_TIERS,
+  HOT_WINDOW_MS,
+  type ContextTierDef,
+  type ImmediateContextEngineOptions,
+  type ImmediateContextSnapshot,
+} from './context-engine/index.js';
+export {
+  ArchetypeEngine,
+  createArchetypeEngine,
+  seedBuiltinArchetypes,
+  splitSpans,
+  DEFAULT_ARCHETYPES,
+  type ArchetypeEngineOptions,
+  type ArchetypeAssessInput,
+  type ArchetypeAssessment,
+  type CategoryAssessment,
+} from './archetype/index.js';
+export {
+  evaluateGenericGate,
+  type GenericGateOptions,
+  type GenericGateResult,
+  type GenericKind,
+} from './gate/index.js';
+export {
+  resolveTemporalScope,
+  renderTemporalScope,
+  inTemporalScope,
+  temporalRelevance,
+  type TemporalScope,
+  type TemporalTier,
+  type TemporalResolveInput,
+} from './temporal/index.js';
+export {
+  DEFAULT_EVIDENCE_CONFIG,
+  scoreEvidenceParts,
+  evidenceFromAxisOccurrence,
+  evidenceFromMemory,
+  evidenceFromStance,
+  selectEvidence,
+  renderEvidenceBlock,
+  type EvidenceItem,
+  type EvidenceConfig,
+  type EvidenceSource,
+  type EvidenceWeights,
+} from './evidence/index.js';
+export {
+  deriveResolutionState,
+  scoreProactiveActivation,
+  DEFAULT_ACTIVATION_CONFIG,
+  type ResolutionState,
+  type ResolutionSnapshot,
+  type ResolutionSignals,
+  type ActivationDecision,
+  type ProactiveActivationConfig,
+} from './resolution/index.js';
+export {
+  SemanticPathwayEngine,
+  createSemanticPathwayEngine,
+  type SemanticPathwayEngineOptions,
+  type SemanticPathwayInput,
+  type SemanticPathwayDecision,
+  type SemanticIntent,
+  type PathwayStrategy,
+  type PathwayProactiveHint,
+  type PathwayTimings,
+} from './pathway/index.js';
+export {
+  rankRelevantTools,
   selectRelevantTools,
   TOOL_RETRIEVAL_THRESHOLD,
   TOOL_RETRIEVAL_TOP_K,
   type ToolRetrievalOptions,
+  type RankedTool,
 } from './runtime/tool-retrieval.js';
 export { assertWithinRateLimit, type RateLimitConfig } from './runtime/rate-limit.js';
 export {
@@ -66,13 +143,66 @@ export {
   buildConversationContext,
   ConvoxMessageStore,
   createConvoxMessageStore,
+  ConvoxMemoryStore,
+  createConvoxMemoryStore,
+  ConvoxSessionStore,
+  createConvoxSessionStore,
+  ConvoxCustomerStore,
+  createConvoxCustomerStore,
+  ConvoxJobStore,
+  createConvoxJobStore,
+  ConvoxResponseCacheStore,
+  createConvoxResponseCacheStore,
+  ConvoxFunctionCallStore,
+  createConvoxFunctionCallStore,
+  ConvoxReflectionStore,
+  createConvoxReflectionStore,
+  ConvoxProactiveStore,
+  createConvoxProactiveStore,
+  ConvoxInboundDedupStore,
+  createConvoxInboundDedupStore,
+  ConvoxMagicLinkStore,
+  createConvoxMagicLinkStore,
+  ConvoxSdkConnectionStore,
+  createConvoxSdkConnectionStore,
+  ConvoxArchetypeStore,
+  createConvoxArchetypeStore,
+  type ArchetypeExemplar,
+  type ArchetypeMatch,
+  type ArchetypeValence,
+  ConvoxAspectStore,
+  createConvoxAspectStore,
+  type AspectRecord,
+  type AspectMatch,
+  type AspectStatus,
+  type AspectSource,
+  type AspectRegisterInput,
+  ConvoxAxisStore,
+  createConvoxAxisStore,
+  type AxisOccurrence,
+  type AxisOccurrenceWrite,
   listConversationTelemetry,
   type ConversationTelemetryEvent,
   type ConversationTurnContext,
   type MessageStoreAppendInput,
   type MessageStoreHistoryRow,
+  type MemoryStoreWriteInput,
+  type MemoryRecallHit,
   type SunjetStorageConfig,
   type SunjetTableNames,
+  type ClosedSessionRecord,
+  type SessionRecord,
+  type CustomerRecord,
+  type ClaimedJob,
+  type FunctionCallLogInput,
+  type FunctionCallRecord,
+  type ReflectionRecord,
+  type ReflectionStoreInput,
+  type ProactiveRecord,
+  type ProactiveRecordInput,
+  type MagicLinkCreateInput,
+  type MagicLinkRecord,
+  type SdkConnectionUpsertInput,
 } from './storage/index.js';
 export { loadSessionSummary, maybeSummarizeSession } from './session/summary.js';
 export {
@@ -128,10 +258,13 @@ export {
   summarizeMemories,
   findUnreflectedSessions,
   reflectOnSession,
+  discoverAspects,
   type ExtractInput,
   type RecalledMemory,
   type Reflection,
   type ReflectionOutcome,
+  type AspectDiscoveryInput,
+  type AspectDiscoveryResult,
 } from './analyst/index.js';
 export {
   normalizePhone,
@@ -181,6 +314,8 @@ export {
   type HarnessBindingConfig,
 } from './harness/schema.js';
 export { SuspensionStore, type SuspendedPlanRecord, type SuspensionStoreConfig } from './harness/suspension.js';
+export { type LedgerSunjetConfig } from './harness/ledger.js';
+export { type BindingCacheConfig } from './harness/binder.js';
 export { HarnessTracer, type TraceKind, type HarnessTracerConfig } from './harness/traces.js';
 export {
   runHarness,

@@ -1,15 +1,15 @@
-import type { AelioDatabase } from '@aelio/db';
-import { turnApiCalls } from '@aelio/db';
 import type { LLMCompleteOptions, LLMCompleteResult, LLMProvider } from '@aelio/llm';
+import type { SunjetClient } from '@aelio/sunjet-client';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { i64, parseJson, readI64, readUtf8, utf8 } from '../storage/helpers.js';
 
 const TRUNCATE = 500;
 const INPUT_PREVIEW = 300;
 
 export type TurnApiCallPurpose =
   | 'chat_completion'
+  | 'pathway_retrieval'
   | 'tool_synthesis'
   | 'session_summary'
   | 'session_reflection'
@@ -20,6 +20,8 @@ export type TurnApiCallPurpose =
   | 'message_storage'
   | 'conversation_archive'
   | 'reflection_insight'
+  | 'immediate_context_compaction'
+  | 'aspect_discovery'
   // Harness passes
   | 'plan'
   | 'replan'
@@ -27,12 +29,18 @@ export type TurnApiCallPurpose =
   | 'synthesis'
   | 'recoil_extract';
 
+export type TurnApiCallsSunjetConfig = {
+  client: SunjetClient;
+  table: string;
+};
+
 export type TurnContext = {
   turnId: string;
   sessionId: string;
   customerId: string;
   sequence: number;
-  database: AelioDatabase;
+  /** When present, per-turn API call telemetry writes to Sunjet exclusively. */
+  sunjet?: TurnApiCallsSunjetConfig;
 };
 
 export type TurnApiCallRecord = {
@@ -103,6 +111,12 @@ export function buildLlmPromptSummary(
   return parts.join(' | ');
 }
 
+/**
+ * Record one per-turn API call. Writes to Sunjet exclusively — either the
+ * `sunjet` config passed explicitly or the one carried on the ambient turn
+ * context (see `runWithTurnContext`). Silently no-ops (returns null) when
+ * neither is available, since telemetry must never break the turn.
+ */
 export async function recordTurnApiCall(input: {
   callType: 'llm' | 'embed';
   purpose: TurnApiCallPurpose;
@@ -120,15 +134,15 @@ export async function recordTurnApiCall(input: {
   turnId?: string;
   sessionId?: string;
   customerId?: string;
-  database?: AelioDatabase;
+  sunjet?: TurnApiCallsSunjetConfig;
 }): Promise<string | null> {
   const ctx = getTurnContext();
   const turnId = input.turnId ?? ctx?.turnId;
   const sessionId = input.sessionId ?? ctx?.sessionId;
   const customerId = input.customerId ?? ctx?.customerId;
-  const database = input.database ?? ctx?.database;
+  const sunjet = input.sunjet ?? ctx?.sunjet;
 
-  if (!turnId || !sessionId || !customerId || !database) {
+  if (!turnId || !sessionId || !customerId || !sunjet) {
     return null;
   }
 
@@ -136,28 +150,27 @@ export async function recordTurnApiCall(input: {
   const id = randomUUID();
   const now = new Date();
 
-  await database.db.insert(turnApiCalls).values({
-    id,
-    turnId,
-    sessionId,
-    customerId,
-    sequence,
-    callType: input.callType,
-    purpose: input.purpose,
-    model: input.model,
-    iteration: input.iteration,
-    promptSummary: input.promptSummary,
-    inputPreview: input.inputPreview ? truncate(input.inputPreview, INPUT_PREVIEW) : undefined,
-    messageCount: input.messageCount,
-    toolCount: input.toolCount,
-    toolNames: input.toolNames,
-    stopReason: input.stopReason,
-    durationMs: input.durationMs,
-    tokensIn: input.tokensIn,
-    tokensOut: input.tokensOut,
-    createdAt: now,
+  await sunjet.client.insertRow(sunjet.table, {
+    call_id: utf8(id),
+    turn_id: utf8(turnId),
+    session_id: utf8(sessionId),
+    customer_id: utf8(customerId),
+    sequence: i64(sequence),
+    call_type: utf8(input.callType),
+    purpose: utf8(input.purpose),
+    model: utf8(input.model ?? ''),
+    iteration: i64(input.iteration ?? 0),
+    prompt_summary: utf8(input.promptSummary),
+    input_preview: utf8(input.inputPreview ? truncate(input.inputPreview, INPUT_PREVIEW) : ''),
+    message_count: i64(input.messageCount ?? 0),
+    tool_count: i64(input.toolCount ?? 0),
+    tool_names: utf8(JSON.stringify(input.toolNames ?? [])),
+    stop_reason: utf8(input.stopReason ?? ''),
+    duration_ms: i64(input.durationMs ?? 0),
+    tokens_in: i64(input.tokensIn ?? 0),
+    tokens_out: i64(input.tokensOut ?? 0),
+    created_at: i64(now.getTime()),
   });
-
   return id;
 }
 
@@ -213,57 +226,56 @@ export function createInstrumentedLlm(provider: LLMProvider): LLMProvider {
 }
 
 export async function listTurnApiCalls(
-  database: AelioDatabase,
   input: {
     turnId?: string;
     sessionId?: string;
     limit?: number;
   } = {},
+  sunjet?: TurnApiCallsSunjetConfig,
 ): Promise<TurnApiCallRecord[]> {
   const limit = Math.min(Math.max(input.limit ?? 200, 1), 1000);
-  const conditions = [];
+
+  if (!sunjet) {
+    return [];
+  }
+
+  const filters = [];
   if (input.turnId) {
-    conditions.push(eq(turnApiCalls.turnId, input.turnId));
+    filters.push({ col: 'turn_id', op: 'eq' as const, value: utf8(input.turnId) });
   }
   if (input.sessionId) {
-    conditions.push(eq(turnApiCalls.sessionId, input.sessionId));
+    filters.push({ col: 'session_id', op: 'eq' as const, value: utf8(input.sessionId) });
   }
-
-  const query = database.db
-    .select()
-    .from(turnApiCalls)
-    .orderBy(
-      input.turnId ? asc(turnApiCalls.sequence) : desc(turnApiCalls.createdAt),
-    )
-    .limit(limit);
-
-  const rows =
-    conditions.length > 0 ? await query.where(and(...conditions)) : await query;
-
-  return rows.map((row) => ({
-    id: row.id,
-    turnId: row.turnId,
-    sessionId: row.sessionId,
-    customerId: row.customerId,
-    sequence: row.sequence,
-    callType: row.callType as 'llm' | 'embed',
-    purpose: row.purpose as TurnApiCallPurpose,
-    model: row.model ?? undefined,
-    iteration: row.iteration ?? undefined,
-    promptSummary: row.promptSummary,
-    inputPreview: row.inputPreview ?? undefined,
-    messageCount: row.messageCount ?? undefined,
-    toolCount: row.toolCount ?? undefined,
-    toolNames: row.toolNames ?? undefined,
-    stopReason: row.stopReason ?? undefined,
-    durationMs: row.durationMs ?? undefined,
-    createdAt: row.createdAt.getTime(),
+  const scan = await sunjet.client.scanRows(sunjet.table, {
+    k: Math.max(limit * 4, 500),
+    filters,
+  });
+  const rows = scan.rows.map((row) => ({
+    id: readUtf8(row.values, 'call_id'),
+    turnId: readUtf8(row.values, 'turn_id'),
+    sessionId: readUtf8(row.values, 'session_id'),
+    customerId: readUtf8(row.values, 'customer_id'),
+    sequence: readI64(row.values, 'sequence'),
+    callType: readUtf8(row.values, 'call_type') as 'llm' | 'embed',
+    purpose: readUtf8(row.values, 'purpose') as TurnApiCallPurpose,
+    model: readUtf8(row.values, 'model') || undefined,
+    iteration: readI64(row.values, 'iteration') || undefined,
+    promptSummary: readUtf8(row.values, 'prompt_summary'),
+    inputPreview: readUtf8(row.values, 'input_preview') || undefined,
+    messageCount: readI64(row.values, 'message_count') || undefined,
+    toolCount: readI64(row.values, 'tool_count') || undefined,
+    toolNames: parseJson<string[]>(readUtf8(row.values, 'tool_names'), []),
+    stopReason: readUtf8(row.values, 'stop_reason') || undefined,
+    durationMs: readI64(row.values, 'duration_ms') || undefined,
+    createdAt: readI64(row.values, 'created_at'),
   }));
+  rows.sort((a, b) => (input.turnId ? a.sequence - b.sequence : b.createdAt - a.createdAt));
+  return rows.slice(0, limit);
 }
 
 export async function summarizeTurnApiCalls(
-  database: AelioDatabase,
   turnId: string,
+  sunjet?: TurnApiCallsSunjetConfig,
 ): Promise<{
   turnId: string;
   totalCalls: number;
@@ -271,7 +283,7 @@ export async function summarizeTurnApiCalls(
   embedCalls: number;
   calls: TurnApiCallRecord[];
 }> {
-  const calls = await listTurnApiCalls(database, { turnId, limit: 100 });
+  const calls = await listTurnApiCalls({ turnId, limit: 100 }, sunjet);
   return {
     turnId,
     totalCalls: calls.length,

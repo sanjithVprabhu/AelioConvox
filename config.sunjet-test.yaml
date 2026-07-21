@@ -40,8 +40,6 @@ sunjet:
   enabled: true
   url: http://127.0.0.1:18080
   embed_dim: 1536
-  dual_write_sqlite: true
-  fallback_sqlite_on_error: true
   tables:
     messages: convox_messages
     conversations: convox_conversations
@@ -54,9 +52,6 @@ sunjet:
     harness_suspensions: harness_suspensions
     harness_ledger: harness_ledger
     harness_traces: harness_traces
-
-storage:
-  database_path: ./data/aelio-sunjet-test.db
 
 logging:
   level: warn

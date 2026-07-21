@@ -45,7 +45,11 @@ export async function registerProactiveRoutes(app: FastifyInstance, deps: Runtim
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Invalid request body' });
     }
-    const ok = await setProactiveOptIn(deps.database, parsed.data.customerExternalId, parsed.data.optIn);
+    const ok = await setProactiveOptIn(
+      parsed.data.customerExternalId,
+      parsed.data.optIn,
+      deps.customerStore,
+    );
     if (!ok) {
       return reply.status(404).send({ error: 'Unknown customer' });
     }
@@ -62,13 +66,16 @@ export async function registerProactiveRoutes(app: FastifyInstance, deps: Runtim
     }
 
     const result = await sendProactiveMessage({
-      database: deps.database,
       config: proactiveConfig,
       customerExternalId: parsed.data.customerExternalId,
       channel: parsed.data.channel,
       content: parsed.data.content,
       templateName: parsed.data.templateName,
       dedupKey: parsed.data.dedupKey,
+      customerStore: deps.customerStore,
+      messageStore: deps.messageStore,
+      proactiveStore: deps.proactiveStore,
+      jobStore: deps.jobStore,
     });
 
     return reply.status(result.ok ? 202 : 200).send(result);

@@ -36,7 +36,6 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV AELIO_CONFIG=/app/config.yaml
-ENV AELIO_MIGRATIONS_PATH=/app/node_modules/@aelio/db/drizzle
 ENV AELIO_PUBLIC_PATH=/app/public
 ARG AELIO_VERSION=0.1.2
 ENV AELIO_VERSION=$AELIO_VERSION

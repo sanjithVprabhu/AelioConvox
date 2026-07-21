@@ -1,48 +1,30 @@
-import type { AelioDatabase } from '@aelio/db';
-import { messages } from '@aelio/db';
-import { and, count, eq, gte } from 'drizzle-orm';
+import type { ConvoxMessageStore } from '../storage/messages.js';
 
 export type RateLimitConfig = {
   perCustomerPerMinute: number;
   perCustomerPerDay: number;
 };
 
+/**
+ * Rate limits are counted from Sunjet message rows (VSS store), not SQLite.
+ */
 export async function assertWithinRateLimit(
-  db: AelioDatabase['db'],
+  messageStore: ConvoxMessageStore | undefined,
   customerId: string,
   config: RateLimitConfig,
 ): Promise<void> {
+  if (!messageStore) {
+    return;
+  }
+
   const now = Date.now();
-  const minuteAgo = new Date(now - 60_000);
-  const dayAgo = new Date(now - 86_400_000);
-
-  const [minuteCount] = await db
-    .select({ value: count() })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.customerId, customerId),
-        eq(messages.role, 'user'),
-        gte(messages.createdAt, minuteAgo),
-      ),
-    );
-
-  if ((minuteCount?.value ?? 0) >= config.perCustomerPerMinute) {
+  const minuteCount = await messageStore.countUserMessages(customerId, now - 60_000);
+  if (minuteCount >= config.perCustomerPerMinute) {
     throw new Error('Rate limit exceeded for this customer in the last minute');
   }
 
-  const [dayCount] = await db
-    .select({ value: count() })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.customerId, customerId),
-        eq(messages.role, 'user'),
-        gte(messages.createdAt, dayAgo),
-      ),
-    );
-
-  if ((dayCount?.value ?? 0) >= config.perCustomerPerDay) {
+  const dayCount = await messageStore.countUserMessages(customerId, now - 86_400_000);
+  if (dayCount >= config.perCustomerPerDay) {
     throw new Error('Rate limit exceeded for this customer today');
   }
 }

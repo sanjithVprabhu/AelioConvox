@@ -15,19 +15,19 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { createDatabase } from '@aelio/db';
 import {
+  createConvoxCustomerStore,
+  createConvoxFunctionCallStore,
   createConvoxMessageStore,
+  createConvoxSessionStore,
+  HarnessTracer,
   processTurn,
 } from '@aelio/core';
 import { createLLMProviderChain } from '@aelio/llm';
-import { desc, eq } from 'drizzle-orm';
-import { customers, sessions } from '@aelio/db';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ASTROLOBE = join(ROOT, 'Sunjet/Astrolobe');
 const LL_SERVER_BIN = join(ASTROLOBE, 'target/release/ll-server');
-const MIGRATIONS = join(ROOT, 'packages/db/drizzle');
 const SECRET = 'test-secret';
 
 const EXPECTED_TABLE_KEYS = [
@@ -42,6 +42,20 @@ const EXPECTED_TABLE_KEYS = [
   'harness_suspensions',
   'harness_ledger',
   'harness_traces',
+  'customers',
+  'channel_addresses',
+  'sessions',
+  'job_queue',
+  'response_cache',
+  'function_calls',
+  'turn_api_calls',
+  'reflections',
+  'proactive_messages',
+  'inbound_dedup',
+  'magic_links',
+  'sdk_connections',
+  'archetypes',
+  'aspects',
 ];
 
 let llServer = null;
@@ -172,7 +186,6 @@ async function main() {
 
   tmpRoot = mkdtempSync(join(tmpdir(), 'aelio-admin-db-'));
   const llDataDir = join(tmpRoot, 'sunjet');
-  const dbPath = join(tmpRoot, 'aelio.db');
 
   section('Infrastructure');
   llServer = spawnProcess('ll-server', LL_SERVER_BIN, [], {
@@ -190,8 +203,7 @@ async function main() {
   const configPath = join(tmpRoot, 'config.yaml');
   const testConfig = configSrc
     .replace(/url:\s*http:\/\/127\.0\.0\.1:\d+/m, `url: ${sunjetUrl}`)
-    .replace(/^(\s*port:\s*)\d+\s*$/m, `$1${aelioPort}`)
-    .replace(/database_path:\s.*$/m, `database_path: ${dbPath}`);
+    .replace(/^(\s*port:\s*)\d+\s*$/m, `$1${aelioPort}`);
   writeFileSync(configPath, testConfig);
 
   aelioServer = spawnProcess('aelio', 'npx', ['tsx', 'src/main.ts'], {
@@ -201,7 +213,6 @@ async function main() {
       AELIO_CONFIG: configPath,
       AELIO_PORT: String(aelioPort),
       AELIO_SDK_SECRET: SECRET,
-      AELIO_MIGRATIONS_PATH: MIGRATIONS,
       AELIO_PUBLIC_PATH: join(ROOT, 'server/public'),
     },
   });
@@ -273,7 +284,7 @@ async function main() {
 
   const activeTables = catalog.data.tables.filter((t) => t.status === 'active');
   const schemaOnly = catalog.data.tables.filter((t) => t.status === 'schema-only');
-  if (activeTables.length < 5 || schemaOnly.length < 4) {
+  if (activeTables.length < 20 || schemaOnly.length < 1) {
     fail(`unexpected status mix: active=${activeTables.length}, schema-only=${schemaOnly.length}`);
   }
   ok(`catalog status badges: ${activeTables.length} active, ${schemaOnly.length} schema-only`);
@@ -298,8 +309,6 @@ async function main() {
   ok('unknown table rejected');
 
   section('Real conversation data via processTurn');
-  const database = createDatabase(dbPath);
-  database.migrate(MIGRATIONS);
 
   const tables = {
     messages: 'convox_messages',
@@ -313,25 +322,42 @@ async function main() {
     harnessSuspensions: 'harness_suspensions',
     harnessLedger: 'harness_ledger',
     harnessTraces: 'harness_traces',
+    customers: 'convox_customers',
+    channelAddresses: 'convox_channel_addresses',
+    sessions: 'convox_sessions',
+    jobQueue: 'convox_job_queue',
+    responseCache: 'convox_response_cache',
+    functionCalls: 'convox_function_calls',
+    turnApiCalls: 'convox_turn_api_calls',
+    reflections: 'convox_reflections',
+    proactiveMessages: 'convox_proactive_messages',
+    inboundDedup: 'convox_inbound_dedup',
+    magicLinks: 'convox_magic_links',
+    sdkConnections: 'convox_sdk_connections',
+    archetypes: 'convox_archetypes', aspects: 'convox_aspects', axisNodes: 'convox_axis_nodes',
   };
 
   // Write conversation data directly to the same ll-server instance via SunjetClient
   const { SunjetClient } = await import('@aelio/sunjet-client');
   const sunjetClient = new SunjetClient({ baseUrl: sunjetUrl });
-  const store = createConvoxMessageStore({
-    client: sunjetClient,
-    tables,
-    embedDim: 1536,
-    dualWriteSqlite: true,
-    fallbackSqliteOnError: true,
-  });
+  const storageConfig = { client: sunjetClient, tables, embedDim: 1536 };
+  const store = createConvoxMessageStore(storageConfig);
+  const sessionStore = createConvoxSessionStore(storageConfig);
+  const customerStore = createConvoxCustomerStore(storageConfig);
+  const functionCallStore = createConvoxFunctionCallStore(storageConfig);
 
   const llm = createLLMProviderChain([{ provider: 'mock', model: 'mock-model', maxTokens: 4096 }]);
   const sessionTag = `admin-db-thorough-${Date.now()}`;
   const customerExternalId = `cust-${sessionTag}`;
 
-  const { reply } = await processTurn({
-    database,
+  const tracer = new HarnessTracer({
+    client: sunjetClient,
+    table: tables.harnessTraces,
+    tenant: 'admin-db-test',
+    embedDim: 1536,
+  });
+  const { reply, turnId } = await processTurn({
+    tracer,
     llm,
     sdk: {
       getFunctions: () => [],
@@ -349,9 +375,12 @@ async function main() {
     idleTimeoutMinutes: 60,
     summarizeAfter: 50,
     memoryRecallLimit: 5,
-    memoryEnabled: true,
+    memoryEnabled: false,
     intent: { enabled: true, ttlMinutes: 20, maxDepth: 5 },
     messageStore: store,
+    sessionStore,
+    customerStore,
+    functionCallStore,
     customerExternalId,
     channel: 'web',
     channelAddress: `web:${customerExternalId}`,
@@ -361,20 +390,37 @@ async function main() {
   if (!reply) fail('processTurn returned empty reply');
   ok(`processTurn wrote conversation (${reply.length} char reply)`);
 
-  const customerRows = await database.db
-    .select()
-    .from(customers)
-    .where(eq(customers.externalId, customerExternalId))
-    .limit(1);
-  const sessionRows = await database.db
-    .select()
-    .from(sessions)
-    .where(eq(sessions.customerId, customerRows[0].id))
-    .orderBy(desc(sessions.lastActivityAt))
-    .limit(1);
-  const sessionId = sessionRows[0]?.id;
-  if (!sessionId) fail('no sqlite session after processTurn');
-  ok(`sqlite session ${sessionId}`);
+  // ── Decision journal endpoint ──
+  // Traces are fire-and-forget, so poll until the prompt+reply entries land.
+  console.log('\n── Decision journal (harness transparency) ──');
+  let decisionRecord = null;
+  const journalDeadline = Date.now() + 5_000;
+  while (Date.now() < journalDeadline) {
+    const record = await api(aelioUrl, 'GET', `/api/v1/admin/harness/turns/${turnId}`);
+    if (record.status === 200 && record.data?.prompt && record.data?.reply) {
+      decisionRecord = record.data;
+      break;
+    }
+    await sleep(100);
+  }
+  if (!decisionRecord) fail('decision journal endpoint returned no prompt/reply record');
+  if (!decisionRecord.prompt.prompt || !decisionRecord.prompt.prompt.includes('You are'))
+    fail('journal record missing the compiled system prompt');
+  ok('journal serves the exact compiled system prompt for the turn');
+  if (decisionRecord.reply.reply !== reply) fail('journal reply does not match the turn reply');
+  if (!decisionRecord.reply.userMessage.includes(sessionTag))
+    fail('journal reply not linked to the triggering user message');
+  ok('journal links user message → decisions → reply for the turn');
+  if (!Array.isArray(decisionRecord.traces) || decisionRecord.traces.length < 2)
+    fail('journal traces timeline missing');
+  ok(`journal timeline has ${decisionRecord.traces.length} structured steps`);
+
+  const customer = await customerStore.getByExternalId(customerExternalId);
+  if (!customer) fail('no Sunjet customer after processTurn');
+  const session = await sessionStore.findOrCreate(customer.id, 'web', 60);
+  const sessionId = session.id;
+  if (!sessionId) fail('no Sunjet session after processTurn');
+  ok(`Sunjet session ${sessionId}`);
 
   section('Admin scan of real data');
   const msgScan = await api(aelioUrl, 'POST', '/api/v1/admin/db/tables/messages/scan', {
@@ -547,8 +593,6 @@ async function main() {
   );
   if (gone.status !== 404) fail(`expected 404 after delete, got ${gone.status}`);
   ok('deleted row returns 404 on get');
-
-  database.close();
 
   console.log(`\n✓ All ${passed} Astrolobe database admin checks passed.`);
   cleanup(0);

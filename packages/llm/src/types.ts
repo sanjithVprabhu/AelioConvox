@@ -30,6 +30,8 @@ export type LLMTelemetryMeta = {
     | 'tool_synthesis'
     | 'session_summary'
     | 'session_reflection'
+    | 'immediate_context_compaction'
+    | 'aspect_discovery'
     | 'plan'
     | 'replan'
     | 'bind'

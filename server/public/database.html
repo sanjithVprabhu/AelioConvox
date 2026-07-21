@@ -190,8 +190,14 @@
       .close-x { background: none; border: none; color: var(--muted); font-size: 1.4rem; cursor: pointer; }
 
       @media (max-width: 900px) {
-        .layout { grid-template-columns: 1fr; }
-        aside { display: none; }
+        /* Keep collections selectable — never hide the only way to pick a table. */
+        .layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+        aside {
+          display: block;
+          max-height: 42vh;
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+        }
       }
     </style>
   </head>

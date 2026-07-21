@@ -61,12 +61,16 @@ export async function registerAuthRoutes(app: FastifyInstance, deps: RuntimeDeps
     const protocol = request.protocol;
     const baseUrl = `${protocol}://${host}`;
 
-    const result = await createMagicLink(deps.database, {
-      email: parsed.data.email,
-      externalId: parsed.data.externalId,
-      baseUrl,
-      ttlMinutes: magicLink.ttl_minutes,
-    });
+    const result = await createMagicLink(
+      {
+        email: parsed.data.email,
+        externalId: parsed.data.externalId,
+        baseUrl,
+        ttlMinutes: magicLink.ttl_minutes,
+      },
+      deps.customerStore,
+      deps.magicLinkStore,
+    );
 
     return {
       email: result.email,
@@ -82,7 +86,7 @@ export async function registerAuthRoutes(app: FastifyInstance, deps: RuntimeDeps
       return reply.status(400).send({ error: 'Missing token' });
     }
 
-    const verified = await verifyMagicLink(deps.database, token);
+    const verified = await verifyMagicLink(token, deps.magicLinkStore);
     if (!verified) {
       return reply.status(401).send({ error: 'Invalid or expired token' });
     }

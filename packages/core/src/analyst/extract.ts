@@ -1,11 +1,8 @@
-import type { AelioDatabase } from '@aelio/db';
-import { memory } from '@aelio/db';
-import { and, eq } from 'drizzle-orm';
-import { randomUUID } from 'node:crypto';
 import { embed } from './embeddings.js';
+import type { ConvoxMemoryStore } from '../storage/memories.js';
 
 export type ExtractInput = {
-  database: AelioDatabase;
+  memoryStore?: ConvoxMemoryStore;
   customerId: string;
   sessionId: string;
   userMessage: string;
@@ -57,46 +54,34 @@ function detectFacts(userMessage: string): Array<{ content: string; category: st
 }
 
 export async function extractMemories(input: ExtractInput): Promise<string[]> {
+  if (!input.memoryStore) {
+    return [];
+  }
+
   const facts = detectFacts(input.userMessage);
   const stored: string[] = [];
 
   for (const fact of facts) {
-    // Dedup: the same durable fact (e.g. "frequently asks about order status")
-    // re-triggers on many turns — one row per customer per fact is enough.
-    const existing = await input.database.db
-      .select({ id: memory.id })
-      .from(memory)
-      .where(and(eq(memory.customerId, input.customerId), eq(memory.content, fact.content)))
-      .limit(1);
-    if (existing[0]) {
-      continue;
-    }
-
-    const id = randomUUID();
     const embedding = await embed(fact.content, {
       purpose: 'memory_extract',
       turnId: input.turnId,
       sessionId: input.sessionId,
       customerId: input.customerId,
-      database: input.database,
     });
-    await input.database.db.insert(memory).values({
-      id,
+
+    const result = await input.memoryStore.store({
       customerId: input.customerId,
       content: fact.content,
-      embedding,
+      category: fact.category,
       sourceSessionId: input.sessionId,
-      createdAt: new Date(),
       confidence: 1,
-      category: fact.category,
-    });
-    input.database.upsertMemoryVector({
-      memoryId: id,
-      customerId: input.customerId,
-      category: fact.category,
       embedding,
+      dedupe: true,
     });
-    stored.push(fact.content);
+
+    if (result) {
+      stored.push(fact.content);
+    }
   }
 
   return stored;

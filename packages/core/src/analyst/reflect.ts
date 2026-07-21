@@ -1,8 +1,10 @@
-import type { AelioDatabase } from '@aelio/db';
-import { functionCalls, memory, messages, reflections } from '@aelio/db';
 import type { LLMProvider } from '@aelio/llm';
-import { asc, eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
+import type { ConvoxFunctionCallStore } from '../storage/audit.js';
+import type { ConvoxMemoryStore } from '../storage/memories.js';
+import type { ConvoxMessageStore } from '../storage/messages.js';
+import type { ConvoxReflectionStore } from '../storage/reflections.js';
+import type { ConvoxSessionStore } from '../storage/sessions.js';
 import { embed } from './embeddings.js';
 
 export type ReflectionOutcome = 'resolved' | 'unresolved' | 'unclear';
@@ -25,26 +27,40 @@ Respond with ONLY a JSON object, no prose, in this exact shape:
 {"outcome":"resolved|unresolved|unclear","score":0.0,"summary":"1-2 sentences","issues":["..."],"insight":"one durable fact about this customer worth remembering, or empty string","followup":"a short, friendly customer-facing message to re-engage them IF their issue seems unresolved, otherwise empty string"}`;
 
 /**
- * Closed sessions that have at least `minMessages` messages and have not yet been
- * reflected on. Pure SQL so the "already reflected" filter is the daemon's cache.
+ * Closed sessions that have at least `minMessages` messages and have not yet
+ * been reflected on. Sunjet-only: `sessionStore` is required; `reflectionStore`
+ * and `messageStore` refine the candidate set (session/message counts) when
+ * supplied.
  */
-export function findUnreflectedSessions(
-  database: AelioDatabase,
+export async function findUnreflectedSessions(
   limit: number,
   minMessages = 2,
-): Array<{ sessionId: string; customerId: string }> {
-  const rows = database.sqlite
-    .prepare(
-      `SELECT s.id AS sessionId, s.customer_id AS customerId
-       FROM sessions s
-       WHERE s.status = 'closed'
-         AND NOT EXISTS (SELECT 1 FROM reflections r WHERE r.session_id = s.id)
-         AND (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) >= ?
-       ORDER BY s.closed_at ASC
-       LIMIT ?`,
-    )
-    .all(minMessages, limit) as Array<{ sessionId: string; customerId: string }>;
-  return rows;
+  sessionStore?: ConvoxSessionStore,
+  reflectionStore?: ConvoxReflectionStore,
+  messageStore?: ConvoxMessageStore,
+): Promise<Array<{ sessionId: string; customerId: string }>> {
+  if (!sessionStore) {
+    throw new Error('Sunjet sessionStore is required');
+  }
+  // Overfetch, then filter by reflection state / message count in-process —
+  // Sunjet has no NOT EXISTS / correlated-subquery equivalent over HTTP.
+  const closed = await sessionStore.listClosed(Math.max(limit * 4, limit));
+  const out: Array<{ sessionId: string; customerId: string }> = [];
+  for (const session of closed) {
+    if (out.length >= limit) {
+      break;
+    }
+    const hasReflection = reflectionStore ? await reflectionStore.hasForSession(session.sessionId) : false;
+    if (hasReflection) {
+      continue;
+    }
+    const messageCount = messageStore ? await messageStore.countSessionMessages(session.sessionId) : 0;
+    if (messageCount < minMessages) {
+      continue;
+    }
+    out.push({ sessionId: session.sessionId, customerId: session.customerId });
+  }
+  return out;
 }
 
 function parseVerdict(text: string): {
@@ -90,36 +106,35 @@ function parseVerdict(text: string): {
 
 /** Run one bounded LLM reflection on a single session and persist the verdict. */
 export async function reflectOnSession(input: {
-  database: AelioDatabase;
   llm: LLMProvider;
   model: string;
   maxTokens: number;
   sessionId: string;
   customerId: string;
+  /** Long-term insights go to Sunjet/VSS. */
+  memoryStore?: ConvoxMemoryStore;
+  messageStore: ConvoxMessageStore;
+  functionCallStore?: ConvoxFunctionCallStore;
+  reflectionStore: ConvoxReflectionStore;
 }): Promise<Reflection | null> {
-  const db = input.database.db;
-
-  const msgRows = await db
-    .select({ role: messages.role, content: messages.content })
-    .from(messages)
-    .where(eq(messages.sessionId, input.sessionId))
-    .orderBy(asc(messages.createdAt));
-
-  if (msgRows.length === 0) {
-    return null;
+  if (!input.messageStore) {
+    throw new Error('Sunjet messageStore is required');
+  }
+  if (!input.reflectionStore) {
+    throw new Error('Sunjet reflectionStore is required');
   }
 
-  const calls = await db
-    .select({ name: functionCalls.functionName, status: functionCalls.status })
-    .from(functionCalls)
-    .where(eq(functionCalls.sessionId, input.sessionId));
-
-  const transcript = msgRows
+  const rows = await input.messageStore.loadTranscript(input.sessionId);
+  if (rows.length === 0) {
+    return null;
+  }
+  const transcript = rows
     .map((m) => `${m.role}: ${(m.content ?? '').trim()}`)
     .join('\n')
     .slice(0, 4000);
+  const calls = input.functionCallStore ? await input.functionCallStore.listBySession(input.sessionId) : [];
   const toolSummary = calls.length
-    ? calls.map((c) => `${c.name}:${c.status}`).join(', ')
+    ? calls.map((c) => `${c.functionName}:${c.status}`).join(', ')
     : 'none';
 
   let verdict;
@@ -142,38 +157,30 @@ export async function reflectOnSession(input: {
     return null;
   }
 
-  const now = new Date();
   const id = randomUUID();
-  await db.insert(reflections).values({
-    id,
+  await input.reflectionStore.store({
     sessionId: input.sessionId,
     customerId: input.customerId,
     outcome: verdict.outcome,
     score: verdict.score,
     summary: verdict.summary,
     issues: verdict.issues,
-    createdAt: now,
+    insight: verdict.insight || undefined,
+    followup: verdict.followup || undefined,
   });
 
-  // Feed a durable insight back into long-term memory so future turns benefit.
-  if (verdict.insight && verdict.insight.trim().length > 0) {
-    const memId = randomUUID();
-    const embedding = await embed(verdict.insight, { purpose: 'reflection_insight' });
-    await db.insert(memory).values({
-      id: memId,
+  // Feed a durable insight into Sunjet/VSS so future turns can recall it.
+  if (input.memoryStore && verdict.insight && verdict.insight.trim().length > 0) {
+    const insight = verdict.insight.trim();
+    const embedding = await embed(insight, { purpose: 'reflection_insight' });
+    await input.memoryStore.store({
       customerId: input.customerId,
-      content: verdict.insight.trim(),
-      embedding,
+      content: insight,
+      category: 'insight',
       sourceSessionId: input.sessionId,
-      createdAt: now,
       confidence: verdict.score || 0.5,
-      category: 'insight',
-    });
-    input.database.upsertMemoryVector({
-      memoryId: memId,
-      customerId: input.customerId,
-      category: 'insight',
       embedding,
+      dedupe: true,
     });
   }
 

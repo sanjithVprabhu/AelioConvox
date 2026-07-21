@@ -22,7 +22,7 @@ function ingestDedupKey(channel: string, from: string, text: string, messageId?:
 }
 
 export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps) {
-  const { config, sdkBridge, database } = deps;
+  const { config, sdkBridge } = deps;
 
   setInterval(() => {
     const now = Date.now();
@@ -83,7 +83,7 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
       'SDK websocket connection accepted',
     );
 
-    socket.on('message', (raw) => {
+    socket.on('message', (raw: Buffer | ArrayBuffer | Buffer[]) => {
       if (raw.toString().length > MAX_WS_FRAME_BYTES) {
         socket.send(
           JSON.stringify({ type: 'error', code: 'frame_too_large', message: 'Message exceeds frame size limit' }),
@@ -159,10 +159,10 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
 
       if (message.type === 'set_state') {
         void upsertCustomerLifecycleState(
-          database.db,
           message.customerId,
           message.stateId,
           message.reason,
+          deps.customerStore,
         )
           .then(() => {
             socket.send(JSON.stringify({ type: 'ack', op: 'set_state' }));
@@ -181,11 +181,11 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
 
       if (message.type === 'set_flow_progress') {
         void upsertCustomerFlowProgress(
-          database.db,
           message.customerId,
           message.flowId,
           message.stepIndex,
           message.completedSteps,
+          deps.customerStore,
         )
           .then(() => {
             socket.send(JSON.stringify({ type: 'ack', op: 'set_flow_progress' }));
@@ -219,20 +219,26 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           message.text,
           message.messageId,
         );
-        if (!database.claimInboundMessage(dedupKey)) {
-          app.log.info({ connectionId, dedupKey }, 'Duplicate ingest dropped');
+        void (async () => {
+          const claimed = await deps.inboundDedupStore.claim(dedupKey);
+          if (!claimed) {
+            app.log.info({ connectionId, dedupKey }, 'Duplicate ingest dropped');
+            socket.send(JSON.stringify({ type: 'ack', op: 'ingest' }));
+            return;
+          }
+          await enqueueJob(
+            'inbound',
+            {
+              channel: message.channel,
+              from: message.from,
+              text: message.text,
+              messageId: message.messageId,
+              source: 'sdk-ingest',
+            },
+            deps.jobStore,
+          );
           socket.send(JSON.stringify({ type: 'ack', op: 'ingest' }));
-          return;
-        }
-        void enqueueJob(database, 'inbound', {
-          channel: message.channel,
-          from: message.from,
-          text: message.text,
-          messageId: message.messageId,
-          source: 'sdk-ingest',
-        }).then(() => {
-          socket.send(JSON.stringify({ type: 'ack', op: 'ingest' }));
-        });
+        })();
       }
     });
 

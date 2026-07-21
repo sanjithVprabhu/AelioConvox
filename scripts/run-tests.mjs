@@ -78,16 +78,31 @@ async function waitForSdk(url, attempts = 40) {
 }
 
 const root = process.cwd();
+
+// Standalone suites: each spawns its own Sunjet (ll-server) and needs no Aelio
+// server — run them first so engine regressions fail fast.
+const standalone = [
+  { name: 'Harness executor', script: 'scripts/test-harness-executor.mjs' },
+  { name: 'Archetype valence engine', script: 'scripts/test-archetype-engine.mjs' },
+  { name: 'Semantic pathway engine', script: 'scripts/test-semantic-pathway.mjs' },
+  { name: 'Aspect discovery (self-learning)', script: 'scripts/test-aspect-discovery.mjs' },
+  { name: 'Immediate context engine', script: 'scripts/test-immediate-context.mjs' },
+  { name: 'Reply relevance + decision journal', script: 'scripts/test-turn-relevance.mjs' },
+  { name: 'Admin DB + journal endpoint', script: 'scripts/test-admin-db.mjs' },
+];
+for (const test of standalone) {
+  console.log(`\n=== Running ${test.name} ===`);
+  await run('node', [test.script]);
+}
+
 const tmpRoot = mkdtempSync(join(tmpdir(), 'aelio-test-run-'));
 const testPort = await getFreePort();
 const baseUrl = `http://127.0.0.1:${testPort}`;
 const wsUrl = `ws://127.0.0.1:${testPort}`;
 const configPath = join(tmpRoot, 'config.yaml');
-const dbPath = join(tmpRoot, 'aelio-test.db');
 
 const configTemplate = readFileSync(join(root, 'config.yaml'), 'utf8');
 const testConfig = configTemplate
-  .replace(/database_path:\s.*$/m, `database_path: ${dbPath}`)
   .replace(/port:\s*\d+$/m, `port: ${testPort}`)
   .replace(/provider:\s*\w+/m, 'provider: mock')
   .replace(/- http:\/\/localhost:\d+$/m, `- ${baseUrl}`);
@@ -125,6 +140,9 @@ try {
 
   console.log('\n=== Running harness executor unit tests ===');
   await run('node', [join(root, 'scripts/test-harness-executor.mjs')], {});
+
+  console.log('\n=== Running turn relevance audit ===');
+  await run('node', [join(root, 'scripts/test-turn-relevance.mjs')], {});
 
   await waitForHealth(baseUrl, server, getServerLogs);
 

@@ -1,14 +1,16 @@
 import type { FunctionDefinition, InvocationContext, StateDefinition } from '@aelio/protocol';
 import type { ChatMessage, LLMProvider } from '@aelio/llm';
-import type { AelioDatabase } from '@aelio/db';
 import type { SafetyConfig } from '../safety/policy.js';
 import type { SdkBridge } from '../sdk-bridge/types.js';
 import type { ToolLoopResult } from '../runtime/tool-loop.js';
 import type { LighthouseService } from '../lighthouse/index.js';
+import type { ConvoxFunctionCallStore } from '../storage/audit.js';
+import type { ConvoxCustomerStore } from '../storage/customers.js';
 import { BudgetMeter } from './budgets.js';
-import { bindInstructions } from './binder.js';
+import { bindInstructions, type BindingCacheConfig } from './binder.js';
 import { resolvePlan } from './resolver.js';
 import { executePlan, hydrateExecutorState, newExecutorState, hashArgs, type ExecOutcome } from './executor.js';
+import type { LedgerSunjetConfig } from './ledger.js';
 import { runPlanner } from './planner.js';
 import { runSynthesis } from './synthesis.js';
 import { rehydrateSuspension, toSuspensionPayload } from './resume.js';
@@ -36,7 +38,6 @@ export { rehydrateSuspension, toSuspensionPayload } from './resume.js';
 export { applyStateTransition } from './transitions.js';
 
 export type HarnessRunInput = {
-  database?: AelioDatabase;
   internalCustomerId?: string;
   llm: LLMProvider;
   sdk: SdkBridge;
@@ -58,6 +59,12 @@ export type HarnessRunInput = {
   budgets?: HarnessBudgets;
   binding?: HarnessBindingConfig;
   turnId?: string;
+  functionCallStore: ConvoxFunctionCallStore;
+  customerStore: ConvoxCustomerStore;
+  /** The idempotency ledger reads/writes Sunjet exclusively. */
+  ledgerSunjet: LedgerSunjetConfig;
+  /** When present, instruction→tool bindings are cached in Sunjet. */
+  bindingCache?: BindingCacheConfig;
 };
 
 /**
@@ -148,15 +155,28 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
   }
 
   // ---- Bind → resolve ----
-  const bindResult = await bindInstructions(plan.instructions, input.functions, input.lighthouse, binding);
+  const bindResult = await bindInstructions(
+    plan.instructions,
+    input.functions,
+    input.lighthouse,
+    binding,
+    input.bindingCache,
+  );
   trace('bind', {
     bound: bindResult.bound.map((b) => ({ id: b.instruction.id, tool: b.tool.name })),
     unbound: bindResult.ok ? [] : bindResult.unbound.map((i) => i.id),
   });
   if (!bindResult.ok) {
-    // Unbindable capability — nothing in the registry serves it. End gracefully.
+    // Unbindable capability — nothing in the registry serves it. End gracefully
+    // in plain language: never leak internal tool/capability identifiers.
+    const rawCapability = bindResult.unbound[0]?.capability ?? 'do that';
+    const humanized = rawCapability
+      .replace(/[_-]+/g, ' ')
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .toLowerCase()
+      .trim();
     return {
-      reply: `I don't have a way to "${bindResult.unbound[0]?.capability ?? 'do that'}" right now.`,
+      reply: `I'm sorry — "${humanized}" isn't something I can do just yet. Is there anything else I can help you with?`,
       toolCallsExecuted: 0,
       executedToolNames: [],
     };
@@ -174,10 +194,9 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
   }
 
   // ---- Execute (wavefront) ----
-  const state =
-    input.database && input.turnId
-      ? await hydrateExecutorState(input.database, input.context.sessionId, input.turnId)
-      : newExecutorState();
+  const state = input.turnId
+    ? await hydrateExecutorState(input.context.sessionId, input.turnId, input.ledgerSunjet)
+    : newExecutorState();
   const outcome = await executePlan(resolveResult.plan, state, buildExecutorDeps(input, budgets, trace));
 
   return finishTurn(input, plan.goal, state, outcome, budgets, trace, {
@@ -301,24 +320,25 @@ function buildExecutorDeps(
     ...(input.presentFields ? { presentFields: input.presentFields } : {}),
     ...(approvedInstructions ? { approvedInstructions } : {}),
     budgets,
-    ...(input.database ? { database: input.database } : {}),
     ...(input.internalCustomerId ? { internalCustomerId: input.internalCustomerId } : {}),
     ...(input.turnId ? { turnId: input.turnId } : {}),
+    functionCallStore: input.functionCallStore,
+    ledgerSunjet: input.ledgerSunjet,
     trace: (kind: 'wave' | 'gate' | 'repair', payload: unknown) => trace(kind, payload),
     // Declarative lifecycle transitions on tool success. context.customerId is
     // the external id (what upsertCustomerLifecycleState keys on).
-    ...(input.database && input.state?.transitions?.length
+    ...(input.state?.transitions?.length
       ? {
           onToolSuccess: async (toolName: string) => {
             // Best-effort: a transition write must never reject the executor's
             // wave (which would crash the whole turn) — the tool already ran.
             try {
               const applied = await applyStateTransition({
-                db: input.database!.db,
                 externalId: input.context.customerId,
                 state: input.state,
                 toolName,
                 presentFields: input.presentFields ?? new Set<string>(),
+                customerStore: input.customerStore,
               });
               if (applied) {
                 trace('repair', { transitionedTo: applied.transitionedTo, afterTool: toolName });

@@ -1,7 +1,6 @@
-import type { AelioDatabase } from '@aelio/db';
-import { messages, sessions } from '@aelio/db';
 import type { LLMProvider } from '@aelio/llm';
-import { asc, count, desc, eq } from 'drizzle-orm';
+import type { ConvoxMessageStore } from '../storage/messages.js';
+import type { ConvoxSessionStore } from '../storage/sessions.js';
 
 type SessionSummaryMeta = {
   summarizedAtCount?: number;
@@ -9,54 +8,50 @@ type SessionSummaryMeta = {
 };
 
 export async function loadSessionSummary(
-  db: AelioDatabase['db'],
   sessionId: string,
+  sessionStore: ConvoxSessionStore,
 ): Promise<string | null> {
-  const rows = await db.select({ summary: sessions.summary }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-  return rows[0]?.summary ?? null;
+  if (!sessionStore) {
+    throw new Error('Sunjet sessionStore is required');
+  }
+  return sessionStore.getSummary(sessionId);
 }
 
 export async function maybeSummarizeSession(input: {
-  db: AelioDatabase['db'];
+  sessionStore: ConvoxSessionStore;
+  messageStore: ConvoxMessageStore;
   sessionId: string;
   summarizeAfter: number;
   llm: LLMProvider;
   model: string;
   maxTokens: number;
 }): Promise<string | null> {
-  const countRows = await input.db
-    .select({ value: count() })
-    .from(messages)
-    .where(eq(messages.sessionId, input.sessionId));
-  const messageCount = countRows[0]?.value ?? 0;
+  if (!input.sessionStore) {
+    throw new Error('Sunjet sessionStore is required');
+  }
+  if (!input.messageStore) {
+    throw new Error('Sunjet messageStore is required');
+  }
+
+  const messageCount = await input.messageStore.countSessionMessages(input.sessionId);
 
   if (messageCount < input.summarizeAfter) {
     return null;
   }
 
-  const sessionRows = await input.db
-    .select({ summary: sessions.summary, metadata: sessions.metadata })
-    .from(sessions)
-    .where(eq(sessions.id, input.sessionId))
-    .limit(1);
-  const existing = sessionRows[0]?.summary ?? null;
-  const metadata = (sessionRows[0]?.metadata ?? {}) as SessionSummaryMeta;
-  const summarizedAtCount = metadata.summarizedAtCount ?? 0;
+  const session = await input.sessionStore.get(input.sessionId);
+  const existing = session?.summary ?? null;
+  const metadata = (session?.metadata ?? {}) as SessionSummaryMeta;
 
-  // Refresh, don't freeze: a summary made at turn 50 is stale by turn 120.
-  // Re-summarize each time another `summarizeAfter` messages accumulate,
-  // folding the previous summary in so nothing already condensed is lost.
+  const summarizedAtCount = metadata.summarizedAtCount ?? 0;
   if (existing && messageCount < summarizedAtCount + input.summarizeAfter) {
     return existing;
   }
 
-  const rows = await input.db
-    .select({ role: messages.role, content: messages.content })
-    .from(messages)
-    .where(eq(messages.sessionId, input.sessionId))
-    .orderBy(desc(messages.createdAt))
-    .limit(Math.min(input.summarizeAfter, 50));
-  rows.reverse();
+  const rows = await input.messageStore.loadTranscript(
+    input.sessionId,
+    Math.min(input.summarizeAfter, 50),
+  );
 
   const transcript = rows
     .map((row) => `${row.role}: ${row.content ?? ''}`.trim())
@@ -90,9 +85,7 @@ export async function maybeSummarizeSession(input: {
     return null;
   }
 
-  await input.db
-    .update(sessions)
-    .set({ summary, metadata: { ...metadata, summarizedAtCount: messageCount } })
-    .where(eq(sessions.id, input.sessionId));
+  const nextMeta = { ...metadata, summarizedAtCount: messageCount };
+  await input.sessionStore.updateSummary(input.sessionId, summary, nextMeta);
   return summary;
 }

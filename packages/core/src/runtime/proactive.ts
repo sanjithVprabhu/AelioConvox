@@ -1,9 +1,9 @@
-import type { AelioDatabase } from '@aelio/db';
-import { channelAddresses, customers, messages, proactiveMessages } from '@aelio/db';
 import type { Channel } from '@aelio/protocol';
-import { and, desc, eq, gte } from 'drizzle-orm';
-import { randomUUID } from 'node:crypto';
 import { enqueueJob } from '../job-queue/index.js';
+import type { ConvoxCustomerStore } from '../storage/customers.js';
+import type { ConvoxJobStore } from '../storage/jobs.js';
+import type { ConvoxMessageStore } from '../storage/messages.js';
+import type { ConvoxProactiveStore } from '../storage/proactive-store.js';
 
 export type ProactiveConfig = {
   enabled: boolean;
@@ -19,40 +19,36 @@ export type ProactiveResult = {
 };
 
 export type ProactiveInput = {
-  database: AelioDatabase;
   config: ProactiveConfig;
   customerExternalId: string;
   channel: Channel;
   content: string;
   templateName?: string;
   dedupKey?: string;
+  customerStore: ConvoxCustomerStore;
+  messageStore: ConvoxMessageStore;
+  proactiveStore: ConvoxProactiveStore;
+  jobStore: ConvoxJobStore;
 };
 
 /** Set (or clear) a customer's opt-in for proactive messages. */
 export async function setProactiveOptIn(
-  database: AelioDatabase,
   customerExternalId: string,
   optIn: boolean,
+  customerStore: ConvoxCustomerStore,
 ): Promise<boolean> {
-  const rows = await database.db
-    .select()
-    .from(customers)
-    .where(eq(customers.externalId, customerExternalId))
-    .limit(1);
-  const customer = rows[0];
+  if (!customerStore) {
+    throw new Error('Sunjet customerStore is required');
+  }
+  const customer = await customerStore.getByExternalId(customerExternalId);
   if (!customer) {
     return false;
   }
-  const metadata = { ...(customer.metadata ?? {}), proactiveOptIn: optIn };
-  await database.db
-    .update(customers)
-    .set({ metadata, updatedAt: new Date() })
-    .where(eq(customers.id, customer.id));
+  await customerStore.updateMetadata(customer.id, { ...customer.metadata, proactiveOptIn: optIn });
   return true;
 }
 
 async function record(
-  database: AelioDatabase,
   fields: {
     customerId: string;
     channel: Channel;
@@ -62,18 +58,9 @@ async function record(
     status: 'sent' | 'blocked';
     reason?: string;
   },
+  proactiveStore: ConvoxProactiveStore,
 ): Promise<void> {
-  await database.db.insert(proactiveMessages).values({
-    id: randomUUID(),
-    customerId: fields.customerId,
-    channel: fields.channel,
-    toAddress: fields.to,
-    content: fields.content,
-    dedupKey: fields.dedupKey,
-    status: fields.status,
-    reason: fields.reason,
-    createdAt: new Date(),
-  });
+  await proactiveStore.record(fields);
 }
 
 /**
@@ -83,104 +70,98 @@ async function record(
  *   4. dedup             5. daily frequency cap
  *   6. WhatsApp 24h window (free-form only inside it; template required outside)
  * On success it enqueues an outbound job (delivered by the same path as replies).
+ * Requires Sunjet customerStore/messageStore/proactiveStore/jobStore.
  */
 export async function sendProactiveMessage(input: ProactiveInput): Promise<ProactiveResult> {
-  const db = input.database.db;
+  if (!input.customerStore) {
+    throw new Error('Sunjet customerStore is required');
+  }
+  if (!input.messageStore) {
+    throw new Error('Sunjet messageStore is required');
+  }
+  if (!input.proactiveStore) {
+    throw new Error('Sunjet proactiveStore is required');
+  }
+  if (!input.jobStore) {
+    throw new Error('Sunjet jobStore is required');
+  }
 
   if (!input.config.enabled) {
     return { ok: false, status: 'blocked', reason: 'Proactive messaging is disabled' };
   }
 
-  const customerRows = await db
-    .select()
-    .from(customers)
-    .where(eq(customers.externalId, input.customerExternalId))
-    .limit(1);
-  const customer = customerRows[0];
+  const customer = await input.customerStore.getByExternalId(input.customerExternalId);
   if (!customer) {
     return { ok: false, status: 'blocked', reason: 'Unknown customer' };
   }
+  const customerId = customer.id;
+  const address = (await input.customerStore.getChannelAddress(customerId, input.channel)) ?? undefined;
+  const optedIn = customer.metadata?.proactiveOptIn === true;
 
-  const addrRows = await db
-    .select()
-    .from(channelAddresses)
-    .where(and(eq(channelAddresses.customerId, customer.id), eq(channelAddresses.channel, input.channel)))
-    .limit(1);
-  const address = addrRows[0]?.address;
   if (!address) {
     return { ok: false, status: 'blocked', reason: `No ${input.channel} address for customer` };
   }
 
-  const optedIn = (customer.metadata as Record<string, unknown> | null)?.proactiveOptIn === true;
   if (input.config.requireOptIn && !optedIn) {
-    await record(input.database, {
-      customerId: customer.id,
-      channel: input.channel,
-      to: address,
-      content: input.content,
-      dedupKey: input.dedupKey,
-      status: 'blocked',
-      reason: 'Customer has not opted in',
-    });
-    return { ok: false, status: 'blocked', reason: 'Customer has not opted in' };
-  }
-
-  if (input.dedupKey) {
-    const existing = await db
-      .select({ id: proactiveMessages.id })
-      .from(proactiveMessages)
-      .where(and(eq(proactiveMessages.dedupKey, input.dedupKey), eq(proactiveMessages.status, 'sent')))
-      .limit(1);
-    if (existing[0]) {
-      return { ok: false, status: 'blocked', reason: 'Duplicate (dedupKey already sent)' };
-    }
-  }
-
-  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const sentToday = await db
-    .select({ id: proactiveMessages.id })
-    .from(proactiveMessages)
-    .where(
-      and(
-        eq(proactiveMessages.customerId, customer.id),
-        eq(proactiveMessages.status, 'sent'),
-        gte(proactiveMessages.createdAt, dayAgo),
-      ),
-    );
-  if (sentToday.length >= input.config.maxPerCustomerPerDay) {
-    await record(input.database, {
-      customerId: customer.id,
-      channel: input.channel,
-      to: address,
-      content: input.content,
-      dedupKey: input.dedupKey,
-      status: 'blocked',
-      reason: 'Daily proactive limit reached',
-    });
-    return { ok: false, status: 'blocked', reason: 'Daily proactive limit reached' };
-  }
-
-  // WhatsApp 24-hour window: outside it, Meta requires a pre-approved template.
-  if (input.channel === 'whatsapp' && !input.templateName) {
-    const lastInbound = await db
-      .select({ createdAt: messages.createdAt })
-      .from(messages)
-      .where(and(eq(messages.customerId, customer.id), eq(messages.role, 'user')))
-      .orderBy(desc(messages.createdAt))
-      .limit(1);
-    const last = lastInbound[0]?.createdAt;
-    const withinWindow =
-      last instanceof Date && Date.now() - last.getTime() <= input.config.windowHours * 60 * 60 * 1000;
-    if (!withinWindow) {
-      await record(input.database, {
-        customerId: customer.id,
+    await record(
+      {
+        customerId,
         channel: input.channel,
         to: address,
         content: input.content,
         dedupKey: input.dedupKey,
         status: 'blocked',
-        reason: 'Outside 24h window — a template message is required',
-      });
+        reason: 'Customer has not opted in',
+      },
+      input.proactiveStore,
+    );
+    return { ok: false, status: 'blocked', reason: 'Customer has not opted in' };
+  }
+
+  if (input.dedupKey) {
+    const existing = await input.proactiveStore.findSentByDedup(input.dedupKey);
+    if (existing) {
+      return { ok: false, status: 'blocked', reason: 'Duplicate (dedupKey already sent)' };
+    }
+  }
+
+  const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  const sentTodayCount = await input.proactiveStore.countSentSince(customerId, dayAgo);
+  if (sentTodayCount >= input.config.maxPerCustomerPerDay) {
+    await record(
+      {
+        customerId,
+        channel: input.channel,
+        to: address,
+        content: input.content,
+        dedupKey: input.dedupKey,
+        status: 'blocked',
+        reason: 'Daily proactive limit reached',
+      },
+      input.proactiveStore,
+    );
+    return { ok: false, status: 'blocked', reason: 'Daily proactive limit reached' };
+  }
+
+  // WhatsApp 24-hour window: outside it, Meta requires a pre-approved template.
+  if (input.channel === 'whatsapp' && !input.templateName) {
+    const lastInboundAt = await input.messageStore.lastUserMessageAt(customerId);
+    const withinWindow =
+      typeof lastInboundAt === 'number' &&
+      Date.now() - lastInboundAt <= input.config.windowHours * 60 * 60 * 1000;
+    if (!withinWindow) {
+      await record(
+        {
+          customerId,
+          channel: input.channel,
+          to: address,
+          content: input.content,
+          dedupKey: input.dedupKey,
+          status: 'blocked',
+          reason: 'Outside 24h window — a template message is required',
+        },
+        input.proactiveStore,
+      );
       return {
         ok: false,
         status: 'blocked',
@@ -189,22 +170,29 @@ export async function sendProactiveMessage(input: ProactiveInput): Promise<Proac
     }
   }
 
-  await enqueueJob(input.database, 'outbound', {
-    channel: input.channel,
-    to: address,
-    text: input.content,
-    proactive: true,
-    ...(input.templateName ? { templateName: input.templateName } : {}),
-  });
+  await enqueueJob(
+    'outbound',
+    {
+      channel: input.channel,
+      to: address,
+      text: input.content,
+      proactive: true,
+      ...(input.templateName ? { templateName: input.templateName } : {}),
+    },
+    input.jobStore,
+  );
 
-  await record(input.database, {
-    customerId: customer.id,
-    channel: input.channel,
-    to: address,
-    content: input.content,
-    dedupKey: input.dedupKey,
-    status: 'sent',
-  });
+  await record(
+    {
+      customerId,
+      channel: input.channel,
+      to: address,
+      content: input.content,
+      dedupKey: input.dedupKey,
+      status: 'sent',
+    },
+    input.proactiveStore,
+  );
 
   return { ok: true, status: 'sent' };
 }

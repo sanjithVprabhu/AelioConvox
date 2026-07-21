@@ -81,6 +81,7 @@ export function hasConfiguredEmbedder(): boolean {
 }
 
 export type EmbedPurpose =
+  | 'pathway_retrieval'
   | 'memory_recall'
   | 'memory_extract'
   | 'response_cache_lookup'
@@ -95,7 +96,6 @@ export type EmbedOptions = {
   turnId?: string;
   sessionId?: string;
   customerId?: string;
-  database?: import('@aelio/db').AelioDatabase;
 };
 
 export async function embed(text: string, options?: EmbedOptions): Promise<number[]> {
@@ -139,7 +139,6 @@ export async function embed(text: string, options?: EmbedOptions): Promise<numbe
       turnId: options.turnId,
       sessionId: options.sessionId,
       customerId: options.customerId,
-      database: options.database,
     }).catch(() => {});
   }
 

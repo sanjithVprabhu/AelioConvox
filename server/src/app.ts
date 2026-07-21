@@ -1,8 +1,12 @@
-import { createDatabase } from '@aelio/db';
 import { MetaWhatsAppSender, MockWhatsAppSender } from '@aelio/channels';
 import { createLLMProviderChain, createEmbeddingProvider, type LLMProviderConfig } from '@aelio/llm';
 import {
   configureEmbedder,
+  createImmediateContextEngine,
+  createSemanticPathwayEngine,
+  createArchetypeEngine,
+  seedBuiltinArchetypes,
+  DEFAULT_ARCHETYPES,
   createInstrumentedLlm,
   HarnessTracer,
   LighthouseService,
@@ -12,7 +16,7 @@ import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import type { AelioConfig } from './config.js';
-import { resolveMigrationsFolder, resolvePublicDir } from './paths.js';
+import { resolvePublicDir } from './paths.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerSdkRoutes } from './routes/sdk.js';
@@ -80,11 +84,7 @@ export function resolveLlmChain(config: AelioConfig): [LLMProviderConfig, ...LLM
 }
 
 export async function createApp(config: AelioConfig) {
-  const migrationsFolder = resolveMigrationsFolder();
   const publicDir = resolvePublicDir();
-
-  const database = createDatabase(config.storage.database_path);
-  database.migrate(migrationsFolder);
 
   const llm = createInstrumentedLlm(createLLMProviderChain(resolveLlmChain(config)));
 
@@ -101,22 +101,13 @@ export async function createApp(config: AelioConfig) {
     configureEmbedder((text) => embeddingProvider.embed(text));
   }
 
-  const sdkBridge = new ServerSdkBridge(database);
+  // Aelio is Sunjet-only: every Convox store (messages, memories, sessions,
+  // customers, jobs, ledger, etc.) lives on Sunjet/Astrolobe. There is no
+  // SQLite fallback — a Sunjet outage at boot is fatal, not degraded service.
+  config.sunjet.enabled = true;
+  const sunjet = await initSunjet(config);
 
-  // A Sunjet outage at boot must not crash-loop the server when the config
-  // allows SQLite fallback — conversations keep working, archival degrades.
-  let sunjet: Awaited<ReturnType<typeof initSunjet>> = null;
-  try {
-    sunjet = await initSunjet(config);
-  } catch (error) {
-    if (!config.sunjet.enabled || !config.sunjet.fallback_sqlite_on_error) {
-      throw error;
-    }
-    console.error(
-      '[aelio] Sunjet unavailable at startup — continuing on SQLite only:',
-      error instanceof Error ? error.message : String(error),
-    );
-  }
+  const sdkBridge = new ServerSdkBridge(sunjet.sdkConnectionStore);
 
   const whatsapp = config.channels.whatsapp;
   // provider: 'sdk' means the dev delivers outbound themselves via onSend, so we
@@ -134,54 +125,90 @@ export async function createApp(config: AelioConfig) {
           : new MockWhatsAppSender();
 
   // Lighthouse: the harness's read model over the SDK registry. Registry
-  // changes re-hash immediately; the Sunjet mirror (when available) resyncs
-  // in the background, keyed by that hash.
+  // changes re-hash immediately; the Sunjet mirror resyncs in the background,
+  // keyed by that hash.
   const lighthouse = new LighthouseService({
     bridge: sdkBridge,
     tenant: config.name,
-    ...(sunjet
-      ? {
-          sunjet: {
-            client: sunjet.client,
-            toolsTable: sunjet.tables.harnessTools,
-            capabilitiesTable: sunjet.tables.harnessCapabilities,
-            embedDim: sunjet.embedDim,
-          },
-        }
-      : {}),
+    sunjet: {
+      client: sunjet.client,
+      toolsTable: sunjet.tables.harnessTools,
+      capabilitiesTable: sunjet.tables.harnessCapabilities,
+      embedDim: sunjet.embedDim,
+    },
   });
   sdkBridge.onRegistryChange(() => lighthouse.refresh());
 
-  // Harness trace firehose — Sunjet-only, lossy-tolerant; null without Sunjet.
-  const tracer = sunjet
-    ? new HarnessTracer({
-        client: sunjet.client,
-        table: sunjet.tables.harnessTraces,
-        tenant: config.name,
-        embedDim: sunjet.embedDim,
-      })
-    : null;
-
-  // Suspended-plan store: SQLite is authoritative (always present); Sunjet
-  // mirrors when available so parked plans are visible in Astrolobe too.
-  const suspensionStore = new SuspensionStore({
-    database,
-    ...(sunjet
-      ? { sunjet: { client: sunjet.client, table: sunjet.tables.harnessSuspensions, tenant: config.name } }
-      : {}),
+  // Harness trace firehose — Sunjet-only, lossy-tolerant.
+  const tracer = new HarnessTracer({
+    client: sunjet.client,
+    table: sunjet.tables.harnessTraces,
+    tenant: config.name,
+    embedDim: sunjet.embedDim,
   });
+
+  // Suspended-plan store: Sunjet is the sole source of truth (see SuspensionStore docs).
+  const suspensionStore = new SuspensionStore({
+    sunjet: { client: sunjet.client, table: sunjet.tables.harnessSuspensions, tenant: config.name },
+  });
+
+  // Immediate Context Engine: time-bucketed short-term context per customer
+  // (hot 5-min window cached in-process, older windows compacted into Sunjet).
+  const contextEngine = createImmediateContextEngine({
+    storage: sunjet.storageConfig,
+    llm,
+    model: config.llm.model,
+  });
+  const pathwayEngine = createSemanticPathwayEngine({
+    memoryStore: sunjet.memoryStore,
+  });
+
+  // Archetype valence engine + self-learning aspect taxonomy. The mother
+  // collection (aspectStore) registers the "things" we track; each owns a
+  // pos/neu/neg bucket set. Seed the builtin aspects once (a tenant can add its
+  // own); seeding is best-effort so a slow/unavailable embedder never blocks
+  // startup. Discovery of new aspects happens post-turn via engine.learn().
+  const archetypeEngine = createArchetypeEngine({
+    store: sunjet.archetypeStore,
+    aspectStore: sunjet.aspectStore,
+  });
+  void seedBuiltinArchetypes(sunjet.aspectStore, sunjet.archetypeStore, DEFAULT_ARCHETYPES)
+    .then((count) => {
+      if (count > 0) {
+        console.log(`[aelio] seeded ${count} builtin aspects with valence buckets`);
+      }
+    })
+    .catch((error) => {
+      console.warn(
+        `[aelio] archetype seeding skipped: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
 
   const deps: RuntimeDeps = {
     config,
-    database,
     llm,
     sdkBridge,
     lighthouse,
     tracer,
     suspensionStore,
     whatsappSender,
-    sunjetClient: sunjet?.client ?? null,
-    messageStore: sunjet?.messageStore ?? null,
+    sunjetClient: sunjet.client,
+    messageStore: sunjet.messageStore,
+    memoryStore: sunjet.memoryStore,
+    sessionStore: sunjet.sessionStore,
+    customerStore: sunjet.customerStore,
+    jobStore: sunjet.jobStore,
+    responseCacheStore: sunjet.responseCacheStore,
+    functionCallStore: sunjet.functionCallStore,
+    reflectionStore: sunjet.reflectionStore,
+    proactiveStore: sunjet.proactiveStore,
+    inboundDedupStore: sunjet.inboundDedupStore,
+    magicLinkStore: sunjet.magicLinkStore,
+    sdkConnectionStore: sunjet.sdkConnectionStore,
+    contextEngine,
+    pathwayEngine,
+    archetypeEngine,
+    axisStore: sunjet.axisStore,
   };
 
   const app = Fastify({
@@ -239,8 +266,7 @@ export async function createApp(config: AelioConfig) {
     stopBackup();
     stopDaemon();
     sdkBridge.shutdown();
-    database.close();
   });
 
-  return { app, database, deps, publicDir, migrationsFolder };
+  return { app, deps, publicDir };
 }

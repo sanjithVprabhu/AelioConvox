@@ -10,6 +10,14 @@ llm:
   api_key: ${OPENAI_API_KEY}
   max_tokens: 4096
 
+# Real vectors for Sunjet semantic search (must match sunjet.embed_dim).
+# Override: AELIO_EMBEDDINGS_PROVIDER=openai|hash|gemini|anthropic|ollama
+embeddings:
+  provider: openai
+  model: text-embedding-3-small
+  api_key: ${OPENAI_API_KEY}
+  output_dimension: 1536
+
 channels:
   whatsapp:
     enabled: true
@@ -45,21 +53,15 @@ memory:
   enabled: true
   recall_limit: 5
 
-# All-in-one image starts ll-server locally and sets AELIO_SUNJET_ENABLED=1.
-# Disable with -e AELIO_SUNJET_ENABLED=0 (SQLite only).
-# Segments: -e AELIO_SUNJET_SEGMENT_BACKEND=local|s3 (+ AELIO_SUNJET_S3_* for cloud).
+# Astrolobe is the sole message/state store (see docker entrypoint) — Aelio is
+# Sunjet-only and has no SQLite fallback.
 sunjet:
-  enabled: false
+  enabled: true
   url: http://127.0.0.1:8080
   api_key: ${SUNJET_API_KEY}
   embed_dim: 1536
-  dual_write_sqlite: true
-  fallback_sqlite_on_error: true
   segment_storage:
     backend: local
-
-storage:
-  database_path: /data/aelio.db
 
 logging:
   level: info

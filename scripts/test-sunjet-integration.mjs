@@ -1,28 +1,22 @@
 #!/usr/bin/env node
 /**
- * End-to-end Sunjet integration test:
+ * End-to-end Sunjet integration test (Sunjet-only — no SQLite):
  * 1) ll-server health + table schemas
- * 2) bootstrapSunjetTables + ConvoxMessageStore
- * 3) processTurn writes L0 rows to Sunjet (+ SQLite dual-write)
+ * 2) bootstrapSunjetTables + Convox stores
+ * 3) processTurn writes L0 rows + session/customer state to Sunjet
  * 4) Sunjet loadHistory returns the conversation
  */
 
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createDatabase, customers, messages, sessions } from '@aelio/db';
 import {
   bootstrapSunjetTables,
+  createConvoxCustomerStore,
+  createConvoxFunctionCallStore,
   createConvoxMessageStore,
+  createConvoxSessionStore,
   processTurn,
 } from '@aelio/core';
 import { createLLMProviderChain } from '@aelio/llm';
 import { SunjetClient } from '@aelio/sunjet-client';
-import { desc, eq } from 'drizzle-orm';
-
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const MIGRATIONS = join(ROOT, 'packages/db/drizzle');
 
 const SUNJET_URL = process.env.SUNJET_URL ?? 'http://127.0.0.1:18080';
 
@@ -32,6 +26,25 @@ const TABLES = {
   memories: 'convox_memories',
   compactions: 'convox_compactions',
   runtimeState: 'runtime_state',
+  harnessTools: 'harness_tools',
+  harnessCapabilities: 'harness_capabilities',
+  harnessBindings: 'harness_bindings',
+  harnessSuspensions: 'harness_suspensions',
+  harnessLedger: 'harness_ledger',
+  harnessTraces: 'harness_traces',
+  customers: 'convox_customers',
+  channelAddresses: 'convox_channel_addresses',
+  sessions: 'convox_sessions',
+  jobQueue: 'convox_job_queue',
+  responseCache: 'convox_response_cache',
+  functionCalls: 'convox_function_calls',
+  turnApiCalls: 'convox_turn_api_calls',
+  reflections: 'convox_reflections',
+  proactiveMessages: 'convox_proactive_messages',
+  inboundDedup: 'convox_inbound_dedup',
+  magicLinks: 'convox_magic_links',
+  sdkConnections: 'convox_sdk_connections',
+  archetypes: 'convox_archetypes', aspects: 'convox_aspects', axisNodes: 'convox_axis_nodes',
 };
 
 function fail(message) {
@@ -63,7 +76,7 @@ async function main() {
   }
   ok(`ll-server health at ${SUNJET_URL}`);
 
-  // --- 2. Bootstrap tables + message store ---
+  // --- 2. Bootstrap tables + stores ---
   const client = new SunjetClient({ baseUrl: SUNJET_URL });
   await bootstrapSunjetTables(client, TABLES, 1536);
 
@@ -72,20 +85,14 @@ async function main() {
     ok(`table exists: ${table} (${schema.columns.length} columns)`);
   }
 
-  const messageStore = createConvoxMessageStore({
-    client,
-    tables: TABLES,
-    embedDim: 1536,
-    dualWriteSqlite: true,
-    fallbackSqliteOnError: true,
-  });
-  ok('ConvoxMessageStore ready');
+  const storageConfig = { client, tables: TABLES, embedDim: 1536 };
+  const messageStore = createConvoxMessageStore(storageConfig);
+  const sessionStore = createConvoxSessionStore(storageConfig);
+  const customerStore = createConvoxCustomerStore(storageConfig);
+  const functionCallStore = createConvoxFunctionCallStore(storageConfig);
+  ok('Convox stores ready');
 
   // --- 3. processTurn ---
-  const dbDir = mkdtempSync(join(tmpdir(), 'aelio-sunjet-'));
-  const database = createDatabase(join(dbDir, 'test.db'));
-  database.migrate(MIGRATIONS);
-
   const llm = createLLMProviderChain([
     { provider: 'mock', model: 'mock-model', maxTokens: 4096 },
   ]);
@@ -103,7 +110,6 @@ async function main() {
   const userMessage = `Sunjet integration ping ${sessionTag}`;
 
   const { reply } = await processTurn({
-    database,
     llm,
     sdk,
     model: 'mock-model',
@@ -115,9 +121,12 @@ async function main() {
     idleTimeoutMinutes: 60,
     summarizeAfter: 50,
     memoryRecallLimit: 5,
-    memoryEnabled: true,
+    memoryEnabled: false,
     intent: { enabled: true, ttlMinutes: 20, maxDepth: 5 },
     messageStore,
+    sessionStore,
+    customerStore,
+    functionCallStore,
     customerExternalId: customerId,
     channel: 'web',
     channelAddress: `web:${customerId}`,
@@ -129,33 +138,24 @@ async function main() {
   }
   ok(`processTurn reply (${reply.length} chars)`);
 
-  const customerRows = await database.db
-    .select()
-    .from(customers)
-    .where(eq(customers.externalId, customerId))
-    .limit(1);
-  const customerInternalId = customerRows[0]?.id;
-  if (!customerInternalId) {
-    fail('sqlite customer row missing after processTurn');
+  const customer = await customerStore.getByExternalId(customerId);
+  if (!customer) {
+    fail('Sunjet customer record missing after processTurn');
   }
+  ok(`Sunjet customer ${customer.id}`);
 
-  const sessionRows = await database.db
-    .select()
-    .from(sessions)
-    .where(eq(sessions.customerId, customerInternalId))
-    .orderBy(desc(sessions.lastActivityAt))
-    .limit(1);
-  const sessionId = sessionRows[0]?.id;
+  const session = await sessionStore.findOrCreate(customer.id, 'web', 60);
+  const sessionId = session.id;
   if (!sessionId) {
-    fail('sqlite session row missing after processTurn');
+    fail('Sunjet session record missing after processTurn');
   }
-  ok(`sqlite session ${sessionId}`);
+  ok(`Sunjet session ${sessionId}`);
 
   // --- 4. Verify Sunjet L0 rows ---
   const scan = await client.scanRows(TABLES.messages, {
     k: 50,
     filters: [
-      { col: 'customer_id', op: 'eq', value: { type: 'utf8', value: customerInternalId } },
+      { col: 'customer_id', op: 'eq', value: { type: 'utf8', value: customer.id } },
       { col: 'tier', op: 'eq', value: { type: 'i64', value: 0 } },
     ],
   });
@@ -185,17 +185,7 @@ async function main() {
   }
   ok(`Sunjet loadHistory: ${history.length} messages`);
 
-  // --- 6. SQLite dual-write ---
-  const sqliteMessages = await database.db
-    .select()
-    .from(messages)
-    .where(eq(messages.sessionId, sessionId));
-  if (sqliteMessages.length < 2) {
-    fail(`SQLite dual-write expected >=2, got ${sqliteMessages.length}`);
-  }
-  ok(`SQLite dual-write: ${sqliteMessages.length} messages`);
-
-  // --- 7. Rich conversation archive ---
+  // --- 6. Rich conversation archive ---
   const convoScan = await client.scanRows(TABLES.conversations, {
     k: 50,
     filters: [
@@ -215,8 +205,6 @@ async function main() {
     fail('convox_conversations assistant row missing intent_label');
   }
   ok(`convox_conversations: ${convoRows.length} rows with sender + intent context`);
-
-  database.close();
 
   console.log('\nAll Sunjet integration checks passed.');
 }

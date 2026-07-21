@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { RuntimeDeps } from '../runtime-deps.js';
-import { resolveMigrationsFolder, resolvePublicDir } from '../paths.js';
+import { resolvePublicDir } from '../paths.js';
 import { bearerToken, secretsMatch } from '../auth.js';
 
 export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeDeps) {
@@ -19,36 +19,21 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
     }
 
     const checks: Record<string, boolean> = {
-      database: false,
-      migrations: false,
+      sunjet: false,
       widget: false,
-      sunjet: !deps.config.sunjet.enabled,
     };
 
+    // Aelio is Sunjet-only — readiness reflects Sunjet's own health directly.
     try {
-      deps.database.sqlite.prepare('SELECT 1').get();
-      checks.database = true;
+      const health = await deps.sunjetClient.health();
+      checks.sunjet = health.status === 'ok';
     } catch {
-      checks.database = false;
+      checks.sunjet = false;
     }
 
-    checks.migrations = existsSync(resolveMigrationsFolder());
     checks.widget = existsSync(resolvePublicDir() + '/widget.js');
 
-    if (deps.config.sunjet.enabled) {
-      try {
-        if (deps.sunjetClient) {
-          const health = await deps.sunjetClient.health();
-          checks.sunjet = health.status === 'ok';
-        } else {
-          checks.sunjet = false;
-        }
-      } catch {
-        checks.sunjet = false;
-      }
-    }
-
-    const ready = checks.database && checks.migrations && checks.widget && checks.sunjet;
+    const ready = checks.widget && checks.sunjet;
     const isProduction = process.env.NODE_ENV === 'production';
     const authorized = secretsMatch(bearerToken(request), deps.config.secret);
     const redactCatalog = isProduction && !authorized;
@@ -69,7 +54,7 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
       },
       memory: {
         enabled: deps.config.memory.enabled,
-        vectorIndex: deps.database.vectorEnabled,
+        backend: 'sunjet',
       },
       channels: {
         web: deps.config.channels.web.enabled,
@@ -79,8 +64,18 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
       sunjet: {
         enabled: deps.config.sunjet.enabled,
         url: deps.config.sunjet.url,
-        dualWriteSqlite: deps.config.sunjet.dual_write_sqlite,
-        messageBackend: deps.messageStore ? 'sunjet' : 'sqlite',
+        messageBackend: 'sunjet',
+        memoryBackend: 'sunjet',
+        sessionBackend: 'sunjet',
+        customerBackend: 'sunjet',
+        jobBackend: 'sunjet',
+        responseCacheBackend: 'sunjet',
+        functionCallBackend: 'sunjet',
+        reflectionBackend: 'sunjet',
+        proactiveBackend: 'sunjet',
+        inboundDedupBackend: 'sunjet',
+        magicLinkBackend: 'sunjet',
+        sdkConnectionBackend: 'sunjet',
         segmentStorage: {
           backend: deps.config.sunjet.segment_storage.backend,
           prefix: deps.config.sunjet.segment_storage.prefix ?? null,
@@ -116,9 +111,7 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
         },
         paths: {
           cwd: process.cwd(),
-          migrations: resolveMigrationsFolder(),
           public: resolvePublicDir(),
-          database: deps?.config.storage.database_path,
         },
         config: deps
           ? {
@@ -126,7 +119,6 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
               llm: deps.config.llm.provider,
               safetyMode: deps.config.safety.default_mode,
               memoryEnabled: deps.config.memory.enabled,
-              vectorIndex: deps.database.vectorEnabled,
               webEnabled: deps.config.channels.web.enabled,
               whatsappEnabled: deps.config.channels.whatsapp.enabled,
             }

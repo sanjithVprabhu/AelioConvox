@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { listTurnApiCalls } from '@aelio/core';
 import { SunjetHttpError } from '@aelio/sunjet-client';
 import type {
   ApiValue,
@@ -42,30 +43,34 @@ const TABLE_META: Array<{
   {
     key: 'messages',
     label: 'Messages',
-    description: 'Raw conversation messages (L0). BM25 content + embedding. Dual-written with SQLite.',
+    description:
+      'Raw conversation messages (L0). BM25 + embedding. Primary store: Sunjet/Astrolobe (not SQLite).',
     status: 'active',
     writtenBy: 'ConvoxMessageStore.appendMessage',
   },
   {
     key: 'conversations',
     label: 'Conversations',
-    description: 'Rich per-turn telemetry: lifecycle, intent stack, flows, tools. Powers the telemetry dashboard.',
+    description:
+      'Per-turn telemetry (intent, flows, tools). Written to Astrolobe — powers the telemetry dashboard.',
     status: 'active',
     writtenBy: 'appendConversationRecord',
   },
   {
     key: 'memories',
     label: 'Memories',
-    description: 'Long-term customer memories. Schema exists but SQLite is authoritative today.',
-    status: 'schema-only',
-    writtenBy: '(SQLite authoritative)',
+    description:
+      'Long-term customer memories (profile, preferences, insights). Written and recalled via Astrolobe vector search.',
+    status: 'active',
+    writtenBy: 'ConvoxMemoryStore (extractMemories / reflectOnSession)',
   },
   {
     key: 'compactions',
-    label: 'Compactions',
-    description: 'Tiered conversation summaries. Schema reserved; not yet populated.',
-    status: 'schema-only',
-    writtenBy: '(planned)',
+    label: 'Immediate Context',
+    description:
+      'Immediate Context Engine buckets: short-term conversation context per customer, tiered by age (5–15m, 15–30m, 30–60m, 1–24h). Buckets slide down tiers as they age and are condensed on merge.',
+    status: 'active',
+    writtenBy: 'ImmediateContextEngine (roll pass during turns)',
   },
   {
     key: 'runtime_state',
@@ -91,30 +96,140 @@ const TABLE_META: Array<{
   {
     key: 'harness_bindings',
     label: 'Harness Bindings',
-    description: 'Instruction→tool binding cache. Schema reserved; not yet populated.',
-    status: 'schema-only',
-    writtenBy: '(planned)',
+    description: 'Instruction→tool binding cache. Written by bindInstructions when Sunjet is enabled.',
+    status: 'active',
+    writtenBy: 'bindInstructions (binding cache)',
   },
   {
     key: 'harness_suspensions',
     label: 'Harness Suspensions',
-    description: 'Suspended plans awaiting user input. SQLite authoritative; mirrored here.',
-    status: 'mirror',
-    writtenBy: 'SuspensionStore.mirror',
+    description:
+      'Suspended plans awaiting user input. Sunjet is the source of truth when configured; SQLite is a fallback only for non-Sunjet deployments.',
+    status: 'active',
+    writtenBy: 'SuspensionStore',
   },
   {
     key: 'harness_ledger',
     label: 'Harness Ledger',
-    description: 'Per-instruction idempotency ledger. SQLite only today.',
-    status: 'schema-only',
-    writtenBy: '(SQLite authoritative)',
+    description:
+      'Per-instruction idempotency ledger. Written to Sunjet exclusively when configured (turn-scoped scan/insert).',
+    status: 'active',
+    writtenBy: 'loadLedgerForTurn / persistLedgerEntry',
   },
   {
     key: 'harness_traces',
     label: 'Harness Traces',
-    description: 'Append-only harness trace firehose (plans, waves, gates, repairs). Fire-and-forget.',
+    description: 'Append-only harness trace firehose. Written to Astrolobe.',
     status: 'active',
     writtenBy: 'HarnessTracer.trace',
+  },
+  {
+    key: 'customers',
+    label: 'Customers',
+    description: 'Customer records (external id, display name, metadata). Primary store when Sunjet is configured.',
+    status: 'active',
+    writtenBy: 'ConvoxCustomerStore',
+  },
+  {
+    key: 'channel_addresses',
+    label: 'Channel Addresses',
+    description: 'Customer channel addresses (phone/email/etc), written alongside customers.',
+    status: 'active',
+    writtenBy: 'ConvoxCustomerStore.ensureCustomer',
+  },
+  {
+    key: 'sessions',
+    label: 'Sessions',
+    description: 'Conversation sessions per customer/channel, including pending-confirmation and summary metadata.',
+    status: 'active',
+    writtenBy: 'ConvoxSessionStore',
+  },
+  {
+    key: 'job_queue',
+    label: 'Job Queue',
+    description: 'Inbound/outbound delivery job queue with claim/complete/fail/retry semantics.',
+    status: 'active',
+    writtenBy: 'ConvoxJobStore (enqueueJob / claimJob / completeJob / failJob)',
+  },
+  {
+    key: 'response_cache',
+    label: 'Response Cache',
+    description: 'Semantic cache of no-tool replies, keyed by customer + embedding similarity.',
+    status: 'active',
+    writtenBy: 'ConvoxResponseCacheStore',
+  },
+  {
+    key: 'function_calls',
+    label: 'Function Calls',
+    description: 'Audit log of every SDK function invocation (args, result, safety level, confirmation).',
+    status: 'active',
+    writtenBy: 'ConvoxFunctionCallStore (logFunctionCall)',
+  },
+  {
+    key: 'turn_api_calls',
+    label: 'Turn API Calls',
+    description: 'Per-turn LLM/embedding call telemetry (prompt summary, tokens, duration).',
+    status: 'active',
+    writtenBy: 'recordTurnApiCall (TurnApiCallsSunjetConfig)',
+  },
+  {
+    key: 'reflections',
+    label: 'Reflections',
+    description: 'Daemon-generated session reflections (outcome, score, insight, follow-up).',
+    status: 'active',
+    writtenBy: 'ConvoxReflectionStore (reflectOnSession)',
+  },
+  {
+    key: 'proactive_messages',
+    label: 'Proactive Messages',
+    description: 'Sent/blocked proactive message log (dedup + daily frequency cap enforcement).',
+    status: 'active',
+    writtenBy: 'ConvoxProactiveStore (sendProactiveMessage)',
+  },
+  {
+    key: 'inbound_dedup',
+    label: 'Inbound Dedup',
+    description: 'Inbound webhook/ingest message id dedup, to drop webhook redeliveries.',
+    status: 'active',
+    writtenBy: 'ConvoxInboundDedupStore.claim',
+  },
+  {
+    key: 'magic_links',
+    label: 'Magic Links',
+    description: 'Web magic-link auth tokens (hashed), single-use, TTL-bound.',
+    status: 'active',
+    writtenBy: 'ConvoxMagicLinkStore (createMagicLink / verifyMagicLink)',
+  },
+  {
+    key: 'sdk_connections',
+    label: 'SDK Connections',
+    description: 'Connected Aelio SDK instances (function catalog, heartbeat) for multi-instance visibility.',
+    status: 'active',
+    writtenBy: 'ConvoxSdkConnectionStore (ServerSdkBridge)',
+  },
+  {
+    key: 'archetypes',
+    label: 'Archetypes',
+    description:
+      'Archetype valence engine: per-aspect positive/negative/neutral buckets (keyword + description + usage + inference + response guidance) embedded for stance detection. Matched by recomputed cosine (not RRF) against each incoming message. Linked to the mother collection via aspect_id.',
+    status: 'active',
+    writtenBy: 'ConvoxArchetypeStore (seeded at startup; grown by aspect discovery)',
+  },
+  {
+    key: 'aspects',
+    label: 'Aspects (mother)',
+    description:
+      'Self-learning stance registry: the "things" identified from conversation. Each aspect owns a pos/neu/neg bucket set. Grown post-turn by aspect discovery (staged as candidate until active).',
+    status: 'active',
+    writtenBy: 'ConvoxAspectStore (seeded builtins; discoverAspects per turn)',
+  },
+  {
+    key: 'axis_nodes',
+    label: 'Harness Axes',
+    description:
+      'User-specific Harness Axis graph: root nodes per (customer, aspect) and occurrence chains linked by previous/head edges. Traversed within a temporal scope to recall continuing concerns.',
+    status: 'active',
+    writtenBy: 'ConvoxAxisStore (recordOccurrence post-turn; traverseAxis on recall)',
   },
 ];
 
@@ -178,6 +293,25 @@ function numericValue(value: ApiValue | undefined): number | null {
   return null;
 }
 
+function stringValue(value: ApiValue | undefined): string {
+  if (!value) return '';
+  if (value.type === 'utf8') return String(value.value ?? '');
+  return '';
+}
+
+function queryUtf8(value: string): ApiValue {
+  return { type: 'utf8', value };
+}
+
+function parsePayload(value: string): unknown {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return { raw: value };
+  }
+}
+
 /** Translate a SunjetHttpError into an equivalent HTTP reply. */
 function forwardError(error: unknown, reply: FastifyReply) {
   if (error instanceof SunjetHttpError) {
@@ -208,16 +342,7 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
       dataset: deps.config.name,
       embedDim: deps.config.sunjet.embed_dim,
       url: deps.config.sunjet.url,
-      dualWriteSqlite: deps.config.sunjet.dual_write_sqlite,
     };
-
-    if (!deps.config.sunjet.enabled || !deps.sunjetClient) {
-      return reply.status(200).send({
-        enabled: false,
-        ...base,
-        tables: catalog.map((entry) => ({ ...entry, exists: false, columns: [] })),
-      });
-    }
 
     const client = deps.sunjetClient;
     const tables = await Promise.all(
@@ -337,6 +462,64 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
     try {
       const row = await deps.sunjetClient.getRow(entry.name, rowId);
       return reply.status(200).send(row);
+    } catch (error) {
+      return forwardError(error, reply);
+    }
+  });
+
+  // --- Harness turn overview ------------------------------------------------
+  app.get('/api/v1/admin/harness/turns/:turnId', async (request, reply) => {
+    if (!requireSecret(request, reply, secret)) {
+      return reply;
+    }
+    if (!deps.config.sunjet.enabled || !deps.sunjetClient) {
+      return sunjetUnavailable(deps, reply);
+    }
+
+    const turnId = (request.params as { turnId: string }).turnId;
+    try {
+      const traceScan = await deps.sunjetClient.scanRows(deps.config.sunjet.tables.harness_traces, {
+        k: 1000,
+        filters: [{ col: 'turn_id', op: 'eq', value: queryUtf8(turnId) }],
+      });
+      const traces = traceScan.rows
+        .map((row) => {
+          const payloadText = stringValue(row.values.payload);
+          return {
+            rowId: row.row_id,
+            turnId: stringValue(row.values.turn_id),
+            sessionId: stringValue(row.values.session_id),
+            kind: stringValue(row.values.kind),
+            payload: parsePayload(payloadText),
+            createdAt: numericValue(row.values.created_at) ?? 0,
+          };
+        })
+        .sort((a, b) => a.createdAt - b.createdAt || a.rowId - b.rowId);
+
+      const apiCalls = await listTurnApiCalls(
+        { turnId, limit: 200 },
+        {
+          client: deps.sunjetClient,
+          table: deps.config.sunjet.tables.turn_api_calls,
+        },
+      );
+
+      return reply.status(200).send({
+        turnId,
+        sessionId: traces[0]?.sessionId ?? apiCalls[0]?.sessionId ?? '',
+        decisions: {
+          pathway: traces.find((trace) => trace.kind === 'pathway')?.payload ?? null,
+          stance: traces.find((trace) => trace.kind === 'stance')?.payload ?? null,
+          cache: traces.find((trace) => trace.kind === 'cache')?.payload ?? null,
+          confirmation: traces.find((trace) => trace.kind === 'confirmation')?.payload ?? null,
+          generic: traces.find((trace) => trace.kind === 'generic')?.payload ?? null,
+          proactive: traces.find((trace) => trace.kind === 'proactive')?.payload ?? null,
+        },
+        prompt: traces.find((trace) => trace.kind === 'prompt')?.payload ?? null,
+        reply: traces.find((trace) => trace.kind === 'reply')?.payload ?? null,
+        traces,
+        apiCalls,
+      });
     } catch (error) {
       return forwardError(error, reply);
     }

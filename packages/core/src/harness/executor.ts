@@ -1,15 +1,15 @@
 import { createHash } from 'node:crypto';
 import type { InvocationContext, StateDefinition } from '@aelio/protocol';
-import type { AelioDatabase } from '@aelio/db';
 import { logFunctionCall } from '../audit/function-calls.js';
 import { buildConfirmationPrompt, type PendingConfirmation } from '../safety/confirmations.js';
 import type { SafetyConfig } from '../safety/policy.js';
 import type { SdkBridge } from '../sdk-bridge/types.js';
 import { coerceArgs } from '../runtime/tool-schema.js';
 import { evaluateGate, type GateContext } from './gates.js';
-import { loadLedgerForTurn, persistLedgerEntry } from './ledger.js';
+import { loadLedgerForTurn, persistLedgerEntry, type LedgerSunjetConfig } from './ledger.js';
 import { nextWave } from './resolver.js';
 import type { BudgetMeter } from './budgets.js';
+import type { ConvoxFunctionCallStore } from '../storage/audit.js';
 import type {
   ArgSource,
   GateVerdict,
@@ -101,13 +101,13 @@ export function newExecutorState(existingLedger: LedgerEntry[] = []): ExecutorSt
   };
 }
 
-/** Hydrate executor state from the DB ledger for a turn (HAR-005). */
+/** Hydrate executor state from the Sunjet ledger for a turn (HAR-005). */
 export async function hydrateExecutorState(
-  database: AelioDatabase,
   sessionId: string,
   turnId: string,
+  ledgerSunjet: LedgerSunjetConfig,
 ): Promise<ExecutorState> {
-  const existing = await loadLedgerForTurn(database, sessionId, turnId);
+  const existing = await loadLedgerForTurn(sessionId, turnId, ledgerSunjet);
   return newExecutorState(existing);
 }
 
@@ -118,9 +118,10 @@ export type ExecutorDeps = {
   state?: StateDefinition;
   presentFields?: Set<string>;
   budgets: BudgetMeter;
-  database?: AelioDatabase;
   internalCustomerId?: string;
   turnId?: string;
+  functionCallStore: ConvoxFunctionCallStore;
+  ledgerSunjet: LedgerSunjetConfig;
   /**
    * Instruction ids the user has already confirmed (a resumed
    * awaiting_confirmation plan). Their needs_approval gate is treated as
@@ -278,16 +279,19 @@ async function runInstruction(
   deps.trace?.('gate', { instruction: instruction.id, verdict: verdict.verdict });
 
   if (verdict.verdict === 'deny_fatal') {
-    if (deps.database && deps.internalCustomerId) {
-      await logFunctionCall(deps.database.db, {
-        sessionId: deps.context.sessionId,
-        customerId: deps.internalCustomerId,
-        functionName: instruction.tool.name,
-        args: finalArgs,
-        status: 'blocked',
-        safetyLevel: instruction.tool.safety,
-        errorMessage: verdict.reason,
-      });
+    if (deps.internalCustomerId) {
+      await logFunctionCall(
+        {
+          sessionId: deps.context.sessionId,
+          customerId: deps.internalCustomerId,
+          functionName: instruction.tool.name,
+          args: finalArgs,
+          status: 'blocked',
+          safetyLevel: instruction.tool.safety,
+          errorMessage: verdict.reason,
+        },
+        deps.functionCallStore,
+      );
     }
     return { kind: 'blocked', reason: verdict.reason, fatal: true };
   }
@@ -309,16 +313,19 @@ async function runInstruction(
   // already confirmed on a resume (the user said yes) — then it falls through
   // to invoke. This is what lets a mid-plan confirmation resume the WHOLE plan.
   if (verdict.verdict === 'needs_approval' && !deps.approvedInstructions?.has(instruction.id)) {
-    if (deps.database && deps.internalCustomerId) {
-      await logFunctionCall(deps.database.db, {
-        sessionId: deps.context.sessionId,
-        customerId: deps.internalCustomerId,
-        functionName: instruction.tool.name,
-        args: finalArgs,
-        status: 'pending',
-        safetyLevel: instruction.tool.safety,
-        requiredConfirmation: true,
-      });
+    if (deps.internalCustomerId) {
+      await logFunctionCall(
+        {
+          sessionId: deps.context.sessionId,
+          customerId: deps.internalCustomerId,
+          functionName: instruction.tool.name,
+          args: finalArgs,
+          status: 'pending',
+          safetyLevel: instruction.tool.safety,
+          requiredConfirmation: true,
+        },
+        deps.functionCallStore,
+      );
     }
     return {
       kind: 'suspend',
@@ -370,25 +377,28 @@ async function runInstruction(
     durationMs: invokeResult.durationMs,
   });
   const ledgerEntry = state.ledger[state.ledger.length - 1]!;
-  if (deps.database && deps.turnId) {
-    void persistLedgerEntry(deps.database, deps.context.sessionId, deps.turnId, ledgerEntry);
+  if (deps.turnId) {
+    void persistLedgerEntry(deps.context.sessionId, deps.turnId, ledgerEntry, deps.ledgerSunjet);
   }
   if (invokeResult.ok) {
     state.outputs.set(instruction.id, invokeResult.data);
   }
 
-  if (deps.database && deps.internalCustomerId) {
-    await logFunctionCall(deps.database.db, {
-      sessionId: deps.context.sessionId,
-      customerId: deps.internalCustomerId,
-      functionName: instruction.tool.name,
-      args: invokeArgs,
-      result: invokeResult.data,
-      status: invokeResult.ok ? 'success' : 'error',
-      safetyLevel: instruction.tool.safety,
-      durationMs: invokeResult.durationMs,
-      errorMessage: invokeResult.error,
-    });
+  if (deps.internalCustomerId) {
+    await logFunctionCall(
+      {
+        sessionId: deps.context.sessionId,
+        customerId: deps.internalCustomerId,
+        functionName: instruction.tool.name,
+        args: invokeArgs,
+        result: invokeResult.data,
+        status: invokeResult.ok ? 'success' : 'error',
+        safetyLevel: instruction.tool.safety,
+        durationMs: invokeResult.durationMs,
+        errorMessage: invokeResult.error,
+      },
+      deps.functionCallStore,
+    );
   }
 
   if (invokeResult.ok && deps.onToolSuccess) {

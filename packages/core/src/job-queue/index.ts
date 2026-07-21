@@ -1,7 +1,4 @@
-import type { AelioDatabase } from '@aelio/db';
-import { jobQueue } from '@aelio/db';
-import { eq } from 'drizzle-orm';
-import { randomUUID } from 'node:crypto';
+import type { ConvoxJobStore } from '../storage/jobs.js';
 
 export type JobRecord = {
   id: string;
@@ -9,111 +6,46 @@ export type JobRecord = {
   payload: Record<string, unknown>;
 };
 
+function requireJobStore(jobStore: ConvoxJobStore | undefined): ConvoxJobStore {
+  if (!jobStore) {
+    throw new Error('Sunjet jobStore is required');
+  }
+  return jobStore;
+}
+
 export async function enqueueJob(
-  database: AelioDatabase,
   queue: string,
   payload: Record<string, unknown>,
+  jobStore: ConvoxJobStore,
 ): Promise<string> {
-  const id = randomUUID();
-  const now = new Date();
-  await database.db.insert(jobQueue).values({
-    id,
-    queue,
-    payload,
-    status: 'pending',
-    attempts: 0,
-    maxAttempts: 5,
-    nextRunAt: now,
-    createdAt: now,
-  });
-  return id;
+  return requireJobStore(jobStore).enqueue(queue, payload);
 }
 
-export function claimJob(
-  database: AelioDatabase,
+export async function claimJob(
   queue: string,
   workerId: string,
-): JobRecord | null {
-  const now = Date.now();
-  const row = database.sqlite
-    .prepare(
-      `UPDATE job_queue
-       SET status = 'processing', locked_by = ?, locked_at = ?, attempts = attempts + 1
-       WHERE id = (
-         SELECT id FROM job_queue
-         WHERE queue = ? AND status = 'pending' AND next_run_at <= ?
-         ORDER BY next_run_at ASC
-         LIMIT 1
-       )
-       RETURNING id, queue, payload`,
-    )
-    .get(workerId, now, queue, now) as { id: string; queue: string; payload: string } | undefined;
-
-  if (!row) {
-    return null;
-  }
-
-  return {
-    id: row.id,
-    queue: row.queue,
-    payload: JSON.parse(row.payload) as Record<string, unknown>,
-  };
+  jobStore: ConvoxJobStore,
+): Promise<JobRecord | null> {
+  return requireJobStore(jobStore).claim(queue, workerId);
 }
 
-export async function completeJob(database: AelioDatabase, jobId: string): Promise<void> {
-  await database.db
-    .update(jobQueue)
-    .set({
-      status: 'done',
-      completedAt: new Date(),
-      lockedBy: null,
-      lockedAt: null,
-    })
-    .where(eq(jobQueue.id, jobId));
+export async function completeJob(jobId: string, jobStore: ConvoxJobStore): Promise<void> {
+  await requireJobStore(jobStore).complete(jobId);
 }
 
 /** Reclaim jobs stuck in `processing` longer than `staleAfterMs` (CON-001). */
-export function requeueStaleJobs(database: AelioDatabase, staleAfterMs = 5 * 60_000): number {
-  const cutoff = Date.now() - staleAfterMs;
-  const result = database.sqlite
-    .prepare(
-      `UPDATE job_queue
-       SET status = 'pending', locked_by = NULL, locked_at = NULL
-       WHERE status = 'processing' AND locked_at IS NOT NULL AND locked_at < ?`,
-    )
-    .run(cutoff);
-  return result.changes ?? 0;
+export async function requeueStaleJobs(
+  jobStore: ConvoxJobStore,
+  staleAfterMs = 5 * 60_000,
+): Promise<number> {
+  return requireJobStore(jobStore).requeueStale(staleAfterMs);
 }
 
 export async function failJob(
-  database: AelioDatabase,
   jobId: string,
   errorMessage: string,
+  jobStore: ConvoxJobStore,
   retryInMs = 5000,
 ): Promise<void> {
-  const existing = await database.db
-    .select()
-    .from(jobQueue)
-    .where(eq(jobQueue.id, jobId))
-    .limit(1);
-
-  const job = existing[0];
-  if (!job) {
-    return;
-  }
-
-  const attempts = job.attempts ?? 1;
-  const maxAttempts = job.maxAttempts ?? 5;
-  const shouldRetry = attempts < maxAttempts;
-
-  await database.db
-    .update(jobQueue)
-    .set({
-      status: shouldRetry ? 'pending' : 'failed',
-      errorMessage,
-      nextRunAt: new Date(Date.now() + retryInMs),
-      lockedBy: null,
-      lockedAt: null,
-    })
-    .where(eq(jobQueue.id, jobId));
+  await requireJobStore(jobStore).fail(jobId, errorMessage, retryInMs);
 }

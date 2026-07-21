@@ -1,8 +1,6 @@
-import type { AelioDatabase } from '@aelio/db';
-import { sessions } from '@aelio/db';
 import type { FunctionDefinition } from '@aelio/protocol';
-import { eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
+import type { ConvoxSessionStore } from '../storage/sessions.js';
 
 /** One conversational intent frame. Index 0 in the stack = current (top). */
 export type IntentFrame = {
@@ -65,30 +63,31 @@ export function buildIntentStackPrompt(stack: IntentStack): string {
 }
 
 export async function loadIntentStack(
-  db: AelioDatabase['db'],
   sessionId: string,
+  sessionStore: ConvoxSessionStore,
 ): Promise<IntentStack> {
-  const row = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-  const metadata = (row[0]?.metadata ?? {}) as SessionMetadata;
+  if (!sessionStore) {
+    throw new Error('Sunjet sessionStore is required');
+  }
+  const record = await sessionStore.get(sessionId);
+  const metadata = (record?.metadata ?? {}) as SessionMetadata;
   return expireIntentStack(metadata.intentStack ?? []);
 }
 
 export async function saveIntentStack(
-  db: AelioDatabase['db'],
   sessionId: string,
   stack: IntentStack,
+  sessionStore: ConvoxSessionStore,
 ): Promise<void> {
-  const row = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-  const metadata = (row[0]?.metadata ?? {}) as SessionMetadata;
-  await db
-    .update(sessions)
-    .set({
-      metadata: {
-        ...metadata,
-        intentStack: expireIntentStack(stack),
-      },
-    })
-    .where(eq(sessions.id, sessionId));
+  if (!sessionStore) {
+    throw new Error('Sunjet sessionStore is required');
+  }
+  const record = await sessionStore.get(sessionId);
+  const metadata = (record?.metadata ?? {}) as SessionMetadata;
+  await sessionStore.updateSummary(sessionId, record?.summary ?? '', {
+    ...metadata,
+    intentStack: expireIntentStack(stack),
+  });
 }
 
 function ttlMs(config: IntentStackConfig): number {
@@ -215,6 +214,8 @@ export function updateIntentStack(input: {
   assistantReply: string;
   toolNames?: string[];
   registeredTools?: IntentSource[];
+  /** Pre-turn semantic classification; used when no executed tool provides a stronger signal. */
+  semanticIntent?: { label: string; confidence: number };
   config: IntentStackConfig;
   now?: number;
 }): IntentStack {
@@ -231,7 +232,19 @@ export function updateIntentStack(input: {
     return stack;
   }
 
-  const detected = classifyIntent(input.userMessage, toolNames, input.registeredTools ?? []);
+  const toolDetected = classifyIntent(
+    input.userMessage,
+    toolNames,
+    input.registeredTools ?? [],
+  );
+  const detected =
+    toolDetected ??
+    (input.semanticIntent && input.semanticIntent.confidence >= 0.12
+      ? {
+          label: input.semanticIntent.label,
+          summary: `User's current request is semantically aligned with: ${input.semanticIntent.label}.`,
+        }
+      : null);
   const top = stack[0];
 
   // No signal this turn: keep the current focus alive rather than guessing.

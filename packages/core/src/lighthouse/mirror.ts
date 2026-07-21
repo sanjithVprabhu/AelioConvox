@@ -1,6 +1,6 @@
 import type { ApiValue, SunjetClient } from '@aelio/sunjet-client';
 import type { FunctionDefinition } from '@aelio/protocol';
-import { embed } from '../analyst/embeddings.js';
+import { cosineSimilarity, embed } from '../analyst/embeddings.js';
 import { normalizeEmbedding } from '../storage/messages.js';
 import type { RegistrySnapshot } from './hash.js';
 
@@ -24,6 +24,11 @@ function utf8(value: string): ApiValue {
 function readUtf8(values: Record<string, ApiValue> | undefined, key: string): string {
   const entry = values?.[key];
   return entry && (entry.type === 'utf8') ? entry.value : '';
+}
+
+function readVector(values: Record<string, ApiValue> | undefined, key: string): number[] | null {
+  const entry = values?.[key];
+  return entry && entry.type === 'vector' ? entry.value : null;
 }
 
 /** The same descriptor tool-retrieval ranks against — keep the two aligned. */
@@ -165,33 +170,36 @@ export class LighthouseMirror {
       filters: [{ col: 'tenant', op: 'eq', value: utf8(tenant) }],
     });
 
-    const byRowId = new Map<number, number>(); // row_id -> score
+    const rowIds = new Set<number>();
     for (const hit of response.results) {
-      byRowId.set(hit.row_id, hit.score);
+      rowIds.add(hit.row_id);
     }
 
     if (options?.expandGraph !== false && response.results.length > 0) {
       const seeds = response.results.map((hit) => hit.row_id);
-      const minSeedScore = Math.min(...response.results.map((hit) => hit.score));
       const expansion = await client.query(toolsTable, {
         k: k * 2,
         graph: { col: 'requires', seeds, depth: 1 },
         filters: [{ col: 'tenant', op: 'eq', value: utf8(tenant) }],
       });
       for (const hit of expansion.results) {
-        if (!byRowId.has(hit.row_id)) {
-          byRowId.set(hit.row_id, minSeedScore * 0.9);
-        }
+        rowIds.add(hit.row_id);
       }
     }
 
     const registryByName = new Map(registry.map((fn) => [fn.name, fn]));
     const hits: ToolSearchHit[] = [];
-    for (const [rowId, score] of byRowId) {
+    for (const rowId of rowIds) {
       const row = await client.getRow(toolsTable, rowId);
       const name = readUtf8(row?.values, 'name');
       const fn = registryByName.get(name);
       if (fn) {
+        // Sunjet query scores are RRF ranks (~0.016 ceiling), not similarities.
+        // Binder gates (scoreMin/ambiguityGap) are calibrated on cosine, so
+        // recompute cosine against the stored embedding — same convention as
+        // the archetype store and the in-process fallback ranker.
+        const stored = readVector(row?.values, 'embedding');
+        const score = stored ? cosineSimilarity(vector, stored) : 0;
         hits.push({ fn, score });
       }
     }
@@ -208,9 +216,17 @@ export class LighthouseMirror {
       vector: { col: 'embedding', query: vector },
       filters: [{ col: 'tenant', op: 'eq', value: utf8(tenant) }],
     });
-    return response.results.length > 0
-      ? Math.max(...response.results.map((hit) => hit.score))
-      : 0;
+    // Recompute cosine per hit: Sunjet query scores are RRF ranks, but the
+    // planner's feasibility challenge threshold is calibrated on cosine.
+    let best = 0;
+    for (const hit of response.results) {
+      const row = await client.getRow(capabilitiesTable, hit.row_id);
+      const stored = readVector(row?.values, 'embedding');
+      if (stored) {
+        best = Math.max(best, cosineSimilarity(vector, stored));
+      }
+    }
+    return best;
   }
 
   private async deleteTenantRows(table: string): Promise<void> {

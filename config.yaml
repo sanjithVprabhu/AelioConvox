@@ -11,12 +11,14 @@ llm:
   max_tokens: 4096
 
 # Semantic embeddings for memory + Sunjet vectors (hash = local, no API).
-# openai: text-embedding-3-small (1536d)
+# openai: text-embedding-3-small (1536d) — default for solid semantic search
 # gemini: text-embedding-004 (768d — set sunjet.embed_dim: 768)
 # anthropic: voyage-3-lite via Voyage API (set VOYAGE_API_KEY)
 embeddings:
-  provider: hash
+  provider: openai
   model: text-embedding-3-small
+  api_key: ${OPENAI_API_KEY}
+  output_dimension: 1536
 
 channels:
   whatsapp:
@@ -32,6 +34,8 @@ channels:
     allowed_origins:
       - http://localhost:3010
       - http://127.0.0.1:3010
+      - http://localhost:3015
+      - http://127.0.0.1:3015
       - http://localhost:5173
       - http://127.0.0.1:5173
       - http://localhost:4173
@@ -82,7 +86,8 @@ harness:
     ambiguity_gap: 0.08  # top hit must beat runner-up by this to auto-bind
     cache_ttl_minutes: 1440
 
-# Sunjet (ll-server) — primary message store when enabled.
+# Sunjet (ll-server) — the sole message/state store. Aelio is Sunjet-only: there
+# is no SQLite fallback, so ll-server must be running before Aelio starts.
 # Start ll-server first: LL_DATA_DIR=./data/sunjet LL_API_KEYS=secret cargo run --release -p ll-server
 #
 # Segment storage (immutable .vss index blobs — local disk or S3-compatible cloud):
@@ -98,12 +103,10 @@ harness:
 #   AELIO_SUNJET_S3_ALLOW_HTTP=1                   # local MinIO
 #   AELIO_SUNJET_S3_PATH_STYLE=1                   # MinIO path-style
 sunjet:
-  enabled: false
+  enabled: true
   url: http://127.0.0.1:8080
   api_key: ${SUNJET_API_KEY}
   embed_dim: 1536
-  dual_write_sqlite: true
-  fallback_sqlite_on_error: true
   segment_storage:
     backend: local
   tables:
@@ -112,9 +115,6 @@ sunjet:
     memories: convox_memories
     compactions: convox_compactions
     runtime_state: runtime_state
-
-storage:
-  database_path: ./data/aelio.db
 
 logging:
   level: info

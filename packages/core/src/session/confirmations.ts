@@ -1,48 +1,49 @@
-import type { AelioDatabase } from '@aelio/db';
-import { sessions } from '@aelio/db';
-import { eq } from 'drizzle-orm';
 import type { PendingConfirmation } from '../safety/confirmations.js';
+import type { ConvoxSessionStore } from '../storage/sessions.js';
 
 type SessionMetadata = {
   pendingConfirmation?: PendingConfirmation;
+  [key: string]: unknown;
 };
 
+function requireSessionStore(sessionStore: ConvoxSessionStore | undefined): ConvoxSessionStore {
+  if (!sessionStore) {
+    throw new Error('Sunjet sessionStore is required');
+  }
+  return sessionStore;
+}
+
 export async function getPendingConfirmation(
-  db: AelioDatabase['db'],
   sessionId: string,
+  sessionStore: ConvoxSessionStore,
 ): Promise<PendingConfirmation | null> {
-  const row = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-  const metadata = (row[0]?.metadata ?? {}) as SessionMetadata;
+  const store = requireSessionStore(sessionStore);
+  const record = await store.get(sessionId);
+  const metadata = (record?.metadata ?? {}) as SessionMetadata;
   return metadata.pendingConfirmation ?? null;
 }
 
 export async function setPendingConfirmation(
-  db: AelioDatabase['db'],
   sessionId: string,
   pending: PendingConfirmation,
+  sessionStore: ConvoxSessionStore,
 ): Promise<void> {
-  const row = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-  const metadata = (row[0]?.metadata ?? {}) as SessionMetadata;
-  await db
-    .update(sessions)
-    .set({
-      metadata: {
-        ...metadata,
-        pendingConfirmation: pending,
-      },
-    })
-    .where(eq(sessions.id, sessionId));
+  const store = requireSessionStore(sessionStore);
+  const record = await store.get(sessionId);
+  const metadata = (record?.metadata ?? {}) as SessionMetadata;
+  await store.updateSummary(sessionId, record?.summary ?? '', {
+    ...metadata,
+    pendingConfirmation: pending,
+  });
 }
 
 export async function clearPendingConfirmation(
-  db: AelioDatabase['db'],
   sessionId: string,
+  sessionStore: ConvoxSessionStore,
 ): Promise<void> {
-  const row = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-  const metadata = (row[0]?.metadata ?? {}) as SessionMetadata;
+  const store = requireSessionStore(sessionStore);
+  const record = await store.get(sessionId);
+  const metadata = (record?.metadata ?? {}) as SessionMetadata;
   const { pendingConfirmation: _removed, ...rest } = metadata;
-  await db
-    .update(sessions)
-    .set({ metadata: rest })
-    .where(eq(sessions.id, sessionId));
+  await store.updateSummary(sessionId, record?.summary ?? '', rest);
 }

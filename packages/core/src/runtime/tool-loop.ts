@@ -2,7 +2,7 @@ import type { FunctionDefinition, InvocationContext } from '@aelio/protocol';
 import type { ChatMessage, LLMProvider, ToolDefinition } from '@aelio/llm';
 import type { SdkBridge } from '../sdk-bridge/types.js';
 import { logFunctionCall } from '../audit/function-calls.js';
-import type { AelioDatabase } from '@aelio/db';
+import type { ConvoxFunctionCallStore } from '../storage/audit.js';
 import {
   buildConfirmationPrompt,
   type PendingConfirmation,
@@ -39,7 +39,6 @@ export type ToolLoopResult = {
 };
 
 export async function runToolLoop(input: {
-  database?: AelioDatabase;
   internalCustomerId?: string;
   llm: LLMProvider;
   sdk: SdkBridge;
@@ -51,6 +50,7 @@ export async function runToolLoop(input: {
   userMessage: string;
   context: InvocationContext;
   safety: SafetyConfig;
+  functionCallStore: ConvoxFunctionCallStore;
 }): Promise<ToolLoopResult> {
   const functions = input.functions ?? input.sdk.getFunctions();
   const tools = toToolDefinitions(functions);
@@ -130,16 +130,19 @@ export async function runToolLoop(input: {
 
       const decision = evaluateSafety(fn, input.safety);
       if (!decision.allowed) {
-        if (input.database && input.internalCustomerId) {
-          await logFunctionCall(input.database.db, {
-            sessionId: input.context.sessionId,
-            customerId: input.internalCustomerId,
-            functionName: fn.name,
-            args,
-            status: 'blocked',
-            safetyLevel: decision.effectiveSafety,
-            errorMessage: decision.reason,
-          });
+        if (input.internalCustomerId) {
+          await logFunctionCall(
+            {
+              sessionId: input.context.sessionId,
+              customerId: input.internalCustomerId,
+              functionName: fn.name,
+              args,
+              status: 'blocked',
+              safetyLevel: decision.effectiveSafety,
+              errorMessage: decision.reason,
+            },
+            input.functionCallStore,
+          );
         }
         return {
           reply: decision.reason,
@@ -149,16 +152,19 @@ export async function runToolLoop(input: {
       }
 
       if (decision.requiresConfirmation) {
-        if (input.database && input.internalCustomerId) {
-          await logFunctionCall(input.database.db, {
-            sessionId: input.context.sessionId,
-            customerId: input.internalCustomerId,
-            functionName: fn.name,
-            args,
-            status: 'pending',
-            safetyLevel: decision.effectiveSafety,
-            requiredConfirmation: true,
-          });
+        if (input.internalCustomerId) {
+          await logFunctionCall(
+            {
+              sessionId: input.context.sessionId,
+              customerId: input.internalCustomerId,
+              functionName: fn.name,
+              args,
+              status: 'pending',
+              safetyLevel: decision.effectiveSafety,
+              requiredConfirmation: true,
+            },
+            input.functionCallStore,
+          );
         }
         return {
           reply: buildConfirmationPrompt(fn, args),
@@ -178,18 +184,21 @@ export async function runToolLoop(input: {
       toolCallsExecuted += 1;
       executedToolNames.push(toolCall.name);
 
-      if (input.database && input.internalCustomerId) {
-        await logFunctionCall(input.database.db, {
-          sessionId: input.context.sessionId,
-          customerId: input.internalCustomerId,
-          functionName: fn.name,
-          args,
-          result: invokeResult.data,
-          status: invokeResult.ok ? 'success' : 'error',
-          safetyLevel: decision.effectiveSafety,
-          durationMs: invokeResult.durationMs,
-          errorMessage: invokeResult.error,
-        });
+      if (input.internalCustomerId) {
+        await logFunctionCall(
+          {
+            sessionId: input.context.sessionId,
+            customerId: input.internalCustomerId,
+            functionName: fn.name,
+            args,
+            result: invokeResult.data,
+            status: invokeResult.ok ? 'success' : 'error',
+            safetyLevel: decision.effectiveSafety,
+            durationMs: invokeResult.durationMs,
+            errorMessage: invokeResult.error,
+          },
+          input.functionCallStore,
+        );
       }
 
       toolResults.push({

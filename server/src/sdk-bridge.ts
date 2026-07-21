@@ -10,8 +10,7 @@ import {
   type SendInvokeMessage,
   type StateDefinition,
 } from '@aelio/protocol';
-import type { SdkBridge, SdkInvokeResult } from '@aelio/core';
-import type { AelioDatabase } from '@aelio/db';
+import type { ConvoxSdkConnectionStore, SdkBridge, SdkInvokeResult } from '@aelio/core';
 import type { WebSocket } from '@fastify/websocket';
 import { randomUUID } from 'node:crypto';
 
@@ -41,22 +40,13 @@ type PendingInvoke = {
 export class ServerSdkBridge implements SdkBridge {
   private readonly connections = new Map<string, ActiveConnection>();
   private readonly pendingInvokes = new Map<string, PendingInvoke>();
-  private readonly persistConnectionStmt;
-  private readonly deleteConnectionStmt;
   private readonly registryListeners = new Set<() => void>();
 
-  constructor(private readonly database: AelioDatabase) {
-    this.persistConnectionStmt = this.database.sqlite.prepare(
-      `INSERT OR REPLACE INTO sdk_connections
-       (id, connection_token, sdk_version, language, connected_at, last_heartbeat_at, functions)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    );
-    this.deleteConnectionStmt = this.database.sqlite.prepare('DELETE FROM sdk_connections WHERE id = ?');
+  constructor(private readonly sdkConnectionStore: ConvoxSdkConnectionStore) {
     // Prune stale rows from prior boots instead of wiping the whole table.
-    const staleCutoff = Date.now() - 2 * 60_000;
-    this.database.sqlite
-      .prepare('DELETE FROM sdk_connections WHERE last_heartbeat_at < ?')
-      .run(staleCutoff);
+    void this.sdkConnectionStore.pruneStale(Date.now() - 2 * 60_000).catch((error) => {
+      console.error('[aelio] Sunjet sdk_connections prune failed:', error);
+    });
   }
 
   onRegistryChange(listener: () => void): () => void {
@@ -108,7 +98,9 @@ export class ServerSdkBridge implements SdkBridge {
 
   unregister(connectionId: string): void {
     this.connections.delete(connectionId);
-    this.deleteConnectionStmt.run(connectionId);
+    void this.sdkConnectionStore.remove(connectionId).catch((error) => {
+      console.error('[aelio] Sunjet sdk_connections remove failed:', error);
+    });
     this.notifyRegistryChange();
   }
 
@@ -160,15 +152,18 @@ export class ServerSdkBridge implements SdkBridge {
   }
 
   private persist(connection: ActiveConnection): void {
-    this.persistConnectionStmt.run(
-      connection.id,
-      connection.id,
-      connection.sdkVersion,
-      connection.language,
-      connection.connectedAt,
-      connection.lastHeartbeatAt,
-      JSON.stringify(connection.functions),
-    );
+    void this.sdkConnectionStore
+      .upsert({
+        id: connection.id,
+        sdkVersion: connection.sdkVersion,
+        language: connection.language,
+        connectedAt: connection.connectedAt,
+        lastHeartbeatAt: connection.lastHeartbeatAt,
+        functions: connection.functions as unknown as Array<Record<string, unknown>>,
+      })
+      .catch((error) => {
+        console.error('[aelio] Sunjet sdk_connections upsert failed:', error);
+      });
   }
 
   getConnectionIds(): string[] {

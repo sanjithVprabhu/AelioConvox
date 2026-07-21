@@ -1,73 +1,80 @@
-import { createDatabase } from '@aelio/db';
-import { extractMemories, recallMemories } from '@aelio/core';
+import { extractMemories, recallMemories, embed, cosineSimilarity } from '@aelio/core';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import WebSocket from 'ws';
-
-const migrationsFolder = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '../packages/db/drizzle',
-);
-
 import WebSocket from 'ws';
 import { aelioWsUrl } from './lib/aelio-port.mjs';
 
 const serverUrl = (process.env.AELIO_WS_URL ?? aelioWsUrl()).replace(/^http/, 'ws');
 
+/**
+ * In-memory stand-in for ConvoxMemoryStore — same store/recall contract,
+ * local cosine scoring. Production path is Astrolobe VSS only.
+ */
+function createInMemoryMemoryStore() {
+  /** @type {Array<{ memoryId: string, customerId: string, content: string, category: string | null, embedding: number[] }>} */
+  const rows = [];
+
+  return {
+    async store(input) {
+      const content = input.content.trim();
+      if (!content) return null;
+      if (
+        input.dedupe !== false &&
+        rows.some((row) => row.customerId === input.customerId && row.content === content)
+      ) {
+        return null;
+      }
+      const memoryId = randomUUID();
+      rows.push({
+        memoryId,
+        customerId: input.customerId,
+        content,
+        category: input.category ?? null,
+        embedding: input.embedding,
+      });
+      return { memoryId };
+    },
+
+    async recall(customerId, query, limit = 5, minScore = 0.05) {
+      const queryEmbedding = await embed(query, { purpose: 'memory_recall' });
+      return rows
+        .filter((row) => row.customerId === customerId)
+        .map((row) => ({
+          id: row.memoryId,
+          content: row.content,
+          category: row.category,
+          score: cosineSimilarity(queryEmbedding, row.embedding),
+        }))
+        .filter((entry) => entry.score >= minScore)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+    },
+  };
+}
+
 async function testAnalystUnit() {
-  const dir = mkdtempSync(join(tmpdir(), 'aelio-memory-'));
-  const dbPath = join(dir, 'test.db');
+  const memoryStore = createInMemoryMemoryStore();
+  const customerId = randomUUID();
+  const sessionId = randomUUID();
 
-  try {
-    const database = createDatabase(dbPath);
-    database.migrate(migrationsFolder);
-    const customerId = randomUUID();
-    const sessionId = randomUUID();
+  const stored = await extractMemories({
+    memoryStore,
+    customerId,
+    sessionId,
+    userMessage: 'I prefer metric units for measurements',
+    assistantReply: 'Got it, I will use metric units for you.',
+  });
 
-    const { customers, sessions } = await import('@aelio/db');
-    const now = new Date();
-    await database.db.insert(customers).values({
-      id: customerId,
-      externalId: 'memory-test-user',
-      displayName: 'Memory Test User',
-      createdAt: now,
-      updatedAt: now,
-    });
-    await database.db.insert(sessions).values({
-      id: sessionId,
-      customerId,
-      channel: 'web',
-      status: 'active',
-      startedAt: now,
-      lastActivityAt: now,
-    });
-
-    const stored = await extractMemories({
-      database,
-      customerId,
-      sessionId,
-      userMessage: 'I prefer metric units for measurements',
-      assistantReply: 'Got it, I will use metric units for you.',
-    });
-
-    if (!stored.some((fact) => fact.includes('metric'))) {
-      throw new Error(`Expected metric preference fact, got: ${stored.join(', ')}`);
-    }
-
-    const recalled = await recallMemories(database, customerId, 'what units do I prefer?', 3);
-    if (!recalled.some((entry) => entry.content.includes('metric'))) {
-      throw new Error(`Recall missed metric preference: ${JSON.stringify(recalled)}`);
-    }
-
-    console.log('[Phase 5] Unit test — stored:', stored);
-    console.log('[Phase 5] Unit test — recalled:', recalled.map((entry) => entry.content));
-    database.close();
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+  if (!stored.some((fact) => fact.includes('metric'))) {
+    throw new Error(`Expected metric preference fact, got: ${stored.join(', ')}`);
   }
+
+  const recalled = await recallMemories(memoryStore, customerId, 'what units do I prefer?', 3);
+  if (!recalled.some((entry) => entry.content.includes('metric'))) {
+    throw new Error(`Recall missed metric preference: ${JSON.stringify(recalled)}`);
+  }
+
+  console.log('[Phase 5] Unit test — stored:', stored);
+  console.log('[Phase 5] Unit test — recalled:', recalled.map((entry) => entry.content));
 }
 
 function waitForMessage(socket, predicate, timeoutMs = 15000) {
@@ -126,7 +133,7 @@ async function testMemoryIntegration() {
 
 try {
   await testAnalystUnit();
-  console.log('[Phase 5] Unit test PASSED — extract + vector recall');
+  console.log('[Phase 5] Unit test PASSED — extract + recall (memory store contract)');
 
   await testMemoryIntegration();
   console.log('[Phase 5] Integration PASSED — conversation memory influences reply');

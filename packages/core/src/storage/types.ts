@@ -13,14 +13,28 @@ export type SunjetTableNames = {
   harnessSuspensions: string;
   harnessLedger: string;
   harnessTraces: string;
+  // Identity / session / lifecycle tables
+  customers: string;
+  channelAddresses: string;
+  sessions: string;
+  jobQueue: string;
+  responseCache: string;
+  functionCalls: string;
+  turnApiCalls: string;
+  reflections: string;
+  proactiveMessages: string;
+  inboundDedup: string;
+  magicLinks: string;
+  sdkConnections: string;
+  archetypes: string;
+  aspects: string;
+  axisNodes: string;
 };
 
 export type SunjetStorageConfig = {
   client: SunjetClient;
   tables: SunjetTableNames;
   embedDim: number;
-  dualWriteSqlite: boolean;
-  fallbackSqliteOnError: boolean;
 };
 
 import type { ConversationTurnContext } from './context.js';

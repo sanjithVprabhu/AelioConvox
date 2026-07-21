@@ -3,6 +3,16 @@ import { embed } from '../analyst/embeddings.js';
 import { normalizeEmbedding } from '../storage/messages.js';
 
 export type TraceKind =
+  | 'pathway'
+  | 'stance'
+  | 'prompt'
+  | 'reply'
+  | 'cache'
+  | 'confirmation'
+  | 'generic'
+  | 'proactive'
+  | 'temporal'
+  | 'evidence'
   | 'plan'
   | 'bind'
   | 'wave'

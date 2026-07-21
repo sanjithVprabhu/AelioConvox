@@ -221,13 +221,14 @@ export const ConfigSchema = z.object({
     .default({}),
   sunjet: z
     .object({
-      enabled: z.boolean().default(false),
+      // Aelio is Sunjet-only — there is no SQLite fallback, so this must be true.
+      // Kept as a field (rather than hardcoded) so config.yaml stays self-documenting;
+      // the server force-enables it at boot regardless (see app.ts).
+      enabled: z.boolean().default(true),
       url: z.string().url().default('http://127.0.0.1:8080'),
       api_key: z.string().optional(),
       embed_dim: z.number().int().positive().default(1536),
       timeout_ms: z.number().int().positive().default(30_000),
-      dual_write_sqlite: z.boolean().default(true),
-      fallback_sqlite_on_error: z.boolean().default(true),
       // Segment durability for Astrolobe `.vss` files. Secrets must stay in env —
       // never commit cloud credentials to YAML.
       segment_storage: z
@@ -255,24 +256,32 @@ export const ConfigSchema = z.object({
           harness_suspensions: z.string().min(1).default('harness_suspensions'),
           harness_ledger: z.string().min(1).default('harness_ledger'),
           harness_traces: z.string().min(1).default('harness_traces'),
+          customers: z.string().min(1).default('convox_customers'),
+          channel_addresses: z.string().min(1).default('convox_channel_addresses'),
+          sessions: z.string().min(1).default('convox_sessions'),
+          job_queue: z.string().min(1).default('convox_job_queue'),
+          response_cache: z.string().min(1).default('convox_response_cache'),
+          function_calls: z.string().min(1).default('convox_function_calls'),
+          turn_api_calls: z.string().min(1).default('convox_turn_api_calls'),
+          reflections: z.string().min(1).default('convox_reflections'),
+          proactive_messages: z.string().min(1).default('convox_proactive_messages'),
+          inbound_dedup: z.string().min(1).default('convox_inbound_dedup'),
+          magic_links: z.string().min(1).default('convox_magic_links'),
+          sdk_connections: z.string().min(1).default('convox_sdk_connections'),
+          archetypes: z.string().min(1).default('convox_archetypes'),
+          aspects: z.string().min(1).default('convox_aspects'),
+          axis_nodes: z.string().min(1).default('convox_axis_nodes'),
         })
         .default({}),
     })
     .default({}),
-  storage: z.object({
-    database_path: z.string().min(1),
-    backup: z
-      .object({
-        enabled: z.boolean().default(true),
-        interval_hours: z.number().int().positive().default(6),
-        retain_count: z.number().int().positive().default(14),
-      })
-      .default({}),
-  }),
   logging: z
     .object({
       level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
       format: z.enum(['json', 'pretty']).default('json'),
+      // 'redacted' journals prompt size + section flags instead of full prompt
+      // text — prompts can carry customer PII via memories/context.
+      trace_prompt: z.enum(['full', 'redacted']).default('full'),
     })
     .default({}),
   server: z
@@ -321,6 +330,7 @@ export function loadConfig(configPath = process.env.AELIO_CONFIG ?? './config.ya
   config.server.port = resolveAelioPort(config.server.port);
 
   applyLlmEnvOverrides(config);
+  applyEmbeddingsEnvOverrides(config);
   applySunjetEnvOverrides(config);
   applySegmentStorageEnvOverrides(config);
 
@@ -398,14 +408,74 @@ function applyLlmEnvOverrides(config: AelioConfig): void {
   }
 }
 
-/** Enable / point at ll-server without editing YAML (Docker Compose). */
-function applySunjetEnvOverrides(config: AelioConfig): void {
-  const enabled = process.env.AELIO_SUNJET_ENABLED?.trim().toLowerCase();
-  if (enabled === '1' || enabled === 'true' || enabled === 'yes' || enabled === 'on') {
-    config.sunjet.enabled = true;
-  } else if (enabled === '0' || enabled === 'false' || enabled === 'no' || enabled === 'off') {
-    config.sunjet.enabled = false;
+type EmbeddingsProviderName = 'hash' | 'openai' | 'anthropic' | 'gemini' | 'ollama';
+
+const DEFAULT_EMBEDDING_MODELS: Record<EmbeddingsProviderName, string> = {
+  hash: 'hash',
+  openai: 'text-embedding-3-small',
+  anthropic: 'voyage-3-lite',
+  gemini: 'text-embedding-004',
+  ollama: 'nomic-embed-text',
+};
+
+function isEmbeddingsProviderName(value: string): value is EmbeddingsProviderName {
+  return value in DEFAULT_EMBEDDING_MODELS;
+}
+
+function embeddingApiKeyForProvider(provider: EmbeddingsProviderName): string | undefined {
+  switch (provider) {
+    case 'openai':
+      return process.env.OPENAI_API_KEY?.trim() || undefined;
+    case 'anthropic':
+      return process.env.VOYAGE_API_KEY?.trim() || process.env.ANTHROPIC_API_KEY?.trim() || undefined;
+    case 'gemini':
+      return process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || undefined;
+    case 'hash':
+    case 'ollama':
+      return undefined;
   }
+}
+
+/** Docker / deploy: AELIO_EMBEDDINGS_PROVIDER + matching API key env. */
+function applyEmbeddingsEnvOverrides(config: AelioConfig): void {
+  const providerRaw = process.env.AELIO_EMBEDDINGS_PROVIDER?.trim().toLowerCase();
+  if (providerRaw && isEmbeddingsProviderName(providerRaw)) {
+    if (providerRaw !== config.embeddings.provider && !process.env.AELIO_EMBEDDINGS_MODEL?.trim()) {
+      config.embeddings.model = DEFAULT_EMBEDDING_MODELS[providerRaw];
+      if (providerRaw === 'gemini') {
+        config.embeddings.output_dimension = 768;
+        config.sunjet.embed_dim = 768;
+      } else if (providerRaw === 'openai' || providerRaw === 'anthropic') {
+        config.embeddings.output_dimension = 1536;
+        config.sunjet.embed_dim = 1536;
+      }
+    }
+    config.embeddings.provider = providerRaw;
+  }
+
+  const model = process.env.AELIO_EMBEDDINGS_MODEL?.trim();
+  if (model) {
+    config.embeddings.model = model;
+  }
+
+  const dimRaw = process.env.AELIO_EMBEDDINGS_DIM?.trim();
+  if (dimRaw) {
+    const dim = Number.parseInt(dimRaw, 10);
+    if (Number.isFinite(dim) && dim > 0) {
+      config.embeddings.output_dimension = dim;
+      config.sunjet.embed_dim = dim;
+    }
+  }
+
+  const fromEnv = embeddingApiKeyForProvider(config.embeddings.provider as EmbeddingsProviderName);
+  if (fromEnv) {
+    config.embeddings.api_key = fromEnv;
+  }
+}
+
+/** Point at ll-server without editing YAML (Docker Compose). Sunjet is always required. */
+function applySunjetEnvOverrides(config: AelioConfig): void {
+  config.sunjet.enabled = true;
 
   const url = process.env.AELIO_SUNJET_URL?.trim();
   if (url) {

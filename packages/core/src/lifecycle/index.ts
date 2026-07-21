@@ -1,13 +1,10 @@
-import type { AelioDatabase } from '@aelio/db';
-import { customers } from '@aelio/db';
 import type {
   FlowDefinition,
   FunctionDefinition,
   PolicyDefinition,
   StateDefinition,
 } from '@aelio/protocol';
-import { eq } from 'drizzle-orm';
-import { randomUUID } from 'node:crypto';
+import type { ConvoxCustomerStore } from '../storage/customers.js';
 
 export type FlowProgressRecord = {
   currentStepIndex: number;
@@ -47,17 +44,20 @@ export function readLifecycleMetadata(
   };
 }
 
-export async function getCustomerLifecycleMetadata(
-  db: AelioDatabase['db'],
-  internalCustomerId: string,
-): Promise<CustomerLifecycleMetadata> {
-  const rows = await db
-    .select({ metadata: customers.metadata })
-    .from(customers)
-    .where(eq(customers.id, internalCustomerId))
-    .limit(1);
+function requireCustomerStore(customerStore: ConvoxCustomerStore | undefined): ConvoxCustomerStore {
+  if (!customerStore) {
+    throw new Error('Sunjet customerStore is required');
+  }
+  return customerStore;
+}
 
-  return readLifecycleMetadata(rows[0]?.metadata ?? null);
+export async function getCustomerLifecycleMetadata(
+  internalCustomerId: string,
+  customerStore: ConvoxCustomerStore,
+): Promise<CustomerLifecycleMetadata> {
+  const store = requireCustomerStore(customerStore);
+  const customer = await store.getById(internalCustomerId);
+  return readLifecycleMetadata(customer?.metadata ?? null);
 }
 
 /** Reserved lifecycle keys on `customers.metadata` — not tenant profile fields. */
@@ -76,15 +76,12 @@ const RESERVED_METADATA_KEYS = new Set([
  * by guards. Empty until a tenant populates them (the guard then holds).
  */
 export async function getCustomerPresentFields(
-  db: AelioDatabase['db'],
   internalCustomerId: string,
+  customerStore: ConvoxCustomerStore,
 ): Promise<Set<string>> {
-  const rows = await db
-    .select({ metadata: customers.metadata })
-    .from(customers)
-    .where(eq(customers.id, internalCustomerId))
-    .limit(1);
-  const metadata = rows[0]?.metadata;
+  const store = requireCustomerStore(customerStore);
+  const customer = await store.getById(internalCustomerId);
+  const metadata = customer?.metadata ?? null;
   const present = new Set<string>();
   if (metadata && typeof metadata === 'object') {
     for (const [key, value] of Object.entries(metadata)) {
@@ -103,91 +100,56 @@ export async function getCustomerPresentFields(
 }
 
 export async function upsertCustomerLifecycleState(
-  db: AelioDatabase['db'],
   externalId: string,
   stateId: string,
-  reason?: string,
+  reason: string | undefined,
+  customerStore: ConvoxCustomerStore,
 ): Promise<void> {
-  const now = new Date();
-  const rows = await db
-    .select()
-    .from(customers)
-    .where(eq(customers.externalId, externalId))
-    .limit(1);
-
-  const existing = rows[0];
+  const store = requireCustomerStore(customerStore);
+  const existing = await store.getByExternalId(externalId);
   const prior = readLifecycleMetadata(existing?.metadata ?? null);
   const metadata: Record<string, unknown> = {
     ...(existing?.metadata ?? {}),
     lifecycleState: stateId,
-    lifecycleStateUpdatedAt: now.toISOString(),
+    lifecycleStateUpdatedAt: new Date().toISOString(),
     ...(reason ? { lifecycleStateReason: reason } : {}),
     // Reset guided flow progress when the lifecycle stage changes.
     flowProgress:
       prior.lifecycleState && prior.lifecycleState !== stateId ? {} : (prior.flowProgress ?? {}),
   };
-
   if (existing) {
-    await db
-      .update(customers)
-      .set({ metadata, updatedAt: now })
-      .where(eq(customers.id, existing.id));
+    await store.updateMetadata(existing.id, metadata);
     return;
   }
-
-  await db.insert(customers).values({
-    id: randomUUID(),
-    externalId,
-    displayName: externalId,
-    createdAt: now,
-    updatedAt: now,
-    metadata,
-  });
+  const customerId = await store.ensureCustomer(externalId, 'web', externalId);
+  await store.updateMetadata(customerId, metadata);
 }
 
 export async function upsertCustomerFlowProgress(
-  db: AelioDatabase['db'],
   externalId: string,
   flowId: string,
   stepIndex: number,
-  completedSteps?: string[],
+  completedSteps: string[] | undefined,
+  customerStore: ConvoxCustomerStore,
 ): Promise<void> {
-  const now = new Date();
-  const rows = await db
-    .select()
-    .from(customers)
-    .where(eq(customers.externalId, externalId))
-    .limit(1);
-
-  const existing = rows[0];
+  const store = requireCustomerStore(customerStore);
+  const existing = await store.getByExternalId(externalId);
   const prior = readLifecycleMetadata(existing?.metadata ?? null);
   const flowProgress = { ...(prior.flowProgress ?? {}) };
   flowProgress[flowId] = {
     currentStepIndex: stepIndex,
     completedSteps: completedSteps ?? flowProgress[flowId]?.completedSteps ?? [],
   };
-
   const metadata: Record<string, unknown> = {
     ...(existing?.metadata ?? {}),
     flowProgress,
   };
-
   if (existing) {
-    await db
-      .update(customers)
-      .set({ metadata, updatedAt: now })
-      .where(eq(customers.id, existing.id));
+    await store.updateMetadata(existing.id, metadata);
     return;
   }
-
-  await db.insert(customers).values({
-    id: randomUUID(),
-    externalId,
-    displayName: externalId,
-    createdAt: now,
-    updatedAt: now,
-    metadata,
-  });
+  const customerId = await store.ensureCustomer(externalId, 'web', externalId);
+  await store.updateMetadata(customerId, metadata);
 }
 
 export function filterFunctionsByState(

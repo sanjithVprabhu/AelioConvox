@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ApiValue } from '@aelio/sunjet-client';
 import { embed } from '../analyst/embeddings.js';
 import { appendConversationRecord } from './conversations.js';
+import { i64, readI64, readUtf8, utf8 } from './helpers.js';
 import type {
   MessageStoreAppendInput,
   MessageStoreHistoryRow,
@@ -10,36 +11,10 @@ import type {
 
 const L0_TIER = 0;
 const HISTORY_SCAN_CAP = 500;
-
-function utf8(value: string): ApiValue {
-  return { type: 'utf8', value };
-}
-
-function i64(value: number): ApiValue {
-  return { type: 'i64', value };
-}
+const RATE_SCAN_CAP = 5_000;
 
 function text(value: string): ApiValue {
   return { type: 'utf8', value };
-}
-
-function readUtf8(values: Record<string, ApiValue>, key: string): string {
-  const entry = values[key];
-  if (!entry) {
-    return '';
-  }
-  if (entry.type === 'utf8') {
-    return entry.value;
-  }
-  return '';
-}
-
-function readI64(values: Record<string, ApiValue>, key: string): number {
-  const entry = values[key];
-  if (!entry || entry.type !== 'i64') {
-    return 0;
-  }
-  return entry.value;
 }
 
 const warnedDims = new Set<string>();
@@ -70,16 +45,12 @@ export class ConvoxMessageStore {
   readonly table: string;
   readonly tables: SunjetStorageConfig['tables'];
   readonly embedDim: number;
-  readonly dualWriteSqlite: boolean;
-  readonly fallbackSqliteOnError: boolean;
 
   constructor(config: SunjetStorageConfig) {
     this.client = config.client;
     this.table = config.tables.messages;
     this.tables = config.tables;
     this.embedDim = config.embedDim;
-    this.dualWriteSqlite = config.dualWriteSqlite;
-    this.fallbackSqliteOnError = config.fallbackSqliteOnError;
   }
 
   async appendMessage(input: MessageStoreAppendInput): Promise<{ messageId: string }> {
@@ -153,6 +124,71 @@ export class ConvoxMessageStore {
       role: row.role as MessageStoreHistoryRow['role'],
       content: row.content,
     }));
+  }
+
+  /** Count user messages for a customer since `sinceMs` (epoch ms). */
+  async countUserMessages(customerId: string, sinceMs: number): Promise<number> {
+    const scan = await this.client.scanRows(this.table, {
+      k: RATE_SCAN_CAP,
+      filters: [
+        { col: 'customer_id', op: 'eq', value: utf8(customerId) },
+        { col: 'role', op: 'eq', value: utf8('user') },
+        { col: 'created_at', op: 'ge', value: i64(sinceMs) },
+      ],
+    });
+    return scan.rows.length;
+  }
+
+  async countSessionMessages(sessionId: string): Promise<number> {
+    const scan = await this.client.scanRows(this.table, {
+      k: RATE_SCAN_CAP,
+      filters: [
+        { col: 'session_id', op: 'eq', value: utf8(sessionId) },
+        { col: 'tier', op: 'eq', value: i64(L0_TIER) },
+      ],
+    });
+    return scan.rows.length;
+  }
+
+  /** Most recent user-message timestamp for a customer, or null. */
+  async lastUserMessageAt(customerId: string): Promise<number | null> {
+    const scan = await this.client.scanRows(this.table, {
+      k: RATE_SCAN_CAP,
+      filters: [
+        { col: 'customer_id', op: 'eq', value: utf8(customerId) },
+        { col: 'role', op: 'eq', value: utf8('user') },
+      ],
+    });
+    let latest = 0;
+    for (const row of scan.rows) {
+      const createdAt = readI64(row.values, 'created_at');
+      if (createdAt > latest) {
+        latest = createdAt;
+      }
+    }
+    return latest > 0 ? latest : null;
+  }
+
+  async loadTranscript(
+    sessionId: string,
+    limit = 200,
+  ): Promise<Array<{ role: string; content: string; createdAt: number }>> {
+    const scan = await this.client.scanRows(this.table, {
+      k: Math.max(limit * 2, HISTORY_SCAN_CAP),
+      filters: [
+        { col: 'session_id', op: 'eq', value: utf8(sessionId) },
+        { col: 'tier', op: 'eq', value: i64(L0_TIER) },
+      ],
+    });
+
+    return scan.rows
+      .map((row) => ({
+        role: readUtf8(row.values, 'role'),
+        content: readUtf8(row.values, 'content'),
+        createdAt: readI64(row.values, 'created_at'),
+      }))
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .slice(-limit);
   }
 }
 

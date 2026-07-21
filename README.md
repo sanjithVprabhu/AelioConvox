@@ -2,7 +2,7 @@
 
 Open-source conversational runtime for SaaS products. Give your customers a production-grade chat experience on Web and WhatsApp — with an always-on analytical agent that understands each user over time.
 
-**Stack:** TypeScript · Rust storage engine (Sunjet/Astrolobe `.vss`) · SQLite + `sqlite-vec` fallback · single-container deployment
+**Stack:** TypeScript decision plane · Rust storage engine (Sunjet/Astrolobe `.vss` — vectors, BM25, graph; Sunjet-only, no SQLite) · single-container deployment
 
 ## Three products, one system
 
@@ -41,8 +41,7 @@ AelioConvox/
 ├── server/            # @aelio/server — Fastify runtime + Dockerfile + deploy templates
 ├── packages/          # internal workspace libs (not published on their own):
 │   ├── protocol/      #   wire protocol types + Zod schemas
-│   ├── core/          #   runtime turn, session, safety, tool loop, memory
-│   ├── db/            #   Drizzle schema (SQLite)
+│   ├── core/          #   turn pipeline, harness, context/pathway/stance engines, decision journal, memory
 │   ├── llm/           #   LLM providers (mock, Anthropic, OpenAI, Gemini, Groq, Ollama)
 │   ├── channels/      #   WhatsApp adapter
 │   └── sunjet-client/ #   HTTP client for the Sunjet (ll-server) Rust engine
@@ -94,7 +93,7 @@ AELIO_TEST_MODE=1 pnpm test:all
 
 Or `pnpm start` to boot the server + example backend together, then open the demo:
 
-Open [http://localhost:3000/demo.html](http://localhost:3000/demo.html), click **Chat**, and ask:
+Open [http://localhost:3010/demo.html](http://localhost:3010/demo.html), click **Chat**, and ask:
 
 > what is my order status?
 
@@ -125,7 +124,7 @@ aelio.expose(
 
 await aelio.listen({
   secret: process.env.AELIO_SDK_SECRET,
-  url: 'ws://127.0.0.1:3000',
+  url: 'ws://127.0.0.1:3010',
 });
 ```
 
@@ -160,6 +159,18 @@ pnpm docker:up
 ```
 
 Deploy templates for [Railway](server/railway.toml), [Render](server/render.yaml), and [Fly.io](server/fly.toml) live in [`server/`](server).
+
+## Conversational intelligence engines
+
+Every turn runs through a Sunjet-backed decision layer before the LLM sees a word:
+
+- **Generic gate** — bare greetings/thanks/farewells answered from templates: zero embeddings, zero LLM calls.
+- **Immediate Context Engine** — hot 5-minute verbatim window sliding through condensed 15m/30m/1h/24h tiers, per customer, across sessions and channels.
+- **Semantic Pathway Engine** — one message embedding fanned out in parallel to tool/memory/policy/flow ranking; picks the intent and response strategy (`reply`/`execute`/`guide`/`resume`/`disengage`).
+- **Archetype stance engine** — positive/negative/neutral valence per category with sentence-span attribution, plus a self-learning aspect taxonomy (discovered aspects are staged as candidates and only steer replies once promoted).
+- **Decision journal** — every decision (`pathway`, `stance`, `prompt`, `reply`, `cache`, `generic`, `confirmation`, `proactive`) is journaled to Sunjet; reconstruct any turn via `GET /api/v1/admin/harness/turns/:turnId`. Set `logging.trace_prompt: redacted` to keep prompt PII out of traces.
+
+The LLM only words the completed decision — hard policies, confirmations, and lifecycle gates stay deterministic. Roadmap and audit map: [docs/harness-recall-audit-checklist.md](docs/harness-recall-audit-checklist.md).
 
 ## Configuration
 

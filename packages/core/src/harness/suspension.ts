@@ -1,8 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
-import type { AelioDatabase } from '@aelio/db';
-import { suspendedPlans } from '@aelio/db';
-import type { ApiValue, SunjetClient } from '@aelio/sunjet-client';
+import type { SunjetClient } from '@aelio/sunjet-client';
+import { i64, readI64, readUtf8, utf8 } from '../storage/helpers.js';
 import {
   SuspendedPlanPayloadSchema,
   type SuspendedPlanPayload,
@@ -10,9 +8,7 @@ import {
 } from './schema.js';
 
 export type SuspensionStoreConfig = {
-  database: AelioDatabase;
-  /** Optional Sunjet mirror (keeps all runtime state visible in Astrolobe). */
-  sunjet?: {
+  sunjet: {
     client: SunjetClient;
     table: string;
     tenant: string;
@@ -29,30 +25,28 @@ export type SuspendedPlanRecord = {
 };
 
 const DEFAULT_TTL_MINUTES = 24 * 60;
-
-function utf8(value: string): ApiValue {
-  return { type: 'utf8', value };
-}
-function i64(value: number): ApiValue {
-  return { type: 'i64', value };
-}
+const SCAN_CAP = 100;
 
 /**
  * The suspended-plan store: one parked plan per session, awaiting user input
- * (recoil) or a write confirmation. SQLite is the transactional record the
- * resume path reads (it is always present, even with Sunjet disabled); when
- * Sunjet is configured every write is mirrored there so the whole runtime
- * state remains inspectable in Astrolobe.
+ * (recoil) or a write confirmation. Sunjet is the sole source of truth
+ * (Astrolobe stays fully authoritative for runtime state).
  */
 export class SuspensionStore {
-  constructor(private readonly config: SuspensionStoreConfig) {}
+  private readonly sunjet: SuspensionStoreConfig['sunjet'];
+
+  constructor(private readonly config: SuspensionStoreConfig) {
+    if (!config.sunjet) {
+      throw new Error('SuspensionStore requires sunjet configuration');
+    }
+    this.sunjet = config.sunjet;
+  }
 
   async suspend(
     sessionId: string,
     reason: SuspensionReason,
     payload: SuspendedPlanPayload,
   ): Promise<SuspendedPlanRecord> {
-    const db = this.config.database.db;
     const now = Date.now();
     const ttl = (this.config.ttlMinutes ?? DEFAULT_TTL_MINUTES) * 60_000;
     const record: SuspendedPlanRecord = {
@@ -63,37 +57,50 @@ export class SuspensionStore {
       expiresAt: now + ttl,
     };
 
-    // One suspension per session: replace any existing one.
-    await db.delete(suspendedPlans).where(eq(suspendedPlans.sessionId, sessionId));
-    await db.insert(suspendedPlans).values({
-      id: record.id,
-      sessionId,
-      reason,
-      payload: payload as unknown as Record<string, unknown>,
-      createdAt: new Date(now),
-      expiresAt: new Date(record.expiresAt),
-    });
-
-    void this.mirror(record, now);
+    await this.replaceSunjet(record, now);
     return record;
   }
 
   async get(sessionId: string): Promise<SuspendedPlanRecord | null> {
-    const db = this.config.database.db;
-    const rows = await db
-      .select()
-      .from(suspendedPlans)
-      .where(eq(suspendedPlans.sessionId, sessionId))
-      .limit(1);
-    const row = rows[0];
-    if (!row) {
+    return this.getSunjet(sessionId);
+  }
+
+  async clear(sessionId: string): Promise<void> {
+    await this.clearSunjet(sessionId);
+  }
+
+  private async findSunjetRows(sessionId: string) {
+    const sunjet = this.sunjet;
+    const scan = await sunjet.client.scanRows(sunjet.table, {
+      k: SCAN_CAP,
+      filters: [{ col: 'session_id', op: 'eq', value: utf8(sessionId) }],
+    });
+    return scan.rows;
+  }
+
+  private async getSunjet(sessionId: string): Promise<SuspendedPlanRecord | null> {
+    const rows = await this.findSunjetRows(sessionId);
+    if (rows.length === 0) {
       return null;
     }
-    if (row.expiresAt.getTime() <= Date.now()) {
+    // Most recent row wins if duplicates ever slip through (Sunjet has no
+    // unique-constraint enforcement over HTTP).
+    const row = rows.reduce((a, b) =>
+      readI64(a.values, 'created_at') >= readI64(b.values, 'created_at') ? a : b,
+    );
+    const expiresAt = readI64(row.values, 'expires_at');
+    if (expiresAt <= Date.now()) {
       await this.clear(sessionId);
       return null;
     }
-    const parsed = SuspendedPlanPayloadSchema.safeParse(row.payload);
+    let payloadRaw: unknown;
+    try {
+      payloadRaw = JSON.parse(readUtf8(row.values, 'payload'));
+    } catch {
+      await this.clear(sessionId);
+      return null;
+    }
+    const parsed = SuspendedPlanPayloadSchema.safeParse(payloadRaw);
     if (!parsed.success) {
       // A payload from an incompatible older build — drop it rather than wedge
       // the session on every subsequent message.
@@ -101,35 +108,34 @@ export class SuspensionStore {
       return null;
     }
     return {
-      id: row.id,
-      sessionId: row.sessionId,
-      reason: row.reason as SuspensionReason,
+      id: String(row.row_id),
+      sessionId,
+      reason: readUtf8(row.values, 'reason') as SuspensionReason,
       payload: parsed.data,
-      expiresAt: row.expiresAt.getTime(),
+      expiresAt,
     };
   }
 
-  async clear(sessionId: string): Promise<void> {
-    const db = this.config.database.db;
-    await db.delete(suspendedPlans).where(eq(suspendedPlans.sessionId, sessionId));
+  private async replaceSunjet(record: SuspendedPlanRecord, now: number): Promise<void> {
+    const sunjet = this.sunjet;
+    // One suspension per session: clear any existing rows first (best effort;
+    // Sunjet has no transactional delete+insert over HTTP).
+    await this.clearSunjet(record.sessionId);
+    await sunjet.client.insertRow(sunjet.table, {
+      session_id: utf8(record.sessionId),
+      tenant: utf8(sunjet.tenant),
+      reason: utf8(record.reason),
+      payload: utf8(JSON.stringify(record.payload)),
+      created_at: i64(now),
+      expires_at: i64(record.expiresAt),
+    });
   }
 
-  private async mirror(record: SuspendedPlanRecord, now: number): Promise<void> {
-    const sunjet = this.config.sunjet;
-    if (!sunjet) {
-      return;
-    }
-    try {
-      await sunjet.client.insertRow(sunjet.table, {
-        session_id: utf8(record.sessionId),
-        tenant: utf8(sunjet.tenant),
-        reason: utf8(record.reason),
-        payload: utf8(JSON.stringify(record.payload)),
-        created_at: i64(now),
-        expires_at: i64(record.expiresAt),
-      });
-    } catch {
-      // Mirror only — the SQLite record is what resume reads.
+  private async clearSunjet(sessionId: string): Promise<void> {
+    const sunjet = this.sunjet;
+    const rows = await this.findSunjetRows(sessionId);
+    for (const row of rows) {
+      await sunjet.client.deleteRow(sunjet.table, row.row_id);
     }
   }
 }

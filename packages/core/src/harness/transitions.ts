@@ -1,6 +1,6 @@
 import type { StateDefinition } from '@aelio/protocol';
-import type { AelioDatabase } from '@aelio/db';
 import { upsertCustomerLifecycleState } from '../lifecycle/index.js';
+import type { ConvoxCustomerStore } from '../storage/customers.js';
 
 /**
  * Declarative lifecycle transitions. When a tool succeeds and the active state
@@ -13,12 +13,15 @@ import { upsertCustomerLifecycleState } from '../lifecycle/index.js';
  * is the ultimate source of truth for lifecycle.
  */
 export async function applyStateTransition(input: {
-  db: AelioDatabase['db'];
   externalId: string;
   state: StateDefinition | undefined;
   toolName: string;
   presentFields: Set<string>;
+  customerStore: ConvoxCustomerStore;
 }): Promise<{ transitionedTo: string } | null> {
+  if (!input.customerStore) {
+    throw new Error('Sunjet customerStore is required');
+  }
   const transitions = input.state?.transitions;
   if (!transitions || transitions.length === 0) {
     return null;
@@ -34,10 +37,10 @@ export async function applyStateTransition(input: {
       continue;
     }
     await upsertCustomerLifecycleState(
-      input.db,
       input.externalId,
       transition.to,
       `auto: ${input.toolName} succeeded`,
+      input.customerStore,
     );
     return { transitionedTo: transition.to };
   }
