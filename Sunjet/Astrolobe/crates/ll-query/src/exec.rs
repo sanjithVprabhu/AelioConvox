@@ -8,6 +8,8 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt;
+use std::time::{Duration, Instant};
 
 use ll_cost::{choose, Strategy, VecCostParams};
 use ll_engine::Value;
@@ -41,6 +43,78 @@ pub struct GraphConstraint {
     pub col: u32,
     pub seeds: Vec<u64>,
     pub max_depth: usize,
+    pub budget: GraphBudget,
+    pub scope: Vec<Predicate>,
+}
+
+/// Hard limits for graph expansion. Limits include seeds and every discovered node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GraphBudget {
+    pub max_seeds: usize,
+    pub max_depth: usize,
+    pub max_frontier: usize,
+    pub max_visited: usize,
+    pub max_elapsed: Duration,
+    pub deadline: Option<Instant>,
+}
+
+impl Default for GraphBudget {
+    fn default() -> Self {
+        Self {
+            max_seeds: 64,
+            max_depth: 8,
+            max_frontier: 10_000,
+            max_visited: 100_000,
+            max_elapsed: Duration::from_millis(250),
+            deadline: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphBudgetKind {
+    Seeds,
+    Depth,
+    Frontier,
+    Visited,
+    Elapsed,
+    Deadline,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphBudgetExceeded {
+    pub kind: GraphBudgetKind,
+    pub limit: u128,
+    pub observed: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryError {
+    GraphBudgetExceeded(GraphBudgetExceeded),
+}
+
+impl fmt::Display for QueryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::GraphBudgetExceeded(exceeded) => write!(
+                f,
+                "graph {:?} budget exceeded: observed {}, limit {}",
+                exceeded.kind, exceeded.observed, exceeded.limit
+            ),
+        }
+    }
+}
+
+impl std::error::Error for QueryError {}
+
+impl GraphBudgetExceeded {
+    fn query_error(kind: GraphBudgetKind, limit: usize, observed: usize) -> QueryError {
+        QueryError::GraphBudgetExceeded(Self {
+            kind,
+            limit: limit as u128,
+            observed: observed as u128,
+        })
+    }
 }
 
 /// A hybrid query (columns identified by id). At least one ranking anchor (vector or text)
@@ -79,7 +153,25 @@ impl Query {
         self
     }
     pub fn with_graph(mut self, col: u32, seeds: Vec<u64>, max_depth: usize) -> Self {
-        self.graph = Some(GraphConstraint { col, seeds, max_depth });
+        self.graph = Some(GraphConstraint {
+            col,
+            seeds,
+            max_depth,
+            budget: GraphBudget::default(),
+            scope: Vec::new(),
+        });
+        self
+    }
+    pub fn with_graph_budget(mut self, budget: GraphBudget) -> Self {
+        if let Some(graph) = &mut self.graph {
+            graph.budget = budget;
+        }
+        self
+    }
+    pub fn with_graph_scope(mut self, predicate: Predicate) -> Self {
+        if let Some(graph) = &mut self.graph {
+            graph.scope.push(predicate);
+        }
         self
     }
 
@@ -92,12 +184,19 @@ impl Query {
         if let Some((c, _)) = &self.text {
             anchors.push(format!("TextMatch(col {c})"));
         }
-        let mut s = format!("HybridRank[RRF k={}] over [{}]", self.rrf_k, anchors.join(", "));
+        let mut s = format!(
+            "HybridRank[RRF k={}] over [{}]",
+            self.rrf_k,
+            anchors.join(", ")
+        );
         if !self.filters.is_empty() {
             s.push_str(&format!(" filter[{}]", self.filters.len()));
         }
         if let Some(g) = &self.graph {
-            s.push_str(&format!(" PathReachable(col {}, depth {})", g.col, g.max_depth));
+            s.push_str(&format!(
+                " PathReachable(col {}, depth {})",
+                g.col, g.max_depth
+            ));
         }
         s.push_str(&format!(" across {num_sources} sources"));
         s
@@ -106,6 +205,15 @@ impl Query {
 
 /// Execute the query across all `sources` at `snapshot`, returning top-k `(row_id, score)`.
 pub fn execute(sources: &[&dyn Source], q: &Query, snapshot: u64) -> Vec<(u64, f32)> {
+    execute_checked(sources, q, snapshot).unwrap_or_default()
+}
+
+/// Execute with typed graph-budget failure instead of collapsing a bounded traversal to no hits.
+pub fn execute_checked(
+    sources: &[&dyn Source],
+    q: &Query,
+    snapshot: u64,
+) -> Result<Vec<(u64, f32)>, QueryError> {
     let fetch = q.k.max(1) * 4;
 
     // Per-modality ranked candidate lists (best first), merged across sources by row_id.
@@ -127,7 +235,14 @@ pub fn execute(sources: &[&dyn Source], q: &Query, snapshot: u64) -> Vec<(u64, f
             }
             // PreFilter → exact distance over the matching rows. (`choose` only ever returns
             // pre/post-filter; any other variant falls through to this exact, recall-safe path.)
-            _ => prefilter_vector(sources, *col, query, plan.matching.as_deref().unwrap_or(&[]), fetch, snapshot),
+            _ => prefilter_vector(
+                sources,
+                *col,
+                query,
+                plan.matching.as_deref().unwrap_or(&[]),
+                fetch,
+                snapshot,
+            ),
         };
         ranked_lists.push(ranked);
     }
@@ -141,11 +256,13 @@ pub fn execute(sources: &[&dyn Source], q: &Query, snapshot: u64) -> Vec<(u64, f
                 if resolve(sources, id, snapshot) != Some((i, false)) {
                     continue;
                 }
-                best.entry(id).and_modify(|x| {
-                    if score > *x {
-                        *x = score;
-                    }
-                }).or_insert(score);
+                best.entry(id)
+                    .and_modify(|x| {
+                        if score > *x {
+                            *x = score;
+                        }
+                    })
+                    .or_insert(score);
             }
         }
         let mut v: Vec<(u64, f32)> = best.into_iter().collect();
@@ -154,7 +271,11 @@ pub fn execute(sources: &[&dyn Source], q: &Query, snapshot: u64) -> Vec<(u64, f
     }
 
     // Graph reachability set (if constrained).
-    let reach = q.graph.as_ref().map(|g| reachable(sources, g, snapshot));
+    let reach = q
+        .graph
+        .as_ref()
+        .map(|g| reachable(sources, g, snapshot))
+        .transpose()?;
 
     // Candidate universe: union of ranked lists; or the reachable set for a graph-only query.
     let mut universe: BTreeSet<u64> = BTreeSet::new();
@@ -210,7 +331,7 @@ pub fn execute(sources: &[&dyn Source], q: &Query, snapshot: u64) -> Vec<(u64, f
     }
     out.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     out.truncate(q.k);
-    out
+    Ok(out)
 }
 
 /// Recall target the planner holds the chosen strategy to.
@@ -246,8 +367,8 @@ fn pick_ef(sources: &[&dyn Source], col: u32) -> Option<(usize, f64)> {
         .filter(|c| !c.is_empty())
         .collect();
     let first = curves.first()?; // None => all sources exact (e.g. memtable-only)
-    // Curves share the ef ladder; combine by per-position minimum recall, then discount by the
-    // safety margin (the probe is optimistic). The returned recall is this effective value.
+                                 // Curves share the ef ladder; combine by per-position minimum recall, then discount by the
+                                 // safety margin (the probe is optimistic). The returned recall is this effective value.
     let combined: Vec<(usize, f64)> = first
         .iter()
         .enumerate()
@@ -289,7 +410,14 @@ fn choose_vector_strategy(
 
     if filters.is_empty() {
         // Pure ANN top-k: no pre-filter alternative exists, search at the chosen ef.
-        return VectorPlan { strategy: Strategy::PostFilter, ef, ann_recall, matching: None, sel: 1.0, total: 0 };
+        return VectorPlan {
+            strategy: Strategy::PostFilter,
+            ef,
+            ann_recall,
+            matching: None,
+            sel: 1.0,
+            total: 0,
+        };
     }
     let (sel, total) = estimate_selectivity(sources, filters, snapshot);
     // Post-filter's cost reflects the chosen ef (wider search = more work); its recall is the
@@ -298,19 +426,36 @@ fn choose_vector_strategy(
     let hnsw_base_evals = (cost_ef as f64) * (total.max(2) as f64).log2();
     let strategy = choose(
         sel,
-        &VecCostParams { n: total, k, ef: fetch, hnsw_base_evals, base_ann_recall: ann_recall },
+        &VecCostParams {
+            n: total,
+            k,
+            ef: fetch,
+            hnsw_base_evals,
+            base_ann_recall: ann_recall,
+        },
         RECALL_TARGET,
     );
     let matching = match strategy {
         Strategy::PostFilter => None, // doesn't need the match set — skip the scan
         _ => Some(matching_rows(sources, filters, snapshot)),
     };
-    VectorPlan { strategy, ef, ann_recall, matching, sel, total }
+    VectorPlan {
+        strategy,
+        ef,
+        ann_recall,
+        matching,
+        sel,
+        total,
+    }
 }
 
 /// Estimate predicate selectivity by sampling up to `SAMPLE` rows per source. Returns
 /// `(selectivity, total_rows)`.
-fn estimate_selectivity(sources: &[&dyn Source], filters: &[Predicate], snapshot: u64) -> (f64, usize) {
+fn estimate_selectivity(
+    sources: &[&dyn Source],
+    filters: &[Predicate],
+    snapshot: u64,
+) -> (f64, usize) {
     const SAMPLE: usize = 2048;
     let mut seen = 0usize;
     let mut hits = 0usize;
@@ -333,7 +478,11 @@ fn estimate_selectivity(sources: &[&dyn Source], filters: &[Predicate], snapshot
             i += step;
         }
     }
-    let sel = if seen > 0 { hits as f64 / seen as f64 } else { 1.0 };
+    let sel = if seen > 0 {
+        hits as f64 / seen as f64
+    } else {
+        1.0
+    };
     (sel, total)
 }
 
@@ -410,7 +559,13 @@ const PREFILTER_PAR_MIN: usize = 8192;
 
 /// Exact distance of one matching row, read from its authoritative source (skips
 /// superseded/deleted rows and dimension mismatches).
-fn score_row(sources: &[&dyn Source], col: u32, query: &[f32], id: u64, snapshot: u64) -> Option<(u64, f32)> {
+fn score_row(
+    sources: &[&dyn Source],
+    col: u32,
+    query: &[f32],
+    id: u64,
+    snapshot: u64,
+) -> Option<(u64, f32)> {
     let (src, deleted) = resolve(sources, id, snapshot)?;
     if deleted {
         return None;
@@ -432,18 +587,32 @@ fn prefilter_vector(
     limit: usize,
     snapshot: u64,
 ) -> Vec<u64> {
-    let nthreads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let nthreads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     let mut scored: Vec<(u64, f32)> = if matching.len() >= PREFILTER_PAR_MIN && nthreads > 1 {
         let chunk = matching.len().div_ceil(nthreads);
         std::thread::scope(|sc| {
             let handles: Vec<_> = matching
                 .chunks(chunk)
-                .map(|ch| sc.spawn(move || ch.iter().filter_map(|&id| score_row(sources, col, query, id, snapshot)).collect::<Vec<_>>()))
+                .map(|ch| {
+                    sc.spawn(move || {
+                        ch.iter()
+                            .filter_map(|&id| score_row(sources, col, query, id, snapshot))
+                            .collect::<Vec<_>>()
+                    })
+                })
                 .collect();
-            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().unwrap())
+                .collect()
         })
     } else {
-        matching.iter().filter_map(|&id| score_row(sources, col, query, id, snapshot)).collect()
+        matching
+            .iter()
+            .filter_map(|&id| score_row(sources, col, query, id, snapshot))
+            .collect()
     };
     // Only the nearest `limit` matter downstream; partial-select instead of fully sorting.
     if scored.len() > limit {
@@ -463,7 +632,10 @@ pub fn explain_plan(sources: &[&dyn Source], q: &Query, snapshot: u64) -> String
         let plan = choose_vector_strategy(sources, *col, &q.filters, q.k, fetch, snapshot);
         let reason = match plan.strategy {
             Strategy::PostFilter if plan.ann_recall >= RECALL_TARGET => {
-                format!("ANN recall {:.3} >= target {RECALL_TARGET} at ef {}", plan.ann_recall, plan.ef)
+                format!(
+                    "ANN recall {:.3} >= target {RECALL_TARGET} at ef {}",
+                    plan.ann_recall, plan.ef
+                )
             }
             _ if !q.filters.is_empty() && plan.ann_recall < RECALL_TARGET => {
                 format!(
@@ -479,21 +651,73 @@ pub fn explain_plan(sources: &[&dyn Source], q: &Query, snapshot: u64) -> String
 }
 
 /// Multi-source forward reachability from the seeds.
-fn reachable(sources: &[&dyn Source], g: &GraphConstraint, snapshot: u64) -> HashSet<u64> {
+fn reachable(
+    sources: &[&dyn Source],
+    g: &GraphConstraint,
+    snapshot: u64,
+) -> Result<HashSet<u64>, QueryError> {
+    if g.seeds.len() > g.budget.max_seeds {
+        return Err(GraphBudgetExceeded::query_error(
+            GraphBudgetKind::Seeds,
+            g.budget.max_seeds,
+            g.seeds.len(),
+        ));
+    }
+    if g.max_depth > g.budget.max_depth {
+        return Err(GraphBudgetExceeded::query_error(
+            GraphBudgetKind::Depth,
+            g.budget.max_depth,
+            g.max_depth,
+        ));
+    }
+    let started = Instant::now();
     let mut visited: HashSet<u64> = g.seeds.iter().copied().collect();
+    if visited.len() > g.budget.max_visited {
+        return Err(GraphBudgetExceeded::query_error(
+            GraphBudgetKind::Visited,
+            g.budget.max_visited,
+            visited.len(),
+        ));
+    }
     let mut reached: HashSet<u64> = HashSet::new();
     let mut frontier: Vec<u64> = g.seeds.clone();
     for _ in 0..g.max_depth {
+        check_elapsed(started, g.budget)?;
         let mut next = Vec::new();
         for &node in &frontier {
-            let mut nbrs: HashSet<u64> = HashSet::new();
-            for s in sources {
-                nbrs.extend(s.out_neighbors(g.col, node, snapshot));
+            check_elapsed(started, g.budget)?;
+            let Some((source_index, deleted)) = resolve(sources, node, snapshot) else {
+                continue;
+            };
+            if deleted || !in_scope(sources[source_index], node, &g.scope, snapshot) {
+                continue;
             }
-            for t in nbrs {
+            // Only the authoritative row version contributes edges. Unioning all sources
+            // resurrects removed edges after an update in a newer segment.
+            for t in sources[source_index].out_neighbors(g.col, node, snapshot) {
+                let Some((target_source, target_deleted)) = resolve(sources, t, snapshot) else {
+                    continue;
+                };
+                if target_deleted || !in_scope(sources[target_source], t, &g.scope, snapshot) {
+                    continue;
+                }
                 reached.insert(t);
                 if visited.insert(t) {
+                    if visited.len() > g.budget.max_visited {
+                        return Err(GraphBudgetExceeded::query_error(
+                            GraphBudgetKind::Visited,
+                            g.budget.max_visited,
+                            visited.len(),
+                        ));
+                    }
                     next.push(t);
+                    if next.len() > g.budget.max_frontier {
+                        return Err(GraphBudgetExceeded::query_error(
+                            GraphBudgetKind::Frontier,
+                            g.budget.max_frontier,
+                            next.len(),
+                        ));
+                    }
                 }
             }
         }
@@ -502,7 +726,37 @@ fn reachable(sources: &[&dyn Source], g: &GraphConstraint, snapshot: u64) -> Has
         }
         frontier = next;
     }
-    reached
+    Ok(reached)
+}
+
+fn check_elapsed(started: Instant, budget: GraphBudget) -> Result<(), QueryError> {
+    if budget
+        .deadline
+        .is_some_and(|deadline| Instant::now() >= deadline)
+    {
+        return Err(QueryError::GraphBudgetExceeded(GraphBudgetExceeded {
+            kind: GraphBudgetKind::Deadline,
+            limit: 0,
+            observed: 1,
+        }));
+    }
+    let elapsed = started.elapsed();
+    if elapsed > budget.max_elapsed {
+        return Err(QueryError::GraphBudgetExceeded(GraphBudgetExceeded {
+            kind: GraphBudgetKind::Elapsed,
+            limit: budget.max_elapsed.as_nanos(),
+            observed: elapsed.as_nanos(),
+        }));
+    }
+    Ok(())
+}
+
+fn in_scope(source: &dyn Source, row_id: u64, scope: &[Predicate], snapshot: u64) -> bool {
+    scope.iter().all(|predicate| {
+        source
+            .scalar(row_id, predicate.col, snapshot)
+            .is_some_and(|value| passes(&value, predicate.op, &predicate.value))
+    })
 }
 
 /// Resolve `id` to the source holding its newest version visible at `snapshot`, plus whether

@@ -1,0 +1,33 @@
+{
+  "name": "@aelio/llm-gateway",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Stateless multi-LLM gateway. The Rust brain dials this to run a model call; it owns no routing, policy, or tool decisioning.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "aelio-llm-gateway": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts src/main.ts --format esm --dts",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "test": "node --import tsx --test src/gateway.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aelio/llm": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}

@@ -21,8 +21,11 @@ mod file_source;
 mod source;
 mod util;
 
-pub use database::{Database, HybridQuery};
-pub use exec::{execute, explain_plan, GraphConstraint, PredOp, Predicate, Query};
+pub use database::{Database, DatabaseQueryError, HybridQuery, InsertIfAbsent, UpdateIfVersion};
+pub use exec::{
+    execute, execute_checked, explain_plan, GraphBudget, GraphBudgetExceeded, GraphBudgetKind,
+    GraphConstraint, PredOp, Predicate, Query, QueryError,
+};
 pub use file_source::FileSource;
 pub use source::Source;
 

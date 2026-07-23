@@ -149,7 +149,10 @@ pub fn write_file_with<P: AsRef<Path>>(
     // are written by the format itself; accepting them here would produce a file with
     // duplicate/conflicting structural sections.
     for sec in extra {
-        if matches!(sec.kind, SectionType::ColumnChunk | SectionType::TranslationTable) {
+        if matches!(
+            sec.kind,
+            SectionType::ColumnChunk | SectionType::TranslationTable
+        ) {
             return Err(FormatError::Decode(format!(
                 "extra section uses reserved kind {:?}; only Hnsw/Text/Edge/OptimizerStats \
                  may be passed as opaque extras",
@@ -313,14 +316,14 @@ pub fn read_file_bytes(bytes: &[u8]) -> Result<LlFile> {
     for entry in &footer.sections {
         match entry.kind {
             SectionType::ColumnChunk => {
-                let body = section_body(&bytes, entry, "ColumnChunk")?;
+                let body = section_body(bytes, entry, "ColumnChunk")?;
                 columns.push(decode_column_chunk(body)?);
             }
             SectionType::Hnsw
             | SectionType::Text
             | SectionType::Edge
             | SectionType::OptimizerStats => {
-                let body = section_body(&bytes, entry, "section")?;
+                let body = section_body(bytes, entry, "section")?;
                 raw_sections.push(RawSection {
                     kind: entry.kind,
                     column_id: entry.column_id,
@@ -336,7 +339,7 @@ pub fn read_file_bytes(bytes: &[u8]) -> Result<LlFile> {
     let tt_entry = footer
         .section(SectionType::TranslationTable)
         .ok_or_else(|| FormatError::Decode("missing TranslationTable section".into()))?;
-    let tt = read_translation_table(&bytes, tt_entry, footer.row_count)?;
+    let tt = read_translation_table(bytes, tt_entry, footer.row_count)?;
 
     Ok(LlFile {
         preamble,

@@ -1,0 +1,281 @@
+Aelio decision log — provider: scripted (deterministic, 0 paid calls)
+
+════════════════════════════════════════════════════════════════════
+TURN 0  user=sha256:bb82030dbc2b  utterance="hi"
+  state(before)=unauthenticated
+────────────────────────────────────────────────────────────────────
+  Sense              state=unauthenticated turn=0 pending=None
+                     → reads env/session/state — pure, free, and never mutates (sense before classify)
+  FlowGate           continue free
+                     → flow context outranks utterance semantics; a parked step resumes before anything else
+  SplitClauses       mode=pure n=1
+                     → pure pre-gate handles obvious cases; ambiguous conjunctions use one closed, bounded language-model extraction when configured
+  ClassifyDepth      Shallow margin=0.71
+                     → cheapest triage first; escalates to the model only when the margin is thin
+  ClassifyReplyType  Generic
+                     → generic/input-oriented → free template; output-oriented/banter → synthesis
+  LookupTier         Tier3
+                     → 0 exact σ hit · 1 near hit · 2 typed composition · 3 model proposes a path
+  Tier2Compose       authored generic greeting path
+                     → type-directed search stitched a known path — vocabulary, not a cache miss
+  TypeCheck          ok
+                     → each step's postcondition must satisfy the next's precondition before anything runs
+  Learn.Observe      obs=1/3 effectful=false
+────────────────────────────────────────────────────────────────────
+  reply (template): "Hey! I can help you auth otp send or catalog browse."
+  depth=Shallow  tier=Tier2  llm_calls=0  opened_loop=false  suspended=false
+  σ=534257bd4d1a78cac3607ce5e459de7f  new_state=-  proposal=prop_534257bd_658ce2c49295
+  Commit(runtime)    turn=ok state=unchanged flow=none
+════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════
+TURN 1  user=sha256:bb82030dbc2b  utterance="what can you do?"
+  state(before)=unauthenticated
+────────────────────────────────────────────────────────────────────
+  Sense              state=unauthenticated turn=1 pending=None
+                     → reads env/session/state — pure, free, and never mutates (sense before classify)
+  FlowGate           continue free
+                     → flow context outranks utterance semantics; a parked step resumes before anything else
+  SplitClauses       mode=pure n=1
+                     → pure pre-gate handles obvious cases; ambiguous conjunctions use one closed, bounded language-model extraction when configured
+  ClassifyDepth      Boundary margin=0.62
+                     → cheapest triage first; escalates to the model only when the margin is thin
+  Recall.Assemble    boundary claims=2 truncated=false
+                     → bounded tenant/user retrieval assembled only the relevant evidence slice
+  BoundaryAnswer     single synthesis prompt_hash=733d60837f71803664645256976ac7b5d15ceaaef21a8c58fee03f2ebebde2fb
+                     → answerable from state + world knowledge; one synthesis call, no tools
+────────────────────────────────────────────────────────────────────
+  reply (synthesize): "unauthenticated"
+  depth=Boundary  tier=-  llm_calls=1  opened_loop=false  suspended=false
+  σ=-  new_state=-  proposal=-
+  Commit(runtime)    turn=ok state=unchanged flow=none
+════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════
+TURN 2  user=sha256:bb82030dbc2b  utterance="log in"
+  state(before)=unauthenticated
+────────────────────────────────────────────────────────────────────
+  Sense              state=unauthenticated turn=2 pending=None
+                     → reads env/session/state — pure, free, and never mutates (sense before classify)
+  FlowGate           continue free
+                     → flow context outranks utterance semantics; a parked step resumes before anything else
+  SplitClauses       mode=pure n=1
+                     → pure pre-gate handles obvious cases; ambiguous conjunctions use one closed, bounded language-model extraction when configured
+  FlowMatch          matched login before semantic triage
+                     → authored flow triggers are checked before semantic depth, so shallow wording cannot bypass a control rail
+  ActivateFlow       login
+                     → hard preconditions + policy filtered first; the trigger margin only broke ties
+  Registry.LookupTool auth.otp.send => 1 tools
+                     → capability tag resolves to a tool — a lookup, never a model's judgement
+  Policy.Wrap        auth.otp.send
+                     → policy is a structural invariant around every effect, not a composable step
+  Bind.Residual      phone
+                     → only the argument the system genuinely lacks is asked for; the rest are sourced
+────────────────────────────────────────────────────────────────────
+  reply (template): "What number should I text the code to?"
+  depth=Deep  tier=-  llm_calls=0  opened_loop=true  suspended=true
+  σ=-  new_state=-  proposal=-
+  Commit(runtime)    turn=ok state=unchanged flow=login
+════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════
+TURN 3  user=sha256:bb82030dbc2b  utterance="[REDACTED:phone]"
+  state(before)=unauthenticated
+────────────────────────────────────────────────────────────────────
+  Sense              state=unauthenticated turn=3 pending=Some("collect_phone")
+                     → reads env/session/state — pure, free, and never mutates (sense before classify)
+  FlowGate           resume pending=Some("collect_phone")
+                     → flow context outranks utterance semantics; a parked step resumes before anything else
+  ResumeFlow         re-check policy+state+versions
+                     → re-checks policy, state, and pinned tool/prompt versions — never trusts stale auth
+  Registry.LookupTool auth.otp.send => 1 tools
+                     → capability tag resolves to a tool — a lookup, never a model's judgement
+  Policy.Wrap        auth.otp.send
+                     → policy is a structural invariant around every effect, not a composable step
+  Invoke.Call        send_otp success
+                     → the one externally effectful line; ledger brackets it, args/secrets redacted
+  Postcondition      collect_phone met
+                     → verifies what must be true after the step — the seam that keeps flows sound
+────────────────────────────────────────────────────────────────────
+  reply (ask): "What's the 6-digit code?"
+  depth=Deep  tier=-  llm_calls=0  opened_loop=true  suspended=true
+  σ=-  new_state=-  proposal=-
+  Commit(runtime)    turn=ok state=unchanged flow=login
+════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════
+TURN 4  user=sha256:bb82030dbc2b  utterance="[REDACTED:otp]"
+  state(before)=unauthenticated
+────────────────────────────────────────────────────────────────────
+  Sense              state=unauthenticated turn=4 pending=Some("await_otp")
+                     → reads env/session/state — pure, free, and never mutates (sense before classify)
+  FlowGate           resume pending=Some("await_otp")
+                     → flow context outranks utterance semantics; a parked step resumes before anything else
+  ResumeFlow         re-check policy+state+versions
+                     → re-checks policy, state, and pinned tool/prompt versions — never trusts stale auth
+  Registry.LookupTool auth.otp.verify => 1 tools
+                     → capability tag resolves to a tool — a lookup, never a model's judgement
+  Policy.Wrap        auth.otp.verify
+                     → policy is a structural invariant around every effect, not a composable step
+  Invoke.Error       reason=NeedsRepair recovery=NeedsRepair
+                     → typed tool failure selected a deterministic recovery path; no model guessed the outcome
+────────────────────────────────────────────────────────────────────
+  reply (apologize): "Sorry — NeedsRepair: re-ask. Please try again."
+  depth=Deep  tier=-  llm_calls=0  opened_loop=true  suspended=true
+  σ=-  new_state=-  proposal=-
+  Commit(runtime)    turn=ok state=unchanged flow=login
+════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════
+TURN 5  user=sha256:bb82030dbc2b  utterance="[REDACTED:otp]"
+  state(before)=unauthenticated
+────────────────────────────────────────────────────────────────────
+  Sense              state=unauthenticated turn=5 pending=Some("await_otp")
+                     → reads env/session/state — pure, free, and never mutates (sense before classify)
+  FlowGate           resume pending=Some("await_otp")
+                     → flow context outranks utterance semantics; a parked step resumes before anything else
+  ResumeFlow         re-check policy+state+versions
+                     → re-checks policy, state, and pinned tool/prompt versions — never trusts stale auth
+  Registry.LookupTool auth.otp.verify => 1 tools
+                     → capability tag resolves to a tool — a lookup, never a model's judgement
+  Policy.Wrap        auth.otp.verify
+                     → policy is a structural invariant around every effect, not a composable step
+  Invoke.Call        verify_otp success
+                     → the one externally effectful line; ledger brackets it, args/secrets redacted
+  Postcondition      await_otp met
+                     → verifies what must be true after the step — the seam that keeps flows sound
+  Postcondition      transition met
+                     → verifies what must be true after the step — the seam that keeps flows sound
+────────────────────────────────────────────────────────────────────
+  reply (template): "Done."
+  depth=Deep  tier=-  llm_calls=0  opened_loop=false  suspended=false
+  σ=-  new_state=authenticated  proposal=-
+  Commit(runtime)    turn=ok state=authenticated flow=none
+════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════
+TURN 6  user=sha256:bb82030dbc2b  utterance="give me the ten most avaricious clients"
+  state(before)=authenticated
+────────────────────────────────────────────────────────────────────
+  Sense              state=authenticated turn=6 pending=None
+                     → reads env/session/state — pure, free, and never mutates (sense before classify)
+  FlowGate           continue free
+                     → flow context outranks utterance semantics; a parked step resumes before anything else
+  SplitClauses       mode=pure n=1
+                     → pure pre-gate handles obvious cases; ambiguous conjunctions use one closed, bounded language-model extraction when configured
+  TermResolve        discount_pressure_score Desc limit=10 margin=0.85
+                     → term anchored to a declared attribute with polarity — antonyms don't collide
+  ClassifyDepth      Deep margin=1
+                     → cheapest triage first; escalates to the model only when the margin is thin
+  SituationKey       2588bb49b0471f52baadd6ac81d350a4
+                     → bucketed σ (no raw ids, no personality) so warm situations actually collide and hit
+  Recall.Assemble    claims=0 truncated=false max_hits=8 max_chars=8000
+                     → bounded tenant/user retrieval assembled only the relevant evidence slice
+  Tier2Compose       constructed declared query path crm.clients.query
+                     → type-directed search stitched a known path — vocabulary, not a cache miss
+  LookupTier         Tier2
+                     → 0 exact σ hit · 1 near hit · 2 typed composition · 3 model proposes a path
+  Invoke.Call        clients_query success
+                     → the one externally effectful line; ledger brackets it, args/secrets redacted
+  Learn.Observe      obs=1/3 effectful=false
+────────────────────────────────────────────────────────────────────
+  reply (synthesize): "[]"
+  depth=Deep  tier=Tier2  llm_calls=1  opened_loop=false  suspended=false
+  σ=2588bb49b0471f52baadd6ac81d350a4  new_state=-  proposal=prop_2588bb49_a05d9b7ece41
+  Commit(runtime)    turn=ok state=unchanged flow=none
+════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════
+TURN 7  user=sha256:bb82030dbc2b  utterance="give me the ten most avaricious clients"
+  state(before)=authenticated
+────────────────────────────────────────────────────────────────────
+  Sense              state=authenticated turn=7 pending=None
+                     → reads env/session/state — pure, free, and never mutates (sense before classify)
+  FlowGate           continue free
+                     → flow context outranks utterance semantics; a parked step resumes before anything else
+  SplitClauses       mode=pure n=1
+                     → pure pre-gate handles obvious cases; ambiguous conjunctions use one closed, bounded language-model extraction when configured
+  TermResolve        discount_pressure_score Desc limit=10 margin=0.85
+                     → term anchored to a declared attribute with polarity — antonyms don't collide
+  ClassifyDepth      Deep margin=1
+                     → cheapest triage first; escalates to the model only when the margin is thin
+  SituationKey       2588bb49b0471f52baadd6ac81d350a4
+                     → bucketed σ (no raw ids, no personality) so warm situations actually collide and hit
+  Recall.Assemble    claims=0 truncated=false max_hits=8 max_chars=8000
+                     → bounded tenant/user retrieval assembled only the relevant evidence slice
+  Tier2Compose       constructed declared query path crm.clients.query
+                     → type-directed search stitched a known path — vocabulary, not a cache miss
+  LookupTier         Tier2
+                     → 0 exact σ hit · 1 near hit · 2 typed composition · 3 model proposes a path
+  Invoke.Call        clients_query success
+                     → the one externally effectful line; ledger brackets it, args/secrets redacted
+  Learn.Observe      obs=2/3 effectful=false
+────────────────────────────────────────────────────────────────────
+  reply (synthesize): "[]"
+  depth=Deep  tier=Tier2  llm_calls=1  opened_loop=false  suspended=false
+  σ=2588bb49b0471f52baadd6ac81d350a4  new_state=-  proposal=prop_2588bb49_a05d9b7ece41
+  Commit(runtime)    turn=ok state=unchanged flow=none
+════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════
+TURN 8  user=sha256:bb82030dbc2b  utterance="give me the ten most avaricious clients"
+  state(before)=authenticated
+────────────────────────────────────────────────────────────────────
+  Sense              state=authenticated turn=8 pending=None
+                     → reads env/session/state — pure, free, and never mutates (sense before classify)
+  FlowGate           continue free
+                     → flow context outranks utterance semantics; a parked step resumes before anything else
+  SplitClauses       mode=pure n=1
+                     → pure pre-gate handles obvious cases; ambiguous conjunctions use one closed, bounded language-model extraction when configured
+  TermResolve        discount_pressure_score Desc limit=10 margin=0.85
+                     → term anchored to a declared attribute with polarity — antonyms don't collide
+  ClassifyDepth      Deep margin=1
+                     → cheapest triage first; escalates to the model only when the margin is thin
+  SituationKey       2588bb49b0471f52baadd6ac81d350a4
+                     → bucketed σ (no raw ids, no personality) so warm situations actually collide and hit
+  Recall.Assemble    claims=0 truncated=false max_hits=8 max_chars=8000
+                     → bounded tenant/user retrieval assembled only the relevant evidence slice
+  Tier2Compose       constructed declared query path crm.clients.query
+                     → type-directed search stitched a known path — vocabulary, not a cache miss
+  LookupTier         Tier2
+                     → 0 exact σ hit · 1 near hit · 2 typed composition · 3 model proposes a path
+  Invoke.Call        clients_query success
+                     → the one externally effectful line; ledger brackets it, args/secrets redacted
+  Learn.Promote      procedure=prop_2588bb49_a05d9b7ece41 — σ warmed to Tier-0/1
+────────────────────────────────────────────────────────────────────
+  reply (synthesize): "[]"
+  depth=Deep  tier=Tier2  llm_calls=1  opened_loop=false  suspended=false
+  σ=2588bb49b0471f52baadd6ac81d350a4  new_state=-  proposal=prop_2588bb49_a05d9b7ece41
+  Commit(runtime)    turn=ok state=unchanged flow=none
+════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════
+TURN 9  user=sha256:bb82030dbc2b  utterance="give me the ten most avaricious clients"
+  state(before)=authenticated
+────────────────────────────────────────────────────────────────────
+  Sense              state=authenticated turn=9 pending=None
+                     → reads env/session/state — pure, free, and never mutates (sense before classify)
+  FlowGate           continue free
+                     → flow context outranks utterance semantics; a parked step resumes before anything else
+  SplitClauses       mode=pure n=1
+                     → pure pre-gate handles obvious cases; ambiguous conjunctions use one closed, bounded language-model extraction when configured
+  TermResolve        discount_pressure_score Desc limit=10 margin=0.85
+                     → term anchored to a declared attribute with polarity — antonyms don't collide
+  ClassifyDepth      Deep margin=1
+                     → cheapest triage first; escalates to the model only when the margin is thin
+  SituationKey       2588bb49b0471f52baadd6ac81d350a4
+                     → bucketed σ (no raw ids, no personality) so warm situations actually collide and hit
+  Recall.Assemble    claims=0 truncated=false max_hits=8 max_chars=8000
+                     → bounded tenant/user retrieval assembled only the relevant evidence slice
+  LookupTier         Tier0
+                     → 0 exact σ hit · 1 near hit · 2 typed composition · 3 model proposes a path
+  Invoke.Call        clients_query success
+                     → the one externally effectful line; ledger brackets it, args/secrets redacted
+────────────────────────────────────────────────────────────────────
+  reply (synthesize): "[]"
+  depth=Deep  tier=Tier0  llm_calls=1  opened_loop=false  suspended=false
+  σ=2588bb49b0471f52baadd6ac81d350a4  new_state=-  proposal=prop_2588bb49_a05d9b7ece41
+  Commit(runtime)    turn=ok state=unchanged flow=none
+════════════════════════════════════════════════════════════════════
+
+SUMMARY  turns=10  total_llm_calls=5  final_state=authenticated

@@ -545,7 +545,7 @@ Structure is learned. Meaning (secret / expiring / echo-to-next-call) is **decla
 |---|---|---|
 | `Learn.SituationKey` | `{state, intent, slots, tools, sig} -> Vector` | `P` |
 | `Learn.LookupTier` | `{σ} -> Tier0\|Tier1\|Tier2\|Tier3 + candidates` | `P` |
-| `Learn.Compose` | `{σ, ability_graph} -> Option<Path>` | `P` — type-directed search |
+| `Learn.Compose` | `{goal: required_evidence, available_slots, capability_envelope, allow_effects, bounds; procedure_graph} -> Option<Path>` | `P` — bounded recursive backward type/evidence search |
 | `Learn.ProposePath` | `{σ, ability_set} -> Path` | `L` — cold start only, constrained to declared abilities |
 | `Learn.TypeCheck` | `{path} -> Ok \| Unsatisfiable(step)` | `P` |
 | `Learn.ScoreStep` | `{step_record} -> StepScore` | `P` |

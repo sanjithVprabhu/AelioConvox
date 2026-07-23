@@ -22,7 +22,9 @@ use ll_engine::{Engine, Memtable, Op, Row, Value};
 use ll_format::read_file;
 use ll_storage::{LocalSegmentStore, SegmentStore};
 
-use crate::exec::{execute, explain_plan, PredOp, Query};
+use crate::exec::{
+    execute, execute_checked, explain_plan, GraphBudget, PredOp, Predicate, Query, QueryError,
+};
 use crate::file_source::FileSource;
 use crate::source::Source;
 
@@ -117,12 +119,30 @@ pub struct HybridQuery {
     pub text: Option<(String, String)>,
     pub filters: Vec<(String, PredOp, Value)>,
     pub graph: Option<(String, Vec<u64>, usize)>,
+    pub graph_budget: GraphBudget,
+    pub graph_scope_filters: bool,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertIfAbsent {
+    Inserted { row_id: u64, version: u64 },
+    Existing { row_id: u64, version: u64 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateIfVersion {
+    Updated { version: u64 },
+    Conflict { current_version: u64 },
+    NotFound,
+}
+
+pub type NamedRow = Vec<(String, Value)>;
 
 impl HybridQuery {
     pub fn new(k: usize) -> Self {
         HybridQuery {
             k,
+            graph_budget: GraphBudget::default(),
             ..Default::default()
         }
     }
@@ -140,6 +160,15 @@ impl HybridQuery {
     }
     pub fn graph(mut self, col: &str, seeds: Vec<u64>, depth: usize) -> Self {
         self.graph = Some((col.to_string(), seeds, depth));
+        self
+    }
+    pub fn graph_budget(mut self, budget: GraphBudget) -> Self {
+        self.graph_budget = budget;
+        self
+    }
+    /// Apply scalar predicates to every traversed node, not only final candidates.
+    pub fn graph_scope_filters(mut self) -> Self {
+        self.graph_scope_filters = true;
         self
     }
 }
@@ -245,11 +274,7 @@ impl Database {
 
     /// Define a table and persist the updated schema so a reopened database can resolve its
     /// columns.
-    pub fn create_table(
-        &mut self,
-        name: &str,
-        columns: &[(&str, ColumnKind)],
-    ) -> io::Result<u32> {
+    pub fn create_table(&mut self, name: &str, columns: &[(&str, ColumnKind)]) -> io::Result<u32> {
         let id = self
             .catalog
             .create_table(name, columns)
@@ -288,6 +313,36 @@ impl Database {
         Ok(row_id)
     }
 
+    /// Atomically insert a row only when no live row matches all equality conditions.
+    pub fn insert_if_absent(
+        &mut self,
+        table: &str,
+        conditions: &[(&str, Value)],
+        values: &[(&str, Value)],
+    ) -> io::Result<InsertIfAbsent> {
+        if conditions.is_empty() {
+            return Err(io::Error::other(
+                "insert_if_absent requires at least one condition",
+            ));
+        }
+        let query = conditions
+            .iter()
+            .fold(HybridQuery::new(1), |query, (name, value)| {
+                query.filter(name, PredOp::Eq, value.clone())
+            });
+        if let Some((row_id, _)) = self.query(table, &query)?.into_iter().next() {
+            let version = self
+                .row_version(table, row_id)?
+                .ok_or_else(|| io::Error::other("matched row version is unavailable"))?;
+            return Ok(InsertIfAbsent::Existing { row_id, version });
+        }
+        let row_id = self.insert(table, values)?;
+        let version = self
+            .row_version(table, row_id)?
+            .ok_or_else(|| io::Error::other("inserted row version is unavailable"))?;
+        Ok(InsertIfAbsent::Inserted { row_id, version })
+    }
+
     /// Delete `row_id` from `table`. Writes a tombstone through the engine (WAL + memtable) at
     /// a fresh LSN; because that LSN is newer than any flushed copy, the global
     /// newest-version-wins resolver suppresses the row everywhere, including in already-flushed
@@ -314,7 +369,12 @@ impl Database {
     /// `row_id` at a fresh LSN, so the new version supersedes the old copy via the
     /// newest-version-wins resolver. Returns `Ok(false)` if the row doesn't currently exist or
     /// belongs to another table.
-    pub fn update(&mut self, table: &str, row_id: u64, values: &[(&str, Value)]) -> io::Result<bool> {
+    pub fn update(
+        &mut self,
+        table: &str,
+        row_id: u64,
+        values: &[(&str, Value)],
+    ) -> io::Result<bool> {
         let t = self
             .catalog
             .table(table)
@@ -343,6 +403,29 @@ impl Database {
         }
         self.engine.insert(row_id, row)?;
         Ok(true)
+    }
+
+    /// Compare-and-set a live row using its globally monotonic MVCC version.
+    pub fn update_if_version(
+        &mut self,
+        table: &str,
+        row_id: u64,
+        expected_version: u64,
+        values: &[(&str, Value)],
+    ) -> io::Result<UpdateIfVersion> {
+        let Some(current_version) = self.row_version(table, row_id)? else {
+            return Ok(UpdateIfVersion::NotFound);
+        };
+        if current_version != expected_version {
+            return Ok(UpdateIfVersion::Conflict { current_version });
+        }
+        if !self.update(table, row_id, values)? {
+            return Ok(UpdateIfVersion::NotFound);
+        }
+        let version = self
+            .row_version(table, row_id)?
+            .ok_or_else(|| io::Error::other("updated row version is unavailable"))?;
+        Ok(UpdateIfVersion::Updated { version })
     }
 
     /// Flush the memtable to a new `.vss` segment and reset it, crash-safely: write+fsync the
@@ -489,11 +572,26 @@ impl Database {
         if let Some((name, txt)) = &q.text {
             eq = eq.with_text(col(name)?, txt.clone());
         }
-        for (name, op, val) in &q.filters {
-            eq = eq.filter(col(name)?, *op, val.clone());
-        }
         if let Some((name, seeds, depth)) = &q.graph {
-            eq = eq.with_graph(col(name)?, seeds.clone(), *depth);
+            eq = eq
+                .with_graph(col(name)?, seeds.clone(), *depth)
+                .with_graph_budget(q.graph_budget)
+                .with_graph_scope(Predicate {
+                    col: SYS_TABLE_COL,
+                    op: PredOp::Eq,
+                    value: Value::I64(t.table_id as i64),
+                });
+        }
+        for (name, op, val) in &q.filters {
+            let predicate = Predicate {
+                col: col(name)?,
+                op: *op,
+                value: val.clone(),
+            };
+            eq = eq.filter(predicate.col, predicate.op, predicate.value.clone());
+            if q.graph_scope_filters {
+                eq = eq.with_graph_scope(predicate);
+            }
         }
         // Implicit table isolation.
         eq = eq.filter(SYS_TABLE_COL, PredOp::Eq, Value::I64(t.table_id as i64));
@@ -531,7 +629,11 @@ impl Database {
 
     /// The `table_id` recorded on `row_id` in source `src_idx` (from its system column).
     fn row_table_id(&self, src_idx: usize, row_id: u64) -> Option<u32> {
-        match self.sources().get(src_idx)?.scalar(row_id, SYS_TABLE_COL, SNAPSHOT_LATEST)? {
+        match self
+            .sources()
+            .get(src_idx)?
+            .scalar(row_id, SYS_TABLE_COL, SNAPSHOT_LATEST)?
+        {
             Value::I64(t) => Some(t as u32),
             _ => None,
         }
@@ -566,7 +668,11 @@ impl Database {
     }
 
     /// Fetch a live row by id, returning named column values (for KV / state reads).
-    pub fn get_row_values(&self, table: &str, row_id: u64) -> io::Result<Option<Vec<(String, Value)>>> {
+    pub fn get_row_values(
+        &self,
+        table: &str,
+        row_id: u64,
+    ) -> io::Result<Option<Vec<(String, Value)>>> {
         let t = self
             .catalog
             .table(table)
@@ -590,8 +696,26 @@ impl Database {
         Ok(Some(out))
     }
 
+    /// Return the current live MVCC version for a row belonging to `table`.
+    pub fn row_version(&self, table: &str, row_id: u64) -> io::Result<Option<u64>> {
+        let table_id = self
+            .catalog
+            .table(table)
+            .ok_or_else(|| io::Error::other(format!("no such table: {table}")))?
+            .table_id;
+        let Some(source_index) = self.resolve_live(row_id) else {
+            return Ok(None);
+        };
+        if self.row_table_id(source_index, row_id) != Some(table_id) {
+            return Ok(None);
+        }
+        Ok(self.sources()[source_index]
+            .version_at(row_id, SNAPSHOT_LATEST)
+            .map(|(version, _)| version))
+    }
+
     /// Scalar-filter scan: returns up to `k` live rows with their column values.
-    pub fn scan_values(&self, table: &str, q: &HybridQuery) -> io::Result<Vec<(u64, Vec<(String, Value)>)>> {
+    pub fn scan_values(&self, table: &str, q: &HybridQuery) -> io::Result<Vec<(u64, NamedRow)>> {
         let hits = self.query(table, q)?;
         let mut out = Vec::with_capacity(hits.len());
         for (row_id, _) in hits {
@@ -609,9 +733,37 @@ impl Database {
         Ok(execute(&self.sources(), &plan, SNAPSHOT_LATEST))
     }
 
+    /// Run a query while preserving typed graph-budget failures.
+    pub fn query_checked(
+        &self,
+        table: &str,
+        q: &HybridQuery,
+    ) -> Result<Vec<(u64, f32)>, DatabaseQueryError> {
+        let plan = self.plan(table, q).map_err(DatabaseQueryError::Planning)?;
+        execute_checked(&self.sources(), &plan, SNAPSHOT_LATEST)
+            .map_err(DatabaseQueryError::Execution)
+    }
+
     /// A human-readable plan description, including the cost-model-chosen vector strategy.
     pub fn explain(&self, table: &str, q: &HybridQuery) -> io::Result<String> {
         let plan = self.plan(table, q)?;
         Ok(explain_plan(&self.sources(), &plan, SNAPSHOT_LATEST))
     }
 }
+
+#[derive(Debug)]
+pub enum DatabaseQueryError {
+    Planning(io::Error),
+    Execution(QueryError),
+}
+
+impl std::fmt::Display for DatabaseQueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Planning(error) => write!(f, "query planning failed: {error}"),
+            Self::Execution(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for DatabaseQueryError {}
