@@ -8,6 +8,7 @@ members = [
     "crates/aelio-convert",
     "crates/aelio-learn",
     "crates/aelio-query",
+    "crates/aelio-prompt",
 ]
 
 [workspace.package]
