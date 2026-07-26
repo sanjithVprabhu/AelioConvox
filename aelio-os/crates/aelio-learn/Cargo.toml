@@ -12,3 +12,6 @@ aelio-convert.workspace = true
 
 [lints.rust]
 warnings = "warn"
+
+[dev-dependencies]
+serde_json.workspace = true

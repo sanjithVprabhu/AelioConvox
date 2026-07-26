@@ -12,7 +12,7 @@ pub mod lifecycle;
 pub mod mutation;
 pub mod rules;
 
-pub use gate::{Digest, Evidence, Reach, Thresholds, Tier};
+pub use gate::{shadow_evidence, Digest, Evidence, Reach, Thresholds, Tier};
 pub use lifecycle::{transition, Status, Trigger};
 pub use mutation::{run_harness, MutationReport};
 pub use rules::{any_fabricating, apply_rules, parse_rules, Rule, RuleFail};

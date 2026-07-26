@@ -117,6 +117,29 @@ pub struct Evidence {
     pub attributed_guard_violations: u64,
 }
 
+/// Build shadow-phase [`Evidence`] from a stream of `(input_hash, agreed)` observations — the
+/// **generic** accumulator shared by every artifact class (§16.5). Counts are over **distinct input
+/// hashes** (§13.2): repeated observations of the same input can neither inflate the distinct count
+/// nor the rate. This is the one piece of gate machinery; each class supplies only the `agreed`
+/// boolean via its own agreement predicate (converter: digest validation; pathway: retrospective
+/// outcome match; procedure: shadow-compare).
+pub fn shadow_evidence<'a, I>(observations: I) -> Evidence
+where
+    I: IntoIterator<Item = (&'a str, bool)>,
+{
+    // input_hash → whether it ever validated. A distinct input counts as agreeing iff *every*
+    // observation of it agreed (conservative — a single disagreement fails the input).
+    let mut by_input: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+    for (hash, agreed) in observations {
+        let e = by_input.entry(hash.to_string()).or_insert(true);
+        *e = *e && agreed;
+    }
+    let distinct = by_input.len() as u64;
+    let agreed = by_input.values().filter(|v| **v).count() as u64;
+    let rate = if distinct == 0 { 0.0 } else { agreed as f64 / distinct as f64 };
+    Evidence { shadow_distinct: distinct, shadow_validation_rate: rate, ..Default::default() }
+}
+
 pub fn shadow_to_canary(ev: &Evidence, th: &Thresholds) -> bool {
     ev.shadow_distinct >= th.shadow_min_distinct && ev.shadow_validation_rate >= th.shadow_min_rate
 }
