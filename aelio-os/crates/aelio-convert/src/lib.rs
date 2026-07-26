@@ -7,11 +7,15 @@
 //! reach-based tiers routing the semantic residue to humans (§16.2). The mutation harness (§16.6)
 //! publishes the gate's catch rate.
 
+pub mod edge;
 pub mod gate;
 pub mod lifecycle;
 pub mod mutation;
 pub mod rules;
 
+pub use edge::{
+    rules_hash, ConversionEdge, ConvertUseError, EdgeId, OnParseFail, RejectedRegistry, Sensitivity,
+};
 pub use gate::{shadow_evidence, Digest, Evidence, Reach, Thresholds, Tier};
 pub use lifecycle::{transition, Status, Trigger};
 pub use mutation::{run_harness, MutationReport};
