@@ -5,10 +5,17 @@
 //! the promotion machinery — this crate supplies only the per-class agreement predicate + selection.
 
 pub mod attribution;
+pub mod metrics;
 pub mod pathways;
+pub mod procedures;
 
 pub use attribution::{attribute, is_demotion_eligible, Credit, NegativeSignal};
+pub use metrics::{
+    converter_falsified, fallback_rate, procedure_demoted_to_experimental, ConverterMetrics,
+    KillCriteria, ProcedureMetrics,
+};
 pub use pathways::{
     normalized_entropy, select, validate_decision_point, DecisionPoint, FallbackReason, Hygiene,
     PathwayScore, Selection, MAX_PATHWAYS,
 };
+pub use procedures::{mine, FlowTrace, MiningParams, ProcedureCandidate, TraceStep};
