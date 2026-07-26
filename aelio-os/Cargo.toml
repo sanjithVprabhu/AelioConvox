@@ -1,0 +1,19 @@
+# Aelio agent-OS workspace (§29). Dependency direction strictly downward; aelio-sol has zero internal deps.
+# Crates are added to `members` as they are built per §30 (P0 order). aelio-sol is P0 step 1.
+[workspace]
+resolver = "2"
+members = [
+    "crates/aelio-sol",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"          # RATIFIED (Decision Log, Part VIII)
+rust-version = "1.75"
+
+[workspace.dependencies]
+blake3 = "1"
+ryu = "1"
+
+[profile.dev]
+# Deny warnings is enforced in CI (handoff Working rules); locally kept as warnings.

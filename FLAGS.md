@@ -1,0 +1,33 @@
+# FLAGS — implementation findings against `AELIO_DSL_MOTHER.md`
+
+Findings, not failures. Format: `{id, section(s), what I found, options, recommendation}`. Provisional choices are marked `PROVISIONAL` in code comments. Blocking only if it gates correctness.
+
+---
+
+### F-001 — Workspace location (repo layout) — `§29`
+**What:** The handoff says "use as repo `CLAUDE.md`" and names a fresh 8-crate Cargo workspace (`aelio-sol` … `aelio-cli`), but this monorepo already contains unrelated Rust (`Sunjet/Astrolobe/…`) and TS (`packages/`, `server/`). The mother doc does not pin a directory.
+**Options:** (a) new top-level dir `aelio-os/` with its own workspace `Cargo.toml`; (b) place crates under repo-root `crates/`; (c) separate repo.
+**Recommendation → (a) `aelio-os/`.** Clean separation from the legacy Astrolobe kernel, no workspace collision, easy to lift into its own repo later. `PROVISIONAL` — non-correctness; move is mechanical.
+
+### F-002 — Store backend for P0 — `§24`, `§29`, Decision Log (Part VIII)
+**What:** The doc commits Sunjet as *the* store and says `aelio-store` "keeps a trait boundary for test doubles only." P0's §30 list needs Once/CAS and persistence, but P0's definition of done (login golden flow, replay bit-identity) is expressible against an in-memory double.
+**Options:** (a) implement the `aelio-store` trait + in-memory double for all of P0, defer the Sunjet binding to when P1 storage lands; (b) bind Sunjet now.
+**Recommendation → (a).** P0 exit criteria (§30) are all in-memory-satisfiable; the trait keeps Sunjet a drop-in. `PROVISIONAL`.
+
+### F-003 — `aelio-store` in the P0 dependency graph — `§29`
+**What:** §29 lists `aelio-store` among the crates but the P0 build order (§30) touches storage only via Once/CAS and persistence. Dependency direction is "strictly downward"; the exact edges aren't drawn.
+**Options:** (a) `aelio-kernel` depends on an `aelio-store` *trait* crate (store trait + in-memory double), inverting the concrete Sunjet dep out of the kernel; (b) kernel owns persistence directly.
+**Recommendation → (a) trait in `aelio-store`, kernel depends on the trait.** Matches "trait boundary for test doubles" and keeps the kernel Sunjet-agnostic. `PROVISIONAL`.
+
+### F-004 — Canonical float "shortest round-trip" formatting — `§4.3`
+**What:** §4.3 mandates floats as "IEEE-754 f64, shortest round-trip form, always carrying a decimal point," `-0.0 → 0.0`, and cross-platform stability is a §27 property test. Rust's `{}`/`ryu` give shortest round-trip but not automatically "always a decimal point" (e.g. `2.0` prints `2`), and `-0.0` prints `-0`.
+**Options:** (a) use `ryu` then post-process to guarantee a decimal point and normalize `-0.0`; (b) hand-roll a Grisu/Ryū-equivalent.
+**Recommendation → (a).** `ryu` is the shortest-round-trip authority; a thin normalization layer enforces the decimal-point + `-0.0` rules. Covered by the int-vs-float and float-canonical conformance vectors. `PROVISIONAL` pending the cross-platform vector passing on CI.
+
+### F-005 — Structural imprint over `var` resolution — `§4.1.3`
+**What:** §4.1.3 says structural hashing resolves `var` values before hashing, and §4.1.4 says program-bearing bags (`fn`/`flow`) have *no* structural imprint. For `aelio-sol` in isolation there is no execution context to resolve a `var` path against.
+**Options:** (a) `aelio-sol` computes structural imprints only over already-resolved, program-free bodies and returns a typed error (`ProgramBearing` / `UnresolvedVar`) otherwise, leaving `var` resolution to the kernel; (b) pull resolution into sol.
+**Recommendation → (a).** Keeps `aelio-sol` zero-dep and pure; the kernel resolves `var` before asking sol to hash. `PROVISIONAL`.
+
+---
+*Open items above are all `PROVISIONAL` and non-blocking. None weakens a locked invariant. Amendments (if any arise) will be proposed here first with a Decision Log entry, per handoff Authority rule #3.*
