@@ -5,6 +5,7 @@ resolver = "2"
 members = [
     "crates/aelio-sol",
     "crates/aelio-kernel",
+    "crates/aelio-convert",
 ]
 
 [workspace.package]
@@ -17,6 +18,7 @@ blake3 = "1"
 ryu = "1"
 serde_json = "1"
 aelio-sol = { path = "crates/aelio-sol" }
+aelio-kernel = { path = "crates/aelio-kernel" }
 
 [profile.dev]
 # Deny warnings is enforced in CI (handoff Working rules); locally kept as warnings.

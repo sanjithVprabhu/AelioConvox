@@ -1,0 +1,15 @@
+[package]
+name = "aelio-convert"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Conversion graph, closed rule ops, and the generic promotion gate (§13–§16). The safety core."
+
+[dependencies]
+aelio-sol.workspace = true
+aelio-kernel.workspace = true
+serde_json.workspace = true
+
+[lints.rust]
+warnings = "warn"

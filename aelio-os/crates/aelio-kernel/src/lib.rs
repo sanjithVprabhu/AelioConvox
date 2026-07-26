@@ -22,6 +22,12 @@ pub use instr::{parse_node, Node};
 pub use ledger::{Category, Ledger};
 pub use registry::{EffectClass, Registry};
 
+/// Convert a parsed `serde_json::Value` into a program-free `SolValue` (§4.3 int/float preserved).
+/// Exposed for downstream crates (e.g. conversion rule literals).
+pub fn json_from(j: &serde_json::Value) -> Result<aelio_sol::SolValue, aelio_sol::SolError> {
+    json::from_json(j)
+}
+
 /// Parse instruction JSON text into a checked plan (parse + [`plan::plan`]). Convenience for tests
 /// and the CLI.
 pub fn compile(json_text: &str) -> Result<Node, ErrV1> {
