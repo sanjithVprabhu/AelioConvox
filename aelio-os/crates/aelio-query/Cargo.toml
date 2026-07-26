@@ -1,0 +1,14 @@
+[package]
+name = "aelio-query"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Dataset registry + closed query AST (§10.4). No query text exists to inject into."
+
+[dependencies]
+aelio-sol.workspace = true
+serde_json.workspace = true
+
+[lints.rust]
+warnings = "warn"
