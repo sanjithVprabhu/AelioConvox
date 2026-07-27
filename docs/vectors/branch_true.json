@@ -1,0 +1,13 @@
+{
+  "name": "branch_true",
+  "section": "§8.2 Branch",
+  "plan": {
+    "nid": "b",
+    "op": "Branch",
+    "pred": { "fn": "eq", "args": [{ "pull": "flag" }, { "lit": true }] },
+    "then": { "nid": "t", "op": "Const", "v": { "path": "then" } },
+    "else": { "nid": "e", "op": "Const", "v": { "path": "else" } }
+  },
+  "initial_bag": { "flag": true },
+  "expected": { "kind": "bag_hash", "bag": { "path": "then" } }
+}

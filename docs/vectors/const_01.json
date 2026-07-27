@@ -1,0 +1,7 @@
+{
+  "name": "const_01",
+  "section": "§8.2 Const",
+  "plan": { "nid": "c", "op": "Const", "v": { "ok": true } },
+  "initial_bag": { "ignored": 1 },
+  "expected": { "kind": "bag_hash", "bag": { "ok": true } }
+}

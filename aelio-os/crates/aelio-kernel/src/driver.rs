@@ -3,11 +3,12 @@
 //! (replay), and where park/resume across turns is orchestrated.
 
 use crate::error::{ErrV1, ReasonCode};
-use crate::exec::{Backend, Executor, Frame, Outcome, Suspend};
+use crate::exec::{Backend, Executor, Frame, OnceClaim, Outcome, Suspend};
 use crate::instr::Node;
 use crate::ledger::{Category, Ledger};
 use crate::registry::Registry;
 use aelio_sol::{value_hash, SolValue};
+use aelio_store::{once_begin, once_complete, MemoryStore, OnceState, StoreError};
 use std::collections::VecDeque;
 
 /// A parked instance: what the driver holds between turns.
@@ -23,17 +24,29 @@ pub enum TurnOutcome {
     Parked(Parked),
 }
 
-/// Drives a single flow instance across turns, owning its ledger + registry.
+/// Drives a single flow instance across turns, owning its ledger + registry + Once store.
 pub struct Instance<'r> {
     turn_id_seq: u64,
     ledger: Ledger,
     registry: &'r mut Registry,
     program: Node,
+    /// In-memory Once/CAS double for P0 (F-002). Production swaps Sunjet via the store trait.
+    store: MemoryStore,
+    tenant: String,
+    instance_id: String,
 }
 
 impl<'r> Instance<'r> {
     pub fn new(program: Node, registry: &'r mut Registry) -> Self {
-        Instance { turn_id_seq: 0, ledger: Ledger::default(), registry, program }
+        Instance {
+            turn_id_seq: 0,
+            ledger: Ledger::default(),
+            registry,
+            program,
+            store: MemoryStore::new(),
+            tenant: "default".into(),
+            instance_id: "inst0".into(),
+        }
     }
 
     pub fn ledger(&self) -> &Ledger {
@@ -50,7 +63,15 @@ impl<'r> Instance<'r> {
     pub fn start(&mut self, initial_bag: SolValue) -> Result<TurnOutcome, ErrV1> {
         let turn_id = self.next_turn_id();
         self.ledger.append(&turn_id, None, "turn_start", Category::Info, SolValue::map([("trigger", SolValue::str("message"))]));
-        let mut backend = LiveBackend { registry: self.registry, ledger: &mut self.ledger, turn_id: turn_id.clone(), pending_wake: None };
+        let mut backend = LiveBackend {
+            registry: self.registry,
+            ledger: &mut self.ledger,
+            turn_id: turn_id.clone(),
+            pending_wake: None,
+            store: &mut self.store,
+            tenant: self.tenant.clone(),
+            instance_id: self.instance_id.clone(),
+        };
         let mut exec = Executor::new(initial_bag, &mut backend);
         let outcome = exec.run(&self.program)?;
         self.settle(outcome, &turn_id)
@@ -62,7 +83,15 @@ impl<'r> Instance<'r> {
         self.ledger.append(&turn_id, None, "turn_start", Category::Info, SolValue::map([("trigger", SolValue::str("wake"))]));
         // §8.4 resume sequence is enforced inside the Guard/park handling; the wake is INJECT-ledgered.
         self.ledger.append(&turn_id, Some(&parked.park_nid), "resume", Category::Inject, SolValue::map([("wake", wake.clone())]));
-        let mut backend = LiveBackend { registry: self.registry, ledger: &mut self.ledger, turn_id: turn_id.clone(), pending_wake: Some(wake) };
+        let mut backend = LiveBackend {
+            registry: self.registry,
+            ledger: &mut self.ledger,
+            turn_id: turn_id.clone(),
+            pending_wake: Some(wake),
+            store: &mut self.store,
+            tenant: self.tenant.clone(),
+            instance_id: self.instance_id.clone(),
+        };
         let mut exec = Executor::new(parked.bag, &mut backend);
         let outcome = exec.resume(&self.program, parked.frames)?;
         self.settle(outcome, &turn_id)
@@ -99,6 +128,9 @@ struct LiveBackend<'a> {
     turn_id: String,
     /// Set on a resume turn; consumed by the first park reached with an empty cursor.
     pending_wake: Option<SolValue>,
+    store: &'a mut MemoryStore,
+    tenant: String,
+    instance_id: String,
 }
 
 impl Backend for LiveBackend<'_> {
@@ -129,6 +161,43 @@ impl Backend for LiveBackend<'_> {
     fn at_park(&mut self, _nid: &str) -> Result<Option<SolValue>, ErrV1> {
         // Live: wake if the driver injected one for this resume; else suspend the turn.
         Ok(self.pending_wake.take())
+    }
+
+    fn once_claim(&mut self, nid: &str, idem_key: &str) -> Result<OnceClaim, ErrV1> {
+        let full = format!("{}|{}|{}", self.tenant, self.instance_id, idem_key);
+        match once_begin(self.store, &self.tenant, &full) {
+            Ok(OnceState::Execute) => {
+                self.ledger.append(
+                    &self.turn_id,
+                    Some(nid),
+                    "once_intent",
+                    Category::Verify,
+                    SolValue::map([("idem_key", SolValue::str(full))]),
+                );
+                Ok(OnceClaim::Run)
+            }
+            Ok(OnceState::Replay(_)) => Ok(OnceClaim::Skip),
+            Err(StoreError::UnknownOutcome) => Err(ErrV1::new(
+                ReasonCode::Internal,
+                nid,
+                "Once intent-without-result — fail-loud, never re-execute (§8.4)",
+            )),
+            Err(e) => Err(ErrV1::new(ReasonCode::Internal, nid, format!("once store: {e:?}"))),
+        }
+    }
+
+    fn once_complete(&mut self, nid: &str, idem_key: &str) -> Result<(), ErrV1> {
+        let full = format!("{}|{}|{}", self.tenant, self.instance_id, idem_key);
+        once_complete(self.store, &self.tenant, &full, SolValue::map([("ok", SolValue::Bool(true))]))
+            .map_err(|e| ErrV1::new(ReasonCode::Internal, nid, format!("once complete: {e:?}")))?;
+        self.ledger.append(
+            &self.turn_id,
+            Some(nid),
+            "once_result",
+            Category::Inject,
+            SolValue::map([("idem_key", SolValue::str(full)), ("ok", SolValue::Bool(true))]),
+        );
+        Ok(())
     }
 }
 

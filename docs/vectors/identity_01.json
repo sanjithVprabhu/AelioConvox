@@ -1,0 +1,7 @@
+{
+  "name": "identity_01",
+  "section": "§8.2 Identity",
+  "plan": { "nid": "n1", "op": "Identity" },
+  "initial_bag": { "x": 1, "y": "a" },
+  "expected": { "kind": "bag_hash", "bag": { "x": 1, "y": "a" } }
+}

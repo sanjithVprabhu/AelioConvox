@@ -1,0 +1,23 @@
+{
+  "name": "compute_div0",
+  "section": "§9 div zero",
+  "plan": {
+    "nid": "s",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "c",
+        "op": "Let",
+        "bindings": [
+          {
+            "key": "r",
+            "value": { "fn": "div", "args": [{ "lit": 1 }, { "lit": 0 }] }
+          }
+        ],
+        "body": { "nid": "i", "op": "Identity" }
+      }
+    ]
+  },
+  "initial_bag": {},
+  "expected": { "kind": "err", "code": "Type" }
+}

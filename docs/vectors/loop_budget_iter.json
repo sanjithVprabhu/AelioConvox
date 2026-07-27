@@ -1,0 +1,13 @@
+{
+  "name": "loop_budget_iter",
+  "section": "§8.3 Loop max_iter ⇒ Budget.Iter",
+  "plan": {
+    "nid": "L",
+    "op": "Loop",
+    "while": { "lit": true },
+    "max_iter": 3,
+    "body": { "nid": "i", "op": "Identity" }
+  },
+  "initial_bag": {},
+  "expected": { "kind": "err", "code": "Budget.Iter" }
+}

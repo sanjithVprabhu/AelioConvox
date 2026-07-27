@@ -38,6 +38,15 @@ pub enum Outcome {
     Parked { suspension: Suspend, bag: SolValue },
 }
 
+/// Result of claiming an `Once` region (§8.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnceClaim {
+    /// Execute the body, then [`Backend::once_complete`].
+    Run,
+    /// Prior successful completion — skip body (bag already carries effects).
+    Skip,
+}
+
 /// Effect + park behavior, differing live vs replay.
 pub trait Backend {
     /// Invoke a Call target (live) or inject its recorded result (replay). `args` is the projected
@@ -48,6 +57,16 @@ pub trait Backend {
     /// At a park reached with an empty resume cursor: `Some(wake)` ⇒ inject + continue (replay, or
     /// the live-resume target); `None` ⇒ suspend the turn here (live, fresh park).
     fn at_park(&mut self, nid: &str) -> Result<Option<SolValue>, ErrV1>;
+
+    /// Claim an at-most-once region. Default: always `Run` (tests without a store).
+    fn once_claim(&mut self, _nid: &str, _idem_key: &str) -> Result<OnceClaim, ErrV1> {
+        Ok(OnceClaim::Run)
+    }
+
+    /// Record successful completion of an Once body. Default: no-op.
+    fn once_complete(&mut self, _nid: &str, _idem_key: &str) -> Result<(), ErrV1> {
+        Ok(())
+    }
 }
 
 pub struct Executor<'b, B: Backend> {
@@ -190,19 +209,27 @@ impl<'b, B: Backend> Executor<'b, B> {
                 Ok(out)
             }
 
-            Kind::Once { body, .. } => {
-                // §8.4 at-most-once accounting is enforced by the Backend/store in P0.6; here Once is
-                // transparent to the walk (its effectful body is the ledgered Call). A park inside
-                // Once resumes via a Body frame.
+            Kind::Once { body, idem_key } => {
+                // §8.4: claim via store (intent→result). Unknown outcome ⇒ Internal, never re-exec.
                 let resuming = matches!(cursor.front(), Some(Frame::Body));
                 if resuming {
                     cursor.pop_front();
+                }
+                let key = self.once_key(nid, idem_key)?;
+                // Claim only on first entry; resume continues the same claim. Complete after body
+                // finishes (including post-park resume of a body that never completed).
+                if !resuming {
+                    match self.backend.once_claim(nid, &key)? {
+                        OnceClaim::Skip => return Ok(Flow::Done),
+                        OnceClaim::Run => {}
+                    }
                 }
                 let out = self.exec(body, cursor)?;
                 if let Flow::Suspend(mut s) = out {
                     s.frames.push_front(Frame::Body);
                     return Ok(Flow::Suspend(s));
                 }
+                self.backend.once_complete(nid, &key)?;
                 Ok(out)
             }
 
@@ -369,6 +396,18 @@ impl<'b, B: Backend> Executor<'b, B> {
         } else {
             Err(ErrV1::new(ReasonCode::GuardViolation, nid, "guard invariant false (§8.3)"))
         }
+    }
+
+    /// Default idem_key = blake3(nid ‖ canonical(bag projection of template or empty)).
+    /// Override template: each Expr evaluates to a Sol fragment folded into the key material.
+    fn once_key(&self, nid: &str, template: &Option<Vec<Expr>>) -> Result<String, ErrV1> {
+        let mut parts = vec![SolValue::str(nid)];
+        if let Some(exprs) = template {
+            for e in exprs {
+                parts.push(self.eval(nid, e)?);
+            }
+        }
+        Ok(aelio_sol::value_hash(&SolValue::List(parts)))
     }
 
     /// §4.2.4 / §6.3: build the callee input from `args` only — least privilege.

@@ -1,0 +1,14 @@
+{
+  "name": "sense_write_reject",
+  "section": "§8.4 sense subtree unwritable",
+  "plan": {
+    "nid": "bad",
+    "op": "Call",
+    "id": "io.x@1",
+    "args": {},
+    "into": "sense.env.now"
+  },
+  "initial_bag": {},
+  "plan_time_only": true,
+  "expected": { "kind": "err", "code": "Policy" }
+}

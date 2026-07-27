@@ -1,0 +1,15 @@
+{
+  "name": "replay_meta_identity",
+  "section": "§12.3 replay bag_hash equality",
+  "plan": {
+    "nid": "s",
+    "op": "Seq",
+    "steps": [
+      { "nid": "c", "op": "Const", "v": { "a": 1, "b": 2.0 } },
+      { "nid": "i", "op": "Identity" }
+    ]
+  },
+  "initial_bag": {},
+  "expected": { "kind": "bag_hash", "bag": { "a": 1, "b": 2.0 } },
+  "replay_twice": true
+}
