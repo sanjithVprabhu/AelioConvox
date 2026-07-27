@@ -1,0 +1,1 @@
+{"name":"compute_keep","section":"§9 keep","plan":{"nid":"s","op":"Let","bindings":[{"key":"r","value":{"fn":"keep","args":[{"lit":{"a":1,"b":2}},{"lit":["a"]}]}}],"body":{"nid":"i","op":"Identity"}},"initial_bag":{},"expected":{"kind":"bag_hash","bag":{"r":{"a":1}}},"replay_twice":true}

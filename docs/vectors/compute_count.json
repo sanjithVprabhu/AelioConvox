@@ -1,0 +1,1 @@
+{"name":"compute_count","section":"§9 count","plan":{"nid":"s","op":"Let","bindings":[{"key":"r","value":{"fn":"count","args":[{"lit":[10,20,30]}]}}],"body":{"nid":"i","op":"Identity"}},"initial_bag":{},"expected":{"kind":"bag_hash","bag":{"r":3}},"replay_twice":true}

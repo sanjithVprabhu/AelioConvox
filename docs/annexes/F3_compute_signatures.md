@@ -40,10 +40,19 @@ Convention: all ops are **pure**. Checked i64 arithmetic: overflow ⇒ `Type`. �
 
 Vectors live under `docs/vectors/compute_*.json`. Families covered: arithmetic happy/fail/overflow; compare type-strict fail; string; structure; list bounds.
 
+## Implementation status (F-008, 2026-07-27)
+
+Full §9 catalog implemented:
+- **Pure** (`aelio-kernel/src/compute.rs`): numeric, compare/logic, string, `is_type`, `blake3`, and structure/list — `merge, drop, keep, path_copy, count, append, first, last, slice, list_contains`. `pull`/`exists` resolve in the Expr layer.
+- **Effectful, ledgered** (`Backend::nondet`/`validate`, routed via `exec::eval_fx` at value-producing sites only): `now, uuid, random` (L0-C, `nondet_value` INJECT) and `matches_format` (`validate_result` INJECT). Replay injects both from the ledger, so a turn using them is bit-identical (`nondet_replay.rs`).
+- `path_copy` refined to 3-arg `(container, from, to)` for purity — see FLAGS F-008 Decision Log.
+
 ## Completion check
 
 | Check | Result |
 |-------|--------|
-| ≥3 vectors per op including failures | **PASS** (vector pack + unit tests in `aelio-kernel` compute) |
+| Every §9 catalog op implemented | **PASS** (pure in `compute.rs`; nondet/validate via `Backend`) |
+| Vectors incl. failures for structure/list families | **PASS** (`docs/vectors/compute_*.json`: merge/merge_conflict/count/list_contains/slice/append_budget/first_empty/keep + div0) |
+| Nondet/validate replay bit-identity | **PASS** (`nondet_replay.rs`) |
 | Zero contradictions with §5.2 cast matrix | **PASS** (cast is conversion-layer; compute does not implement forbidden casts) |
 | Type-strict comparison explicit | **PASS** |

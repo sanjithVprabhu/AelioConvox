@@ -1,0 +1,1 @@
+{"name":"compute_append_budget","section":"§9 append max_items","plan":{"nid":"s","op":"Let","bindings":[{"key":"r","value":{"fn":"append","args":[{"lit":[1,2]},{"lit":3},{"lit":2}]}}],"body":{"nid":"i","op":"Identity"}},"initial_bag":{},"expected":{"kind":"err","code":"Budget.Size"}}

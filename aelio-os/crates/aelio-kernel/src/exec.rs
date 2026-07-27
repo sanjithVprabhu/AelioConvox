@@ -67,6 +67,18 @@ pub trait Backend {
     fn once_complete(&mut self, _nid: &str, _idem_key: &str) -> Result<(), ErrV1> {
         Ok(())
     }
+
+    /// L0-C ledgered nondeterminism (§9): live generates + records a `nondet_value` INJECT entry;
+    /// replay injects the recorded value (§12.3). `source` ∈ {now, uuid, random}. Default: unsupported.
+    fn nondet(&mut self, nid: &str, source: &str) -> Result<SolValue, ErrV1> {
+        Err(ErrV1::new(ReasonCode::Shape, nid, format!("nondeterministic `{source}` unsupported by this backend (§9)")))
+    }
+
+    /// Registered validator dispatch for `matches_format` (§5.4). Ledgered (`validate_result`) so
+    /// replay stays a pure function of the ledger. Default: unsupported.
+    fn validate(&mut self, nid: &str, validator_id: &str, _value: &SolValue) -> Result<bool, ErrV1> {
+        Err(ErrV1::new(ReasonCode::Shape, nid, format!("validator `{validator_id}` unsupported by this backend (§5.4)")))
+    }
 }
 
 pub struct Executor<'b, B: Backend> {
@@ -132,7 +144,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                 let mut saved: Vec<(String, Option<SolValue>)> = Vec::new();
                 if !resuming {
                     for (key, value_expr) in bindings {
-                        let val = self.eval(nid, value_expr)?;
+                        let val = self.eval_fx(nid, value_expr)?;
                         let p = Path::parse(key).map_err(|e| shape(nid, format!("Let key: {e}")))?;
                         saved.push((key.clone(), self.bag_get(&p).cloned()));
                         self.write(nid, &p, val)?;
@@ -383,6 +395,47 @@ impl<'b, B: Backend> Executor<'b, B> {
         }
     }
 
+    /// Effectful expression eval for **value-producing** positions (Let bindings, Call args). Resolves
+    /// the L0-C nondeterministic sources (`now`/`uuid`/`random`) and `matches_format` through the
+    /// backend (both ledgered); all pure ops delegate to [`compute::apply`]. Determinism-sensitive
+    /// positions (predicates, idem keys) use the pure [`Self::eval`], which rejects these ops.
+    fn eval_fx(&mut self, nid: &str, expr: &Expr) -> Result<SolValue, ErrV1> {
+        match expr {
+            Expr::Lit(v) => Ok(v.clone()),
+            Expr::Pull(p) => self
+                .bag_get(p)
+                .cloned()
+                .ok_or_else(|| ErrV1::new(ReasonCode::Missing, nid, "pull: path not present")),
+            Expr::Fn { op, args } => match op.as_str() {
+                "now" | "uuid" | "random" if args.is_empty() => self.backend.nondet(nid, op),
+                "now" | "uuid" | "random" => Err(shape(nid, format!("{op} takes no args (§9)"))),
+                "exists" => {
+                    if let [Expr::Pull(p)] = args.as_slice() {
+                        Ok(SolValue::Bool(p.exists(self.bag_root())))
+                    } else {
+                        Err(shape(nid, "exists expects a single pull(path) arg"))
+                    }
+                }
+                "matches_format" => {
+                    let val_expr = args.first().ok_or_else(|| shape(nid, "matches_format(value, validator_id)"))?;
+                    let val = self.eval_fx(nid, val_expr)?;
+                    let vid = match args.get(1) {
+                        Some(Expr::Lit(SolValue::Str(s))) => s.clone(),
+                        _ => return Err(shape(nid, "matches_format validator_id must be a string literal (§5.4)")),
+                    };
+                    Ok(SolValue::Bool(self.backend.validate(nid, &vid, &val)?))
+                }
+                _ => {
+                    let mut vals = Vec::with_capacity(args.len());
+                    for a in args {
+                        vals.push(self.eval_fx(nid, a)?);
+                    }
+                    compute::apply(op, &vals).map_err(|e| ErrV1::new(e.code, nid, e.detail))
+                }
+            },
+        }
+    }
+
     fn eval_bool(&self, nid: &str, expr: &Expr) -> Result<bool, ErrV1> {
         match self.eval(nid, expr)? {
             SolValue::Bool(b) => Ok(b),
@@ -410,11 +463,12 @@ impl<'b, B: Backend> Executor<'b, B> {
         Ok(aelio_sol::value_hash(&SolValue::List(parts)))
     }
 
-    /// §4.2.4 / §6.3: build the callee input from `args` only — least privilege.
-    fn project_args(&self, nid: &str, args: &[(String, Expr)]) -> Result<SolValue, ErrV1> {
+    /// §4.2.4 / §6.3: build the callee input from `args` only — least privilege. Uses the effectful
+    /// evaluator so a Call arg may carry an L0-C source (`uuid()`) or `matches_format` (both ledgered).
+    fn project_args(&mut self, nid: &str, args: &[(String, Expr)]) -> Result<SolValue, ErrV1> {
         let mut pairs = Vec::new();
         for (slot, expr) in args {
-            pairs.push((slot.clone(), self.eval(nid, expr)?));
+            pairs.push((slot.clone(), self.eval_fx(nid, expr)?));
         }
         Ok(SolValue::map(pairs))
     }

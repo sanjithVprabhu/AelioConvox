@@ -1,0 +1,1 @@
+{"name":"compute_merge_conflict","section":"§9 merge on_conflict=error","plan":{"nid":"s","op":"Let","bindings":[{"key":"r","value":{"fn":"merge","args":[{"lit":{"a":1}},{"lit":{"a":9}},{"lit":"error"}]}}],"body":{"nid":"i","op":"Identity"}},"initial_bag":{},"expected":{"kind":"err","code":"Shape"}}

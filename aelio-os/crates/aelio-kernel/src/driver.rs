@@ -71,6 +71,7 @@ impl<'r> Instance<'r> {
             store: &mut self.store,
             tenant: self.tenant.clone(),
             instance_id: self.instance_id.clone(),
+            nondet_seq: 0,
         };
         let mut exec = Executor::new(initial_bag, &mut backend);
         let outcome = exec.run(&self.program)?;
@@ -91,6 +92,7 @@ impl<'r> Instance<'r> {
             store: &mut self.store,
             tenant: self.tenant.clone(),
             instance_id: self.instance_id.clone(),
+            nondet_seq: 0,
         };
         let mut exec = Executor::new(parked.bag, &mut backend);
         let outcome = exec.resume(&self.program, parked.frames)?;
@@ -131,6 +133,8 @@ struct LiveBackend<'a> {
     store: &'a mut MemoryStore,
     tenant: String,
     instance_id: String,
+    /// Monotonic per-turn counter mixed into generated nondet values (uuid uniqueness).
+    nondet_seq: u64,
 }
 
 impl Backend for LiveBackend<'_> {
@@ -199,6 +203,65 @@ impl Backend for LiveBackend<'_> {
         );
         Ok(())
     }
+
+    fn nondet(&mut self, nid: &str, source: &str) -> Result<SolValue, ErrV1> {
+        // §9 L0-C: generate the value once, live, and record it as an INJECT entry (§12.2). Replay
+        // reads it back verbatim (§12.3) so the turn is bit-identical despite the nondeterminism.
+        let value = match source {
+            "now" => SolValue::Int(now_millis()),
+            "uuid" => SolValue::str(gen_uuid(&self.turn_id, self.nondet_seq)),
+            "random" => SolValue::Int(gen_random(self.nondet_seq)),
+            other => return Err(ErrV1::new(ReasonCode::Shape, nid, format!("unknown nondet source `{other}` (§9)"))),
+        };
+        self.nondet_seq += 1;
+        self.ledger.append(
+            &self.turn_id,
+            Some(nid),
+            "nondet_value",
+            Category::Inject,
+            SolValue::map([("source", SolValue::str(source)), ("value", value.clone())]),
+        );
+        Ok(value)
+    }
+
+    fn validate(&mut self, nid: &str, validator_id: &str, value: &SolValue) -> Result<bool, ErrV1> {
+        // §5.4 validators are registered targets returning bool. Deterministic, but ledgered so
+        // replay does not need the registry (replay stays a pure function of the ledger, §12.3).
+        let out = self
+            .registry
+            .call(validator_id, &SolValue::map([("value", value.clone())]))
+            .ok_or_else(|| ErrV1::new(ReasonCode::Shape, nid, format!("unregistered validator `{validator_id}` (§5.4)")))??;
+        let result = match out {
+            SolValue::Bool(b) => b,
+            _ => return Err(ErrV1::new(ReasonCode::Type, nid, "validator must return bool (§5.4)")),
+        };
+        self.ledger.append(
+            &self.turn_id,
+            Some(nid),
+            "validate_result",
+            Category::Inject,
+            SolValue::map([("validator", SolValue::str(validator_id)), ("result", SolValue::Bool(result))]),
+        );
+        Ok(result)
+    }
+}
+
+fn now_millis() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+/// A version-4-shaped identifier derived from turn + counter + clock (uniqueness only; the value is
+/// ledgered, so replay reproduces it exactly regardless of how it was minted).
+fn gen_uuid(turn: &str, seq: u64) -> String {
+    let h = value_hash(&SolValue::str(format!("{turn}:{seq}:{}", now_millis())));
+    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+}
+
+fn gen_random(seq: u64) -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos() as u64).unwrap_or(0);
+    ((nanos ^ seq.wrapping_mul(0x9E37_79B9_7F4A_7C15)) & (i64::MAX as u64)) as i64
 }
 
 // ── replay (§12.3): re-run the program as a pure function of the ledger ────────────────────────
@@ -211,7 +274,7 @@ pub fn replay(program: &Node, ledger: &Ledger, initial_bag: SolValue) -> Result<
     let mut effects: VecDeque<&crate::ledger::Entry> = ledger
         .entries()
         .iter()
-        .filter(|e| matches!(e.kind.as_str(), "call_result" | "read_result" | "park" | "resume"))
+        .filter(|e| matches!(e.kind.as_str(), "call_result" | "read_result" | "park" | "resume" | "nondet_value" | "validate_result"))
         .collect();
     let expected_final = ledger
         .entries()
@@ -287,5 +350,22 @@ impl Backend for ReplayBackend<'_> {
             .cloned()
             .ok_or_else(|| ErrV1::new(ReasonCode::Internal, nid, "replay: resume entry missing wake"))?;
         Ok(Some(wake))
+    }
+
+    fn nondet(&mut self, nid: &str, _source: &str) -> Result<SolValue, ErrV1> {
+        let e = self.pop(&["nondet_value"], nid)?;
+        e.payload
+            .as_map()
+            .and_then(|m| m.get("value"))
+            .cloned()
+            .ok_or_else(|| ErrV1::new(ReasonCode::Internal, nid, "replay: nondet_value entry missing value"))
+    }
+
+    fn validate(&mut self, nid: &str, _validator_id: &str, _value: &SolValue) -> Result<bool, ErrV1> {
+        let e = self.pop(&["validate_result"], nid)?;
+        match e.payload.as_map().and_then(|m| m.get("result")) {
+            Some(SolValue::Bool(b)) => Ok(*b),
+            _ => Err(ErrV1::new(ReasonCode::Internal, nid, "replay: validate_result entry missing bool result")),
+        }
     }
 }

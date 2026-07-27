@@ -1,0 +1,1 @@
+{"name":"compute_first_empty","section":"§9 first empty","plan":{"nid":"s","op":"Let","bindings":[{"key":"r","value":{"fn":"first","args":[{"lit":[]}]}}],"body":{"nid":"i","op":"Identity"}},"initial_bag":{},"expected":{"kind":"err","code":"Missing"}}
