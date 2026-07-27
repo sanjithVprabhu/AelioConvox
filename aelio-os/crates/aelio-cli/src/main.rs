@@ -2,12 +2,12 @@
 //!
 //! ```text
 //! aelio compile <plan.json>
-//! aelio run   --plan plan.json [--bag bag.json]
+//! aelio run   --plan plan.json [--bag bag.json] [--ledger-out ledger.json]
 //! aelio replay --plan plan.json --ledger ledger.json [--bag bag.json]
 //! aelio trace --plan plan.json [--bag bag.json]   # §26 op-by-op bag diffs from the ledger
 //! ```
 
-use aelio_kernel::{compile, replay, EffectClass, Instance, Ledger, Registry, TurnOutcome};
+use aelio_kernel::{compile, replay, Instance, Ledger, Registry, TurnOutcome};
 use aelio_sol::{value_hash, SolValue};
 use std::env;
 use std::fs;
@@ -44,6 +44,7 @@ fn main() {
         "run" => {
             let plan_path = flag(&args, "--plan").expect("--plan");
             let bag_path = flag(&args, "--bag");
+            let ledger_out = flag(&args, "--ledger-out");
             let text = fs::read_to_string(plan_path).unwrap();
             let program = compile(&text).expect("plan");
             let bag = load_bag(bag_path);
@@ -55,12 +56,15 @@ fn main() {
                 Ok(TurnOutcome::Completed { bag_hash, .. }) => {
                     println!("completed bag_hash={bag_hash}");
                     print_ledger(instance.ledger());
+                    write_ledger(ledger_out, instance.ledger());
                 }
                 Ok(TurnOutcome::Parked(p)) => {
                     println!("parked at {}", p.park_nid);
                     print_ledger(instance.ledger());
+                    write_ledger(ledger_out, instance.ledger());
                 }
                 Err(e) => {
+                    write_ledger(ledger_out, instance.ledger());
                     eprintln!("error {} — {}", e.code.code(), e.detail);
                     exit(1);
                 }
@@ -78,11 +82,17 @@ fn main() {
             let mut instance = Instance::new(program.clone(), &mut reg);
             match instance.start(bag) {
                 Ok(TurnOutcome::Completed { bag_hash, .. }) => {
-                    println!("{}", aelio_kernel::trace::render_string(&program, instance.ledger()));
+                    println!(
+                        "{}",
+                        aelio_kernel::trace::render_string(&program, instance.ledger())
+                    );
                     println!("completed bag_hash={bag_hash}");
                 }
                 Ok(TurnOutcome::Parked(p)) => {
-                    println!("{}", aelio_kernel::trace::render_string(&program, instance.ledger()));
+                    println!(
+                        "{}",
+                        aelio_kernel::trace::render_string(&program, instance.ledger())
+                    );
                     println!("parked at {}", p.park_nid);
                 }
                 Err(e) => {
@@ -92,33 +102,16 @@ fn main() {
             }
         }
         "replay" => {
-            // Minimal demo: re-run a pure plan twice and assert bag_hash identity (G2 property).
             let plan_path = flag(&args, "--plan").expect("--plan");
+            let ledger_path = flag(&args, "--ledger").expect("--ledger");
             let bag_path = flag(&args, "--bag");
             let text = fs::read_to_string(plan_path).unwrap();
             let program = compile(&text).expect("plan");
             let bag = load_bag(bag_path);
-            let mut reg = Registry::default();
-            // Register no-op targets if plan has Calls — pure plans need none.
-            let _ = EffectClass::Pure;
-            let mut inst = Instance::new(program.clone(), &mut reg);
-            let (h1, ledger) = match inst.start(bag.clone()) {
-                Ok(TurnOutcome::Completed { bag_hash, .. }) => (bag_hash, inst.ledger().clone()),
-                Ok(TurnOutcome::Parked(_)) => {
-                    eprintln!("replay demo requires a non-parking plan (use login golden for parks)");
-                    exit(1);
-                }
-                Err(e) => {
-                    eprintln!("{} — {}", e.code.code(), e.detail);
-                    exit(1);
-                }
-            };
-            let h2 = replay(&program, &ledger, bag).expect("replay");
-            if h1 != h2 {
-                eprintln!("DIVERGENCE bag_hash live={h1} replay={h2}");
-                exit(1);
-            }
-            println!("replay bit-identical bag_hash={h1}");
+            let ledger_text = fs::read_to_string(ledger_path).expect("read --ledger");
+            let ledger = Ledger::from_json_str(&ledger_text).expect("valid ledger");
+            let bag_hash = replay(&program, &ledger, bag).expect("replay");
+            println!("replay bit-identical bag_hash={bag_hash}");
             println!("ledger_entries={}", ledger.entries().len());
             ledger.verify_chain().expect("chain");
             println!("ledger_chain=ok");
@@ -155,5 +148,12 @@ fn print_ledger(ledger: &Ledger) {
             e.kind,
             e.nid.as_deref().unwrap_or("-")
         );
+    }
+}
+
+fn write_ledger(path: Option<&str>, ledger: &Ledger) {
+    if let Some(path) = path {
+        let json = ledger.to_json_pretty().expect("serialize ledger");
+        fs::write(path, json).expect("write --ledger-out");
     }
 }

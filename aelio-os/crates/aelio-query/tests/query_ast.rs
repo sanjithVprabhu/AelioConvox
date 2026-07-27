@@ -31,7 +31,10 @@ fn traverse_requires_depth_and_nodes() {
         "limit": 10
     }))
     .unwrap_err();
-    assert!(err.contains("max_depth") || err.contains("max_nodes"), "{err}");
+    assert!(
+        err.contains("max_depth") || err.contains("max_nodes"),
+        "{err}"
+    );
 
     let q = parse_query(&serde_json::json!({
         "dataset": "graph",
@@ -63,7 +66,10 @@ fn tenant_isolation_on_dataset_lookup() {
     }))
     .unwrap();
     assert!(check_admissible(&reg, "t1", &q).is_ok());
-    assert!(check_admissible(&reg, "t2", &q).is_err(), "no cross-tenant fallback");
+    assert!(
+        check_admissible(&reg, "t2", &q).is_err(),
+        "no cross-tenant fallback"
+    );
     let bad = parse_query(&serde_json::json!({
         "dataset": "clients",
         "qop": "topk_bm25",
@@ -72,6 +78,38 @@ fn tenant_isolation_on_dataset_lookup() {
     }))
     .unwrap();
     assert!(check_admissible(&reg, "t1", &bad).is_err());
+}
+
+#[test]
+fn query_schema_is_closed_and_bounds_are_hard_capped() {
+    assert!(parse_query(&serde_json::json!({
+        "dataset": "clients",
+        "qop": "get",
+        "limit": 10,
+        "query_text": "select *"
+    }))
+    .is_err());
+    assert!(parse_query(&serde_json::json!({
+        "dataset": "clients",
+        "qop": "get",
+        "limit": 10,
+        "max_depth": 2
+    }))
+    .is_err());
+    assert!(parse_query(&serde_json::json!({
+        "dataset": "clients",
+        "qop": "get",
+        "limit": 10_001
+    }))
+    .is_err());
+    assert!(parse_query(&serde_json::json!({
+        "dataset": "graph",
+        "qop": "traverse",
+        "limit": 10,
+        "max_depth": 33,
+        "max_nodes": 100
+    }))
+    .is_err());
 }
 
 #[test]

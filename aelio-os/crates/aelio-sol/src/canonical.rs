@@ -75,12 +75,15 @@ fn itoa_i64(i: i64) -> String {
 /// byte-identical to an integer (§4.3 int/float distinction). `-0.0` is already `0.0` at
 /// construction.
 fn write_float(f: f64, out: &mut Vec<u8>) {
-    debug_assert!(f.is_finite(), "non-finite float reached canonicalization (§4.3 invariant)");
+    debug_assert!(
+        f.is_finite(),
+        "non-finite float reached canonicalization (§4.3 invariant)"
+    );
     let mut buf = ryu::Buffer::new();
     let s = buf.format_finite(f); // shortest round-trip; ryu emits "2.0", "0.0", "1e20", etc.
-    // ryu always emits a `.` or an exponent for floats (never a bare integer like "2"), so the
-    // int/float distinction holds. Guard defensively anyway: if neither a '.' nor 'e' is present,
-    // append ".0" to keep the "always a decimal point" invariant absolute.
+                                  // ryu always emits a `.` or an exponent for floats (never a bare integer like "2"), so the
+                                  // int/float distinction holds. Guard defensively anyway: if neither a '.' nor 'e' is present,
+                                  // append ".0" to keep the "always a decimal point" invariant absolute.
     if s.bytes().any(|b| b == b'.' || b == b'e' || b == b'E') {
         out.extend_from_slice(s.as_bytes());
     } else {

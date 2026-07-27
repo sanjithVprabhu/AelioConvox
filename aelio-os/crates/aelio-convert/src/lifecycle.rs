@@ -21,7 +21,9 @@ pub enum Trigger {
     StructuralFail,
     /// distinct_inputs ≥ 20 ∧ validation_rate ≥ 0.95 (§16.4). `approved` = reviewed-tier deployer
     /// approval; auto tier passes `true` trivially.
-    ShadowThresholdsMet { approved: bool },
+    ShadowThresholdsMet {
+        approved: bool,
+    },
     /// distinct canary inputs ≥ 20 ∧ downstream_success ≥ 0.98 ∧ zero attributed Guard.Violation.
     CanaryThresholdsMet,
     /// Attributed failure > 2% trailing ∨ any attributed Guard.Violation (§16.4).
@@ -56,7 +58,9 @@ pub fn transition(from: Status, trigger: Trigger) -> Result<Status, &'static str
         // kernel bump: promoted → canary (canary-all)
         (Promoted, KernelBump) => Canary,
         // retirement
-        (Proposed | Shadow | Canary | Promoted, RetireManual | ThreeDemotions | UnusedWindow) => Retired,
+        (Proposed | Shadow | Canary | Promoted, RetireManual | ThreeDemotions | UnusedWindow) => {
+            Retired
+        }
         // revival
         (Retired, StructuralPass) => Shadow,
         _ => return Err("illegal transition (App K)"),

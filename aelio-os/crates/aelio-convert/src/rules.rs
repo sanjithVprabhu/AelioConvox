@@ -24,19 +24,49 @@ pub struct RuleFail {
 /// cold-path proposer can only ever emit these.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Rule {
-    Rename { from: Path, to: Path },
-    Drop { path: Path },
-    Keep { paths: Vec<Path> },
+    Rename {
+        from: Path,
+        to: Path,
+    },
+    Drop {
+        path: Path,
+    },
+    Keep {
+        paths: Vec<Path>,
+    },
     /// Fabricating (§14): writes `v` iff `path` absent.
-    Default { path: Path, v: SolValue },
-    Cast { path: Path, to: String, mode: Option<String> },
-    Wrap { path: Path, key: String },
-    Unwrap { path: Path },
-    MapEnum { path: Path, table: BTreeMap<String, SolValue> },
-    PathCopy { from: Path, to: Path },
+    Default {
+        path: Path,
+        v: SolValue,
+    },
+    Cast {
+        path: Path,
+        to: String,
+        mode: Option<String>,
+    },
+    Wrap {
+        path: Path,
+        key: String,
+    },
+    Unwrap {
+        path: Path,
+    },
+    MapEnum {
+        path: Path,
+        table: BTreeMap<String, SolValue>,
+    },
+    PathCopy {
+        from: Path,
+        to: Path,
+    },
     /// Fabricating (§14): unconditional write.
-    ConstSet { path: Path, v: SolValue },
-    Trim { path: Path },
+    ConstSet {
+        path: Path,
+        v: SolValue,
+    },
+    Trim {
+        path: Path,
+    },
 }
 
 impl Rule {
@@ -66,15 +96,24 @@ fn parse_rule(j: &J) -> Result<Rule, String> {
     let o = j.as_object().ok_or("rule must be an object")?;
     let op = o.get("op").and_then(J::as_str).ok_or("rule missing `op`")?;
     let path = |k: &str| -> Result<Path, String> {
-        Path::parse(o.get(k).and_then(J::as_str).ok_or(format!("rule missing path `{k}`"))?)
-            .map_err(|e| format!("{k}: {e}"))
+        Path::parse(
+            o.get(k)
+                .and_then(J::as_str)
+                .ok_or(format!("rule missing path `{k}`"))?,
+        )
+        .map_err(|e| format!("{k}: {e}"))
     };
     let sol = |k: &str| -> Result<SolValue, String> {
         json_to_sol(o.get(k).ok_or(format!("missing `{k}`"))?)
     };
     Ok(match op {
-        "rename" => Rule::Rename { from: path("from")?, to: path("to")? },
-        "drop" => Rule::Drop { path: path("path")? },
+        "rename" => Rule::Rename {
+            from: path("from")?,
+            to: path("to")?,
+        },
+        "drop" => Rule::Drop {
+            path: path("path")?,
+        },
         "keep" => Rule::Keep {
             paths: o
                 .get("paths")
@@ -84,14 +123,26 @@ fn parse_rule(j: &J) -> Result<Rule, String> {
                 .map(|p| Path::parse(p.as_str().ok_or("path string")?).map_err(|e| e.to_string()))
                 .collect::<Result<_, _>>()?,
         },
-        "default" => Rule::Default { path: path("path")?, v: sol("v")? },
+        "default" => Rule::Default {
+            path: path("path")?,
+            v: sol("v")?,
+        },
         "cast" => Rule::Cast {
             path: path("path")?,
-            to: o.get("to").and_then(J::as_str).ok_or("cast.to")?.to_string(),
+            to: o
+                .get("to")
+                .and_then(J::as_str)
+                .ok_or("cast.to")?
+                .to_string(),
             mode: o.get("mode").and_then(J::as_str).map(str::to_string),
         },
-        "wrap" => Rule::Wrap { path: path("path")?, key: o.get("key").and_then(J::as_str).ok_or("wrap.key")?.into() },
-        "unwrap" => Rule::Unwrap { path: path("path")? },
+        "wrap" => Rule::Wrap {
+            path: path("path")?,
+            key: o.get("key").and_then(J::as_str).ok_or("wrap.key")?.into(),
+        },
+        "unwrap" => Rule::Unwrap {
+            path: path("path")?,
+        },
         "map_enum" => Rule::MapEnum {
             path: path("path")?,
             table: o
@@ -102,9 +153,17 @@ fn parse_rule(j: &J) -> Result<Rule, String> {
                 .map(|(k, v)| Ok::<_, String>((k.clone(), json_to_sol(v)?)))
                 .collect::<Result<_, _>>()?,
         },
-        "path_copy" => Rule::PathCopy { from: path("from")?, to: path("to")? },
-        "const_set" => Rule::ConstSet { path: path("path")?, v: sol("v")? },
-        "trim" => Rule::Trim { path: path("path")? },
+        "path_copy" => Rule::PathCopy {
+            from: path("from")?,
+            to: path("to")?,
+        },
+        "const_set" => Rule::ConstSet {
+            path: path("path")?,
+            v: sol("v")?,
+        },
+        "trim" => Rule::Trim {
+            path: path("path")?,
+        },
         other => return Err(format!("unknown rule op `{other}` — closed set (§14)")),
     })
 }
@@ -167,7 +226,9 @@ fn apply_one(rule: &Rule, work: &mut SolValue) -> Result<(), String> {
             let v = get(work, path).ok_or("trim: path absent")?;
             match v {
                 SolValue::Str(s) => {
-                    let trimmed = s.trim_matches(|c: char| c.is_ascii_whitespace()).to_string();
+                    let trimmed = s
+                        .trim_matches(|c: char| c.is_ascii_whitespace())
+                        .to_string();
                     set(work, path, SolValue::Str(trimmed))
                 }
                 _ => Err("trim requires a string (§14)".into()),
@@ -222,7 +283,9 @@ fn cast(v: &SolValue, to: &str, mode: Option<&str>) -> Result<SolValue, String> 
         (Bool(b), "str") => Ok(Str(if *b { "true".into() } else { "false".into() })),
         // CHECKED from str
         (Str(s), "int") => parse_strict_int(s).map(Int),
-        (Str(s), "float") => parse_strict_float(s).and_then(|f| SolValue::float(f).map_err(|_| "non-finite".into())),
+        (Str(s), "float") => {
+            parse_strict_float(s).and_then(|f| SolValue::float(f).map_err(|_| "non-finite".into()))
+        }
         (Str(s), "bool") => match s.as_str() {
             "true" => Ok(Bool(true)),
             "false" => Ok(Bool(false)),
@@ -254,7 +317,10 @@ fn cast(v: &SolValue, to: &str, mode: Option<&str>) -> Result<SolValue, String> 
             }
         }
         // FORBIDDEN
-        _ => Err(format!("forbidden cast {}→{to} (§5.2) — use map_enum/default/wrap", v.type_tag().signature())),
+        _ => Err(format!(
+            "forbidden cast {}→{to} (§5.2) — use map_enum/default/wrap",
+            v.type_tag().signature()
+        )),
     }
 }
 
@@ -275,7 +341,10 @@ fn parse_strict_int(s: &str) -> Result<i64, String> {
 }
 
 fn parse_strict_float(s: &str) -> Result<f64, String> {
-    if s.chars().any(|c| c.is_whitespace() || c == '_') || s.eq_ignore_ascii_case("nan") || s.to_ascii_lowercase().contains("inf") {
+    if s.chars().any(|c| c.is_whitespace() || c == '_')
+        || s.eq_ignore_ascii_case("nan")
+        || s.to_ascii_lowercase().contains("inf")
+    {
         return Err("str→float: no whitespace/underscore/nan/inf (§5.2)".into());
     }
     s.parse::<f64>().map_err(|_| "str→float parse".into())

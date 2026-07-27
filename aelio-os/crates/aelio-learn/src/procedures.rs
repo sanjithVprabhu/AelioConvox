@@ -48,7 +48,12 @@ pub struct MiningParams {
 
 impl Default for MiningParams {
     fn default() -> Self {
-        MiningParams { window_days: 30, min_occurrences: 5, min_len: 2, max_len: 6 }
+        MiningParams {
+            window_days: 30,
+            min_occurrences: 5,
+            min_len: 2,
+            max_len: 6,
+        }
     }
 }
 
@@ -56,7 +61,8 @@ impl Default for MiningParams {
 /// candidates meeting the occurrence threshold, longest-and-most-frequent first.
 pub fn mine(traces: &[FlowTrace], params: &MiningParams, now_day: u32) -> Vec<ProcedureCandidate> {
     // signature → (total occurrences, set of flow indices it appeared in)
-    let mut counts: BTreeMap<Vec<TraceStep>, (u64, std::collections::BTreeSet<usize>)> = BTreeMap::new();
+    let mut counts: BTreeMap<Vec<TraceStep>, (u64, std::collections::BTreeSet<usize>)> =
+        BTreeMap::new();
 
     for (flow_idx, trace) in traces.iter().enumerate() {
         if !trace.success {

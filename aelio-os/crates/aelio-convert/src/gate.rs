@@ -51,15 +51,24 @@ impl Digest {
         I: IntoIterator<Item = (K, &'static str)>,
         K: Into<String>,
     {
-        Digest { required: pairs.into_iter().map(|(k, t)| (k.into(), t.to_string())).collect() }
+        Digest {
+            required: pairs
+                .into_iter()
+                .map(|(k, t)| (k.into(), t.to_string()))
+                .collect(),
+        }
     }
 
     /// Does a produced Sol satisfy the consumer digest (all required keys present with the right
     /// fundamental type)?
     pub fn satisfied_by(&self, sol: &SolValue) -> bool {
-        let Some(map) = sol.as_map() else { return false };
+        let Some(map) = sol.as_map() else {
+            return false;
+        };
         self.required.iter().all(|(k, ty)| {
-            map.get(k).map(|v| v.type_tag().signature() == ty).unwrap_or(false)
+            map.get(k)
+                .map(|v| v.type_tag().signature() == ty)
+                .unwrap_or(false)
         })
     }
 }
@@ -136,8 +145,16 @@ where
     }
     let distinct = by_input.len() as u64;
     let agreed = by_input.values().filter(|v| **v).count() as u64;
-    let rate = if distinct == 0 { 0.0 } else { agreed as f64 / distinct as f64 };
-    Evidence { shadow_distinct: distinct, shadow_validation_rate: rate, ..Default::default() }
+    let rate = if distinct == 0 {
+        0.0
+    } else {
+        agreed as f64 / distinct as f64
+    };
+    Evidence {
+        shadow_distinct: distinct,
+        shadow_validation_rate: rate,
+        ..Default::default()
+    }
 }
 
 pub fn shadow_to_canary(ev: &Evidence, th: &Thresholds) -> bool {

@@ -12,7 +12,8 @@ fn call(nid: &str, into: &str, args_reads: &[&str]) -> aelio_kernel::Node {
         .map(|(i, p)| format!(r#""a{i}":{{"pull":"{p}"}}"#))
         .collect::<Vec<_>>()
         .join(",");
-    let json = format!(r#"{{"nid":"{nid}","op":"Call","id":"t@1","args":{{{args}}},"into":"{into}"}}"#);
+    let json =
+        format!(r#"{{"nid":"{nid}","op":"Call","id":"t@1","args":{{{args}}},"into":"{into}"}}"#);
     compile(&json).expect("compiles")
 }
 
@@ -37,7 +38,10 @@ fn write_read_conflict_forbids_sharing() {
     // a writes shared.v; b reads shared.v ⇒ W_a ∩ R_b ≠ ∅.
     let a = call("a", "shared.v", &["in.x"]);
     let b = call("b", "out.b", &["shared.v"]);
-    assert!(!can_share_wave(&a, &b), "write→read dependency ⇒ not shareable");
+    assert!(
+        !can_share_wave(&a, &b),
+        "write→read dependency ⇒ not shareable"
+    );
 }
 
 #[test]
@@ -45,7 +49,10 @@ fn prefix_aware_conflict_is_detected() {
     // a writes P=shared; b reads P.child=shared.v. A write to P covers all descendants (§6.2).
     let a = call("a", "shared", &["in.x"]);
     let b = call("b", "out.b", &["shared.v"]);
-    assert!(!can_share_wave(&a, &b), "prefix-aware: write to P covers P.* (§6.2)");
+    assert!(
+        !can_share_wave(&a, &b),
+        "prefix-aware: write to P covers P.* (§6.2)"
+    );
 }
 
 #[test]

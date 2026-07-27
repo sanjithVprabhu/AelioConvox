@@ -12,7 +12,10 @@ pub struct ComputeErr {
 }
 
 fn type_err(detail: impl Into<String>) -> ComputeErr {
-    ComputeErr { code: ReasonCode::Type, detail: detail.into() }
+    ComputeErr {
+        code: ReasonCode::Type,
+        detail: detail.into(),
+    }
 }
 
 type R = Result<SolValue, ComputeErr>;
@@ -27,14 +30,20 @@ pub fn apply(op: &str, args: &[SolValue]) -> R {
         "mul" => num_bin(op, args, i64::checked_mul, |a, b| a * b),
         "div" => match two(op, args)? {
             (Int(_), Int(0)) => Err(type_err("division by zero (§9)")),
-            (Int(a), Int(b)) => Ok(Int(a.checked_div(*b).ok_or_else(|| type_err("overflow"))?)),
+            (Int(a), Int(b)) => Ok(Int(a
+                .checked_div(*b)
+                .ok_or_else(|| type_err("overflow"))?)),
             (Float(_), Float(b)) if *b == 0.0 => Err(type_err("division by zero (§9)")),
-            (Float(a), Float(b)) => SolValue::float(a / b).map_err(|_| type_err("non-finite result")),
+            (Float(a), Float(b)) => {
+                SolValue::float(a / b).map_err(|_| type_err("non-finite result"))
+            }
             _ => Err(type_err("div requires two ints or two floats (§9)")),
         },
         "mod" => match two(op, args)? {
             (Int(_), Int(0)) => Err(type_err("mod by zero (§9)")),
-            (Int(a), Int(b)) => Ok(Int(a.checked_rem(*b).ok_or_else(|| type_err("overflow"))?)),
+            (Int(a), Int(b)) => Ok(Int(a
+                .checked_rem(*b)
+                .ok_or_else(|| type_err("overflow"))?)),
             _ => Err(type_err("mod requires two ints (§9)")),
         },
         "abs" => match one(op, args)? {
@@ -82,7 +91,9 @@ pub fn apply(op: &str, args: &[SolValue]) -> R {
         // ── structure (§9, §4.2.2) ──
         "merge" => match (args.first(), args.get(1), args.get(2)) {
             (Some(Map(l)), Some(Map(r)), Some(Str(policy))) => merge_maps(l, r, policy),
-            _ => Err(type_err("merge(left:map, right:map, on_conflict:str) (§4.2.2)")),
+            _ => Err(type_err(
+                "merge(left:map, right:map, on_conflict:str) (§4.2.2)",
+            )),
         },
         "drop" => {
             let (m, keys) = map_and_keys(op, args)?;
@@ -94,7 +105,11 @@ pub fn apply(op: &str, args: &[SolValue]) -> R {
         }
         "keep" => {
             let (m, keys) = map_and_keys(op, args)?;
-            let out = m.iter().filter(|(k, _)| keys.contains(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+            let out = m
+                .iter()
+                .filter(|(k, _)| keys.contains(*k))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             Ok(Map(out))
         }
         "path_copy" => match (args.first(), args.get(1), args.get(2)) {
@@ -107,17 +122,36 @@ pub fn apply(op: &str, args: &[SolValue]) -> R {
         "count" => Ok(Int(list_arg(op, args, 0)?.len() as i64)),
         "list_contains" => {
             let l = list_arg(op, args, 0)?;
-            let item = args.get(1).ok_or_else(|| type_err("list_contains(list, item)"))?;
+            let item = args
+                .get(1)
+                .ok_or_else(|| type_err("list_contains(list, item)"))?;
             Ok(Bool(l.iter().any(|x| x == item)))
         }
-        "first" => list_arg(op, args, 0)?.first().cloned().ok_or_else(|| ComputeErr { code: ReasonCode::Missing, detail: "first: empty list (§9)".into() }),
-        "last" => list_arg(op, args, 0)?.last().cloned().ok_or_else(|| ComputeErr { code: ReasonCode::Missing, detail: "last: empty list (§9)".into() }),
+        "first" => list_arg(op, args, 0)?
+            .first()
+            .cloned()
+            .ok_or_else(|| ComputeErr {
+                code: ReasonCode::Missing,
+                detail: "first: empty list (§9)".into(),
+            }),
+        "last" => list_arg(op, args, 0)?
+            .last()
+            .cloned()
+            .ok_or_else(|| ComputeErr {
+                code: ReasonCode::Missing,
+                detail: "last: empty list (§9)".into(),
+            }),
         "append" => {
             let l = list_arg(op, args, 0)?;
-            let item = args.get(1).ok_or_else(|| type_err("append(list, item, max_items)"))?;
+            let item = args
+                .get(1)
+                .ok_or_else(|| type_err("append(list, item, max_items)"))?;
             let max = int_arg(op, args, 2)?;
             if (l.len() as i64) + 1 > max {
-                return Err(ComputeErr { code: ReasonCode::BudgetSize, detail: format!("append exceeds max_items={max} (§9)") });
+                return Err(ComputeErr {
+                    code: ReasonCode::BudgetSize,
+                    detail: format!("append exceeds max_items={max} (§9)"),
+                });
             }
             let mut out = l.to_vec();
             out.push(item.clone());
@@ -129,10 +163,16 @@ pub fn apply(op: &str, args: &[SolValue]) -> R {
             let end = int_arg(op, args, 2)?;
             let max = int_arg(op, args, 3)?;
             if start < 0 || end < start || end > l.len() as i64 {
-                return Err(type_err(format!("slice bounds out of range: start={start} end={end} len={} (§9)", l.len())));
+                return Err(type_err(format!(
+                    "slice bounds out of range: start={start} end={end} len={} (§9)",
+                    l.len()
+                )));
             }
             if end - start > max {
-                return Err(ComputeErr { code: ReasonCode::BudgetSize, detail: format!("slice exceeds max_items={max} (§9)") });
+                return Err(ComputeErr {
+                    code: ReasonCode::BudgetSize,
+                    detail: format!("slice exceeds max_items={max} (§9)"),
+                });
             }
             Ok(List(l[start as usize..end as usize].to_vec()))
         }
@@ -146,12 +186,16 @@ pub fn apply(op: &str, args: &[SolValue]) -> R {
         // ── hash ──
         "blake3" => Ok(Str(aelio_sol::value_hash(one(op, args)?))),
 
-        other => Err(ComputeErr { code: ReasonCode::Shape, detail: format!("unknown compute op `{other}`") }),
+        other => Err(ComputeErr {
+            code: ReasonCode::Shape,
+            detail: format!("unknown compute op `{other}`"),
+        }),
     }
 }
 
 fn one<'a>(op: &str, args: &'a [SolValue]) -> Result<&'a SolValue, ComputeErr> {
-    args.first().ok_or_else(|| type_err(format!("{op} needs 1 arg")))
+    args.first()
+        .ok_or_else(|| type_err(format!("{op} needs 1 arg")))
 }
 fn two<'a>(op: &str, args: &'a [SolValue]) -> Result<(&'a SolValue, &'a SolValue), ComputeErr> {
     match (args.first(), args.get(1)) {
@@ -181,10 +225,17 @@ fn int_arg(op: &str, args: &[SolValue], i: usize) -> Result<i64, ComputeErr> {
 }
 
 /// (map, keys) where `keys` is a single Str or a List of Str — for `drop`/`keep`.
-fn map_and_keys(op: &str, args: &[SolValue]) -> Result<(std::collections::BTreeMap<String, SolValue>, Vec<String>), ComputeErr> {
+fn map_and_keys(
+    op: &str,
+    args: &[SolValue],
+) -> Result<(std::collections::BTreeMap<String, SolValue>, Vec<String>), ComputeErr> {
     let m = match args.first() {
         Some(SolValue::Map(m)) => m.clone(),
-        _ => return Err(type_err(format!("{op}(map, keys) — first arg must be a map (§9)"))),
+        _ => {
+            return Err(type_err(format!(
+                "{op}(map, keys) — first arg must be a map (§9)"
+            )))
+        }
     };
     let keys = match args.get(1) {
         Some(SolValue::Str(k)) => vec![k.clone()],
@@ -195,7 +246,11 @@ fn map_and_keys(op: &str, args: &[SolValue]) -> Result<(std::collections::BTreeM
                 _ => Err(type_err(format!("{op} keys must be strings (§9)"))),
             })
             .collect::<Result<Vec<_>, _>>()?,
-        _ => return Err(type_err(format!("{op}(map, keys) — keys must be a string or list of strings (§9)"))),
+        _ => {
+            return Err(type_err(format!(
+                "{op}(map, keys) — keys must be a string or list of strings (§9)"
+            )))
+        }
     };
     Ok((m, keys))
 }
@@ -210,12 +265,21 @@ fn merge_maps(
     for (k, v) in r {
         if out.contains_key(k) {
             match policy {
-                "error" => return Err(ComputeErr { code: ReasonCode::Shape, detail: format!("merge key conflict `{k}` (on_conflict=error, §4.2.2)") }),
+                "error" => {
+                    return Err(ComputeErr {
+                        code: ReasonCode::Shape,
+                        detail: format!("merge key conflict `{k}` (on_conflict=error, §4.2.2)"),
+                    })
+                }
                 "left" => {} // keep left
                 "right" => {
                     out.insert(k.clone(), v.clone());
                 }
-                other => return Err(type_err(format!("merge on_conflict must be error|left|right, got `{other}` (§4.2.2)"))),
+                other => {
+                    return Err(type_err(format!(
+                        "merge on_conflict must be error|left|right, got `{other}` (§4.2.2)"
+                    )))
+                }
             }
         } else {
             out.insert(k.clone(), v.clone());
@@ -231,7 +295,10 @@ fn path_copy(container: &SolValue, from: &str, to: &str) -> R {
         _ => return Err(type_err("path_copy container must be a map (§9)")),
     };
     let val = get_path(&SolValue::Map(root.clone()), from)
-        .ok_or_else(|| ComputeErr { code: ReasonCode::Missing, detail: format!("path_copy: `{from}` not present (§9)") })?
+        .ok_or_else(|| ComputeErr {
+            code: ReasonCode::Missing,
+            detail: format!("path_copy: `{from}` not present (§9)"),
+        })?
         .clone();
     let mut out = SolValue::Map(root);
     set_path(&mut out, to, val)?;
@@ -254,7 +321,9 @@ fn set_path(v: &mut SolValue, path: &str, val: SolValue) -> Result<(), ComputeEr
             SolValue::Map(m) => m,
             _ => return Err(type_err("path_copy: cannot descend into non-map (§9)")),
         };
-        cur = m.entry((*seg).to_string()).or_insert_with(|| SolValue::Map(Default::default()));
+        cur = m
+            .entry((*seg).to_string())
+            .or_insert_with(|| SolValue::Map(Default::default()));
     }
     match cur {
         SolValue::Map(m) => {
@@ -272,13 +341,15 @@ fn num_bin(
     floats: fn(f64, f64) -> f64,
 ) -> R {
     match two(op, args)? {
-        (SolValue::Int(a), SolValue::Int(b)) => {
-            Ok(SolValue::Int(ints(*a, *b).ok_or_else(|| type_err(format!("{op} overflow (§5)")))?))
-        }
+        (SolValue::Int(a), SolValue::Int(b)) => Ok(SolValue::Int(
+            ints(*a, *b).ok_or_else(|| type_err(format!("{op} overflow (§5)")))?,
+        )),
         (SolValue::Float(a), SolValue::Float(b)) => {
             SolValue::float(floats(*a, *b)).map_err(|_| type_err("non-finite result (§4.3)"))
         }
-        _ => Err(type_err(format!("{op} requires two ints or two floats; cast to mix (§9)"))),
+        _ => Err(type_err(format!(
+            "{op} requires two ints or two floats; cast to mix (§9)"
+        ))),
     }
 }
 
@@ -286,7 +357,9 @@ fn num_lt(a: &SolValue, b: &SolValue) -> Result<bool, ComputeErr> {
     match (a, b) {
         (SolValue::Int(x), SolValue::Int(y)) => Ok(x < y),
         (SolValue::Float(x), SolValue::Float(y)) => Ok(x < y),
-        _ => Err(type_err("ordered comparison requires two ints or two floats (§9)")),
+        _ => Err(type_err(
+            "ordered comparison requires two ints or two floats (§9)",
+        )),
     }
 }
 
@@ -294,7 +367,9 @@ fn num_lt(a: &SolValue, b: &SolValue) -> Result<bool, ComputeErr> {
 fn strict_eq(op: &str, args: &[SolValue]) -> Result<bool, ComputeErr> {
     let (a, b) = two(op, args)?;
     if a.type_tag() != b.type_tag() {
-        return Err(type_err("eq/ne is type-strict — cast to compare across types (§9)"));
+        return Err(type_err(
+            "eq/ne is type-strict — cast to compare across types (§9)",
+        ));
     }
     Ok(a == b)
 }

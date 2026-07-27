@@ -40,29 +40,66 @@ pub fn render_string(program: &Node, ledger: &Ledger) -> String {
 fn line(e: &Entry, writes: &BTreeMap<String, String>) -> TraceEntry {
     let payload = &e.payload;
     let summary = match e.kind.as_str() {
-        "turn_start" => format!("── turn start ({}) ──", field_str(payload, "trigger").unwrap_or_default()),
+        "turn_start" => format!(
+            "── turn start ({}) ──",
+            field_str(payload, "trigger").unwrap_or_default()
+        ),
         "turn_end" => match field_str(payload, "bag_hash") {
             Some(h) => format!("── turn end · bag_hash={} ──", short(&h)),
-            None => format!("── turn end ({}) ──", field_str(payload, "outcome").unwrap_or_default()),
+            None => format!(
+                "── turn end ({}) ──",
+                field_str(payload, "outcome").unwrap_or_default()
+            ),
         },
         "call_result" | "read_result" => {
-            let into = e.nid.as_deref().and_then(|n| writes.get(n)).cloned().unwrap_or_else(|| "?".into());
-            let out = field(payload, "output").map(summarize_value).unwrap_or_default();
+            let into = e
+                .nid
+                .as_deref()
+                .and_then(|n| writes.get(n))
+                .cloned()
+                .unwrap_or_else(|| "?".into());
+            let out = field(payload, "output")
+                .map(summarize_value)
+                .unwrap_or_default();
             format!("{into} := {out}")
         }
-        "call_intent" => format!("intent {}", field_str(payload, "target").unwrap_or_default()),
+        "call_intent" => format!(
+            "intent {}",
+            field_str(payload, "target").unwrap_or_default()
+        ),
         "resume" => {
-            let into = e.nid.as_deref().and_then(|n| writes.get(n)).cloned().unwrap_or_else(|| "?".into());
-            let wake = field(payload, "wake").map(summarize_value).unwrap_or_default();
+            let into = e
+                .nid
+                .as_deref()
+                .and_then(|n| writes.get(n))
+                .cloned()
+                .unwrap_or_else(|| "?".into());
+            let wake = field(payload, "wake")
+                .map(summarize_value)
+                .unwrap_or_default();
             format!("resume · {into} := {wake}")
         }
-        "park" => format!("parked at {}", field_str(payload, "park_nid").unwrap_or_default()),
+        "park" => format!(
+            "parked at {}",
+            field_str(payload, "park_nid").unwrap_or_default()
+        ),
         "once_intent" => "once: first execution claimed".into(),
         "once_result" => "once: recorded".into(),
-        "nondet_value" => format!("{} = {}", field_str(payload, "source").unwrap_or_default(), field(payload, "value").map(summarize_value).unwrap_or_default()),
+        "nondet_value" => format!(
+            "{} = {}",
+            field_str(payload, "source").unwrap_or_default(),
+            field(payload, "value")
+                .map(summarize_value)
+                .unwrap_or_default()
+        ),
         other => other.to_string(),
     };
-    TraceEntry { seq: e.seq, nid: e.nid.clone(), kind: e.kind.clone(), summary }
+    TraceEntry {
+        seq: e.seq,
+        nid: e.nid.clone(),
+        kind: e.kind.clone(),
+        summary,
+    }
 }
 
 /// Map every op nid to its declared write path string (the "into" of Call/Park/Map/Filter/Try).
@@ -74,7 +111,10 @@ fn nid_write_paths(program: &Node) -> BTreeMap<String, String> {
 
 fn collect(node: &Node, map: &mut BTreeMap<String, String>) {
     let into = match &node.kind {
-        Kind::Call { into, .. } | Kind::Map { into, .. } | Kind::Filter { into, .. } | Kind::Try { err_into: into, .. } => Some(into),
+        Kind::Call { into, .. }
+        | Kind::Map { into, .. }
+        | Kind::Filter { into, .. }
+        | Kind::Try { err_into: into, .. } => Some(into),
         Kind::Park { into: Some(p), .. } => Some(p),
         Kind::Tee { side_root, .. } => Some(side_root),
         _ => None,
@@ -104,7 +144,12 @@ fn children(node: &Node) -> Vec<&Node> {
             }
             v
         }
-        Kind::Try { body, catch, finally, .. } => {
+        Kind::Try {
+            body,
+            catch,
+            finally,
+            ..
+        } => {
             let mut v = vec![body.as_ref()];
             v.extend(catch.iter().map(|(_, n)| n));
             if let Some(f) = finally {

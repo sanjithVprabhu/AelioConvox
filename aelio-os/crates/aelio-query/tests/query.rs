@@ -9,7 +9,10 @@ fn q(text: &str) -> serde_json::Value {
 
 #[test]
 fn limit_is_mandatory_and_positive() {
-    assert!(parse_query(&q(r#"{"dataset":"clients","qop":"get","params":{},"limit":10}"#)).is_ok());
+    assert!(parse_query(&q(
+        r#"{"dataset":"clients","qop":"get","params":{},"limit":10}"#
+    ))
+    .is_ok());
     // Missing limit ⇒ reject (§10.4 → G1).
     assert!(parse_query(&q(r#"{"dataset":"clients","qop":"get","params":{}}"#)).is_err());
     // Zero limit ⇒ reject.
@@ -18,11 +21,17 @@ fn limit_is_mandatory_and_positive() {
 
 #[test]
 fn traverse_requires_max_depth_and_max_nodes() {
-    let ok = parse_query(&q(r#"{"dataset":"graph","qop":"traverse","limit":50,"max_depth":3,"max_nodes":500}"#)).unwrap();
+    let ok = parse_query(&q(
+        r#"{"dataset":"graph","qop":"traverse","limit":50,"max_depth":3,"max_nodes":500}"#,
+    ))
+    .unwrap();
     assert_eq!(ok.qop, QOp::Traverse);
     assert_eq!(ok.max_depth, Some(3));
     // Missing max_nodes ⇒ reject.
-    assert!(parse_query(&q(r#"{"dataset":"graph","qop":"traverse","limit":50,"max_depth":3}"#)).is_err());
+    assert!(parse_query(&q(
+        r#"{"dataset":"graph","qop":"traverse","limit":50,"max_depth":3}"#
+    ))
+    .is_err());
 }
 
 #[test]
@@ -34,8 +43,17 @@ fn unknown_qop_is_rejected_no_text_surface() {
 #[test]
 fn dataset_admissibility_is_tenant_scoped() {
     let mut reg = DatasetRegistry::default();
-    reg.declare("tenant-a", Dataset { id: "clients".into(), modalities: vec![QOp::Get, QOp::TopkVector] });
-    let query = parse_query(&q(r#"{"dataset":"clients","qop":"topk_vector","params":{},"limit":10}"#)).unwrap();
+    reg.declare(
+        "tenant-a",
+        Dataset {
+            id: "clients".into(),
+            modalities: vec![QOp::Get, QOp::TopkVector],
+        },
+    );
+    let query = parse_query(&q(
+        r#"{"dataset":"clients","qop":"topk_vector","params":{},"limit":10}"#,
+    ))
+    .unwrap();
 
     // Declared for tenant-a with the right modality → admissible.
     assert!(check_admissible(&reg, "tenant-a", &query).is_ok());

@@ -28,8 +28,34 @@ pub struct Suspend {
 pub enum Frame {
     Seq(usize),
     Branch(bool),
-    /// Generic single-body wrapper (Guard/Let/Budget/Timeout/Once/Try.body).
+    /// Generic single-body wrapper (Guard/Budget/Timeout/Tee).
     Body,
+    /// Lexical values that must be restored when a resumed Let body exits.
+    Let(Vec<(String, Option<SolValue>)>),
+    /// Number of fully completed iterations before the currently suspended iteration.
+    Loop(u64),
+    TryBody,
+    TryHandler(usize),
+    TryFinally(Option<ErrV1>),
+    Fallback {
+        step_index: usize,
+        prior_errors: Vec<ErrV1>,
+    },
+    Budget {
+        used_calls: u64,
+        used_tokens: u64,
+        used_ms: u64,
+    },
+    Timeout {
+        used_ms: u64,
+    },
+    /// Parent state retained while a Map child is the active continuation bag.
+    Map {
+        element_index: usize,
+        collected: Vec<SolValue>,
+        parent_bag: SolValue,
+        parent_scope: SolValue,
+    },
 }
 
 /// What the executor exposes to a driver.
@@ -71,24 +97,71 @@ pub trait Backend {
     /// L0-C ledgered nondeterminism (§9): live generates + records a `nondet_value` INJECT entry;
     /// replay injects the recorded value (§12.3). `source` ∈ {now, uuid, random}. Default: unsupported.
     fn nondet(&mut self, nid: &str, source: &str) -> Result<SolValue, ErrV1> {
-        Err(ErrV1::new(ReasonCode::Shape, nid, format!("nondeterministic `{source}` unsupported by this backend (§9)")))
+        Err(ErrV1::new(
+            ReasonCode::Shape,
+            nid,
+            format!("nondeterministic `{source}` unsupported by this backend (§9)"),
+        ))
     }
 
     /// Registered validator dispatch for `matches_format` (§5.4). Ledgered (`validate_result`) so
     /// replay stays a pure function of the ledger. Default: unsupported.
-    fn validate(&mut self, nid: &str, validator_id: &str, _value: &SolValue) -> Result<bool, ErrV1> {
-        Err(ErrV1::new(ReasonCode::Shape, nid, format!("validator `{validator_id}` unsupported by this backend (§5.4)")))
+    fn validate(
+        &mut self,
+        nid: &str,
+        validator_id: &str,
+        _value: &SolValue,
+    ) -> Result<bool, ErrV1> {
+        Err(ErrV1::new(
+            ReasonCode::Shape,
+            nid,
+            format!("validator `{validator_id}` unsupported by this backend (§5.4)"),
+        ))
     }
+
+    /// Append a non-control-flow report such as `side_failed` or `finally_failed`.
+    fn report(&mut self, _nid: &str, _kind: &str, _payload: SolValue) -> Result<(), ErrV1> {
+        Ok(())
+    }
+
+    /// Wall-clock trips are nondeterministic: live records the decision; replay consumes it.
+    fn time_exceeded(
+        &mut self,
+        _nid: &str,
+        _kind: &str,
+        _meter: &str,
+        limit: u64,
+        observed: u64,
+    ) -> Result<bool, ErrV1> {
+        Ok(observed > limit)
+    }
+}
+
+#[derive(Debug)]
+struct ActiveBudget {
+    nid: String,
+    calls: Option<u64>,
+    used_calls: u64,
+    used_tokens: u64,
+    used_ms: u64,
 }
 
 pub struct Executor<'b, B: Backend> {
     bag: SolValue,
+    /// Read-only projections visible in the current Map child but never collected into its output.
+    scope: SolValue,
+    active_budgets: Vec<ActiveBudget>,
     backend: &'b mut B,
 }
 
 impl<'b, B: Backend> Executor<'b, B> {
     pub fn new(initial_bag: SolValue, backend: &'b mut B) -> Self {
-        Executor { bag: initial_bag, backend }
+        Executor {
+            bag: initial_bag,
+            scope: SolValue::map::<_, &str>([]),
+            active_budgets: Vec::new(),
+            backend,
+        }
     }
 
     /// Run a fresh turn (empty resume cursor).
@@ -103,10 +176,19 @@ impl<'b, B: Backend> Executor<'b, B> {
         self.finish(program, &mut cursor)
     }
 
+    pub fn bag(&self) -> &SolValue {
+        &self.bag
+    }
+
     fn finish(&mut self, program: &Node, cursor: &mut VecDeque<Frame>) -> Result<Outcome, ErrV1> {
         match self.exec(program, cursor)? {
-            Flow::Done => Ok(Outcome::Completed { bag: self.bag.clone() }),
-            Flow::Suspend(s) => Ok(Outcome::Parked { suspension: s, bag: self.bag.clone() }),
+            Flow::Done => Ok(Outcome::Completed {
+                bag: self.bag.clone(),
+            }),
+            Flow::Suspend(s) => Ok(Outcome::Parked {
+                suspension: s,
+                bag: self.bag.clone(),
+            }),
         }
     }
 
@@ -138,15 +220,20 @@ impl<'b, B: Backend> Executor<'b, B> {
 
             Kind::Let { bindings, body } => {
                 // Lexical scope (§4.2.7): save shadowed keys, bind, run body, unwind.
-                let resuming = matches!(cursor.front(), Some(Frame::Body));
-                if resuming {
-                    cursor.pop_front();
-                }
-                let mut saved: Vec<(String, Option<SolValue>)> = Vec::new();
+                let (mut saved, resuming) = match cursor.front() {
+                    Some(Frame::Let(_)) => match cursor.pop_front() {
+                        Some(Frame::Let(saved)) => (saved, true),
+                        _ => unreachable!(),
+                    },
+                    Some(other) => return Err(frame_mismatch(nid, other.clone())),
+                    None => (Vec::new(), false),
+                };
                 if !resuming {
                     for (key, value_expr) in bindings {
+                        // Declaration order is significant: later bindings see earlier ones.
                         let val = self.eval_fx(nid, value_expr)?;
-                        let p = Path::parse(key).map_err(|e| shape(nid, format!("Let key: {e}")))?;
+                        let p =
+                            Path::parse(key).map_err(|e| shape(nid, format!("Let key: {e}")))?;
                         saved.push((key.clone(), self.bag_get(&p).cloned()));
                         self.write(nid, &p, val)?;
                     }
@@ -154,14 +241,14 @@ impl<'b, B: Backend> Executor<'b, B> {
                 let out = self.exec(body, cursor)?;
                 // Unwind bindings on the *completion* path only (park keeps them in the snapshot).
                 if let Flow::Suspend(mut s) = out {
-                    s.frames.push_front(Frame::Body);
+                    s.frames.push_front(Frame::Let(saved));
                     return Ok(Flow::Suspend(s));
                 }
                 for (key, prior) in saved.into_iter().rev() {
                     let p = Path::parse(&key).unwrap();
                     match prior {
                         Some(v) => self.write(nid, &p, v)?,
-                        None => { /* no implicit deletion in v0 golden flow */ }
+                        None => self.remove(nid, &p)?,
                     }
                 }
                 Ok(out)
@@ -173,7 +260,11 @@ impl<'b, B: Backend> Executor<'b, B> {
                     Some(other) => return Err(frame_mismatch(nid, other)),
                     None => self.eval_bool(nid, pred)?,
                 };
-                let branch = if arm { Some(then.as_ref()) } else { els.as_deref() };
+                let branch = if arm {
+                    Some(then.as_ref())
+                } else {
+                    els.as_deref()
+                };
                 let out = match branch {
                     Some(b) => self.exec(b, cursor)?,
                     None => Flow::Done, // absent else = Identity (§8.2)
@@ -185,7 +276,12 @@ impl<'b, B: Backend> Executor<'b, B> {
                 Ok(out)
             }
 
-            Kind::Guard { invariant, body, on_violation, check } => {
+            Kind::Guard {
+                invariant,
+                body,
+                on_violation,
+                check,
+            } => {
                 let resuming = matches!(cursor.front(), Some(Frame::Body));
                 if resuming {
                     cursor.pop_front();
@@ -207,19 +303,100 @@ impl<'b, B: Backend> Executor<'b, B> {
                 Ok(out)
             }
 
-            Kind::Budget { body, .. } | Kind::Timeout { body, .. } => {
-                // v0: meters recorded per §8.4; golden flow doesn't park inside a budget, so the
-                // used-counter continuation (App I) isn't exercised. Body runs; a park propagates.
-                let resuming = matches!(cursor.front(), Some(Frame::Body));
-                if resuming {
-                    cursor.pop_front();
+            Kind::Budget {
+                body,
+                calls,
+                tokens,
+                ms,
+            } => {
+                let (used_calls, used_tokens, used_ms) = match cursor.front() {
+                    Some(Frame::Budget { .. }) => match cursor.pop_front() {
+                        Some(Frame::Budget {
+                            used_calls,
+                            used_tokens,
+                            used_ms,
+                        }) => (used_calls, used_tokens, used_ms),
+                        _ => unreachable!(),
+                    },
+                    Some(other) => return Err(frame_mismatch(nid, other.clone())),
+                    None => (0, 0, 0),
+                };
+                self.active_budgets.push(ActiveBudget {
+                    nid: nid.clone(),
+                    calls: *calls,
+                    used_calls,
+                    used_tokens,
+                    used_ms,
+                });
+                let started = std::time::Instant::now();
+                let out = self.exec(body, cursor);
+                let elapsed = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+                let mut state = self.active_budgets.pop().expect("budget stack balanced");
+                state.used_ms = state.used_ms.saturating_add(elapsed);
+                if let Some(limit) = ms {
+                    if self.backend.time_exceeded(
+                        nid,
+                        "budget_trip",
+                        "ms",
+                        *limit,
+                        state.used_ms,
+                    )? {
+                        return Err(ErrV1::new(
+                            ReasonCode::BudgetMs,
+                            nid,
+                            format!("Budget.ms exceeded: {} > {limit}", state.used_ms),
+                        ));
+                    }
                 }
-                let out = self.exec(body, cursor)?;
-                if let Flow::Suspend(mut s) = out {
-                    s.frames.push_front(Frame::Body);
-                    return Ok(Flow::Suspend(s));
+                match out? {
+                    Flow::Suspend(mut suspension) => {
+                        suspension.frames.push_front(Frame::Budget {
+                            used_calls: state.used_calls,
+                            used_tokens: state.used_tokens,
+                            used_ms: state.used_ms,
+                        });
+                        Ok(Flow::Suspend(suspension))
+                    }
+                    Flow::Done => {
+                        // Token accounting is supplied by Model-class adapters; until registry
+                        // metadata is attached, a nonzero observed token count remains zero.
+                        let _ = tokens;
+                        Ok(Flow::Done)
+                    }
                 }
-                Ok(out)
+            }
+            Kind::Timeout { body, ms } => {
+                let used_ms = match cursor.front() {
+                    Some(Frame::Timeout { .. }) => match cursor.pop_front() {
+                        Some(Frame::Timeout { used_ms }) => used_ms,
+                        _ => unreachable!(),
+                    },
+                    Some(other) => return Err(frame_mismatch(nid, other.clone())),
+                    None => 0,
+                };
+                let started = std::time::Instant::now();
+                let out = self.exec(body, cursor);
+                let observed = used_ms
+                    .saturating_add(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
+                if self
+                    .backend
+                    .time_exceeded(nid, "timeout_trip", "ms", *ms, observed)?
+                {
+                    return Err(ErrV1::new(
+                        ReasonCode::Timeout,
+                        nid,
+                        format!("Timeout exceeded: {observed} > {ms}"),
+                    ));
+                }
+                match out? {
+                    Flow::Suspend(mut suspension) => {
+                        suspension
+                            .frames
+                            .push_front(Frame::Timeout { used_ms: observed });
+                        Ok(Flow::Suspend(suspension))
+                    }
+                    Flow::Done => Ok(Flow::Done),
+                }
             }
 
             Kind::Once { body, idem_key } => {
@@ -266,11 +443,16 @@ impl<'b, B: Backend> Executor<'b, B> {
                 } else {
                     // Frames remain — this park is on the descent path but not the target; shouldn't
                     // happen for a well-formed continuation.
-                    Err(ErrV1::new(ReasonCode::Internal, nid, "unexpected frames at park"))
+                    Err(ErrV1::new(
+                        ReasonCode::Internal,
+                        nid,
+                        "unexpected frames at park",
+                    ))
                 }
             }
 
             Kind::Call { id, args, into } => {
+                self.charge_call()?;
                 let projected = self.project_args(nid, args)?;
                 let output = self.backend.call(nid, id, projected)?;
                 self.write(nid, into, output)?;
@@ -279,76 +461,297 @@ impl<'b, B: Backend> Executor<'b, B> {
 
             // ── ops present for closure; simple v0 (no cross-turn resume through them in the golden
             //    flow). Each executes its body/elements sequentially. ──
-            Kind::Try { body, catch, err_into, finally } => {
-                let result = self.exec(body, cursor);
-                let out = match result {
-                    Ok(Flow::Suspend(mut s)) => {
-                        s.frames.push_front(Frame::Body);
-                        return Ok(Flow::Suspend(s));
+            Kind::Try {
+                body,
+                catch,
+                err_into,
+                finally,
+            } => {
+                let phase = match cursor.front() {
+                    Some(Frame::TryBody) => {
+                        cursor.pop_front();
+                        Some(Frame::TryBody)
                     }
-                    Ok(done) => Ok(done),
-                    Err(e) => {
-                        // Match a catch by deepest code prefix (§11.2).
-                        if let Some((_, handler)) = best_catch(catch, &e.code) {
-                            self.write(nid, err_into, e.to_sol())?;
-                            self.exec(handler, &mut VecDeque::new())
-                        } else {
-                            Err(e)
+                    Some(Frame::TryHandler(_)) | Some(Frame::TryFinally(_)) => cursor.pop_front(),
+                    Some(other) => return Err(frame_mismatch(nid, other.clone())),
+                    None => None,
+                };
+
+                let mut pending_error = None;
+                let resuming_finally = matches!(phase, Some(Frame::TryFinally(_)));
+                match phase {
+                    Some(Frame::TryFinally(error)) => pending_error = error,
+                    Some(Frame::TryHandler(index)) => match self.exec(&catch[index].1, cursor) {
+                        Ok(Flow::Suspend(mut suspension)) => {
+                            suspension.frames.push_front(Frame::TryHandler(index));
+                            return Ok(Flow::Suspend(suspension));
+                        }
+                        Ok(Flow::Done) => {}
+                        Err(error) => pending_error = Some(error),
+                    },
+                    None | Some(Frame::TryBody) => match self.exec(body, cursor) {
+                        Ok(Flow::Suspend(mut suspension)) => {
+                            suspension.frames.push_front(Frame::TryBody);
+                            return Ok(Flow::Suspend(suspension));
+                        }
+                        Ok(Flow::Done) => {}
+                        Err(error) => {
+                            if let Some(index) = best_catch_index(catch, &error.code) {
+                                self.write(nid, err_into, error.to_sol())?;
+                                match self.exec(&catch[index].1, &mut VecDeque::new()) {
+                                    Ok(Flow::Suspend(mut suspension)) => {
+                                        suspension.frames.push_front(Frame::TryHandler(index));
+                                        return Ok(Flow::Suspend(suspension));
+                                    }
+                                    Ok(Flow::Done) => {}
+                                    Err(handler_error) => pending_error = Some(handler_error),
+                                }
+                            } else {
+                                pending_error = Some(error);
+                            }
+                        }
+                    },
+                    Some(other) => return Err(frame_mismatch(nid, other)),
+                }
+
+                if let Some(fin) = finally {
+                    let final_cursor = if resuming_finally {
+                        cursor
+                    } else {
+                        &mut VecDeque::new()
+                    };
+                    match self.exec(fin, final_cursor) {
+                        Ok(Flow::Suspend(mut suspension)) => {
+                            suspension
+                                .frames
+                                .push_front(Frame::TryFinally(pending_error));
+                            return Ok(Flow::Suspend(suspension));
+                        }
+                        Ok(Flow::Done) => {}
+                        Err(finally_error) => {
+                            if let Some(original) = pending_error {
+                                self.backend.report(
+                                    nid,
+                                    "finally_failed",
+                                    SolValue::map([
+                                        ("scope_nid", SolValue::str(nid)),
+                                        ("err", finally_error.to_sol()),
+                                    ]),
+                                )?;
+                                return Err(original);
+                            }
+                            return Err(finally_error);
                         }
                     }
-                };
-                if let Some(fin) = finally {
-                    // finally runs on success and handled/unhandled error; original error wins.
-                    let _ = self.exec(fin, &mut VecDeque::new());
                 }
-                out
+                pending_error.map_or(Ok(Flow::Done), Err)
             }
             Kind::Fallback(steps) => {
-                let mut last = ErrV1::new(ReasonCode::Internal, nid, "empty fallback");
-                for step in steps {
-                    match self.exec(step, &mut VecDeque::new()) {
-                        Ok(done) => return Ok(done),
-                        Err(e) => last = e,
+                let (start, mut prior_errors, resuming) = match cursor.front() {
+                    Some(Frame::Fallback { .. }) => match cursor.pop_front() {
+                        Some(Frame::Fallback {
+                            step_index,
+                            prior_errors,
+                        }) => (step_index, prior_errors, true),
+                        _ => unreachable!(),
+                    },
+                    Some(other) => return Err(frame_mismatch(nid, other.clone())),
+                    None => (0, Vec::new(), false),
+                };
+                for (index, step) in steps.iter().enumerate().skip(start) {
+                    let step_cursor = if resuming && index == start {
+                        &mut *cursor
+                    } else {
+                        &mut VecDeque::new()
+                    };
+                    match self.exec(step, step_cursor) {
+                        Ok(Flow::Done) => return Ok(Flow::Done),
+                        Ok(Flow::Suspend(mut suspension)) => {
+                            suspension.frames.push_front(Frame::Fallback {
+                                step_index: index,
+                                prior_errors,
+                            });
+                            return Ok(Flow::Suspend(suspension));
+                        }
+                        Err(error) => prior_errors.push(error),
                     }
+                }
+                let mut last = prior_errors
+                    .pop()
+                    .unwrap_or_else(|| ErrV1::new(ReasonCode::Internal, nid, "empty fallback"));
+                while let Some(prior) = prior_errors.pop() {
+                    last = last.with_cause(prior);
                 }
                 Err(last)
             }
-            Kind::Loop { while_, body, max_iter } => {
-                for _ in 0..*max_iter {
+            Kind::Loop {
+                while_,
+                body,
+                max_iter,
+            } => {
+                let (mut completed, resuming) = match cursor.front() {
+                    Some(Frame::Loop(_)) => match cursor.pop_front() {
+                        Some(Frame::Loop(iter)) => (iter, true),
+                        _ => unreachable!(),
+                    },
+                    Some(other) => return Err(frame_mismatch(nid, other.clone())),
+                    None => (0, false),
+                };
+
+                // A Loop frame means the predicate for this iteration already passed. Resume the
+                // suspended body first, then return to ordinary pre-test iteration.
+                if resuming && completed < *max_iter {
+                    if let Flow::Suspend(mut s) = self.exec(body, cursor)? {
+                        s.frames.push_front(Frame::Loop(completed));
+                        return Ok(Flow::Suspend(s));
+                    }
+                    completed += 1;
+                }
+
+                while completed < *max_iter {
                     if !self.eval_bool(nid, while_)? {
                         return Ok(Flow::Done);
                     }
-                    if let Flow::Suspend(_) = self.exec(body, &mut VecDeque::new())? {
-                        return Err(ErrV1::new(ReasonCode::Internal, nid, "park inside Loop unsupported in v0 walker"));
+                    if let Flow::Suspend(mut s) = self.exec(body, &mut VecDeque::new())? {
+                        s.frames.push_front(Frame::Loop(completed));
+                        return Ok(Flow::Suspend(s));
                     }
+                    completed += 1;
                 }
                 // §8.3: exhaustion raises Budget.Iter, never a silent exit.
                 if self.eval_bool(nid, while_)? {
-                    return Err(ErrV1::new(ReasonCode::BudgetIter, nid, "Loop max_iter exhausted (§8.3)"));
+                    return Err(ErrV1::new(
+                        ReasonCode::BudgetIter,
+                        nid,
+                        "Loop max_iter exhausted (§8.3)",
+                    ));
                 }
                 Ok(Flow::Done)
             }
-            Kind::Map { over, body, into, max_items, .. } => {
-                let items = self.bag_get(over).and_then(SolValue::as_list).map(<[_]>::to_vec).unwrap_or_default();
+            Kind::Map {
+                over,
+                imports,
+                body,
+                into,
+                max_items,
+            } => {
+                let resume_state = match cursor.front() {
+                    Some(Frame::Map { .. }) => match cursor.pop_front() {
+                        Some(Frame::Map {
+                            element_index,
+                            collected,
+                            parent_bag,
+                            parent_scope,
+                        }) => Some((element_index, collected, parent_bag, parent_scope)),
+                        _ => unreachable!(),
+                    },
+                    Some(other) => return Err(frame_mismatch(nid, other.clone())),
+                    None => None,
+                };
+                let (mut index, mut collected, parent_bag, parent_scope, resume_child) =
+                    if let Some((index, collected, parent_bag, parent_scope)) = resume_state {
+                        (index, collected, parent_bag, parent_scope, true)
+                    } else {
+                        (0, Vec::new(), self.bag.clone(), self.scope.clone(), false)
+                    };
+                let child_scope = build_import_scope(nid, &parent_bag, imports)?;
+                let items = over
+                    .get(&parent_bag)
+                    .and_then(SolValue::as_list)
+                    .map(<[_]>::to_vec)
+                    .ok_or_else(|| {
+                        ErrV1::new(
+                            ReasonCode::Type,
+                            nid,
+                            "Map.over must resolve to a list (§6.3)",
+                        )
+                    })?;
                 if items.len() as u64 > *max_items {
-                    return Err(ErrV1::new(ReasonCode::BudgetIter, nid, "Map exceeds max_items (§8.3)"));
+                    return Err(ErrV1::new(
+                        ReasonCode::BudgetIter,
+                        nid,
+                        "Map exceeds max_items (§8.3)",
+                    ));
                 }
-                let mut collected = Vec::new();
-                for item in items {
-                    // Child bag IS the element (§6.3). Golden flow doesn't use Map; simple v0.
-                    let mut child = Executor::new(item, self.backend);
-                    match child.exec(body, &mut VecDeque::new())? {
-                        Flow::Done => collected.push(child.bag.clone()),
-                        Flow::Suspend(_) => return Err(ErrV1::new(ReasonCode::Internal, nid, "park inside Map unsupported in v0 walker")),
+
+                // On resume, `self.bag` is the suspended child. Finish it before advancing.
+                if resume_child {
+                    self.scope = child_scope.clone();
+                    match self.exec(body, cursor)? {
+                        Flow::Done => {
+                            collected.push(self.bag.clone());
+                            index += 1;
+                        }
+                        Flow::Suspend(mut suspension) => {
+                            suspension.frames.push_front(Frame::Map {
+                                element_index: index,
+                                collected,
+                                parent_bag,
+                                parent_scope,
+                            });
+                            return Ok(Flow::Suspend(suspension));
+                        }
                     }
                 }
+
+                while index < items.len() {
+                    self.bag = items[index].clone();
+                    for (alias, _) in imports {
+                        let alias = Path::parse(alias)
+                            .map_err(|e| shape(nid, format!("Map import alias: {e}")))?;
+                        if alias.exists(&self.bag) {
+                            return Err(ErrV1::new(
+                                ReasonCode::Shape,
+                                nid,
+                                "Map import alias collides with an element path (§6.3)",
+                            ));
+                        }
+                    }
+                    self.scope = child_scope.clone();
+                    match self.exec(body, &mut VecDeque::new())? {
+                        Flow::Done => {
+                            collected.push(self.bag.clone());
+                            index += 1;
+                        }
+                        Flow::Suspend(mut suspension) => {
+                            suspension.frames.push_front(Frame::Map {
+                                element_index: index,
+                                collected,
+                                parent_bag,
+                                parent_scope,
+                            });
+                            return Ok(Flow::Suspend(suspension));
+                        }
+                    }
+                }
+                self.bag = parent_bag;
+                self.scope = parent_scope;
                 self.write(nid, into, SolValue::List(collected))?;
                 Ok(Flow::Done)
             }
-            Kind::Filter { over, pred, into, max_items } => {
-                let items = self.bag_get(over).and_then(SolValue::as_list).map(<[_]>::to_vec).unwrap_or_default();
+            Kind::Filter {
+                over,
+                pred,
+                into,
+                max_items,
+            } => {
+                let items = self
+                    .bag_get(over)
+                    .and_then(SolValue::as_list)
+                    .map(<[_]>::to_vec)
+                    .ok_or_else(|| {
+                        ErrV1::new(
+                            ReasonCode::Type,
+                            nid,
+                            "Filter.over must resolve to a list (§6.3)",
+                        )
+                    })?;
                 if items.len() as u64 > *max_items {
-                    return Err(ErrV1::new(ReasonCode::BudgetIter, nid, "Filter exceeds max_items"));
+                    return Err(ErrV1::new(
+                        ReasonCode::BudgetIter,
+                        nid,
+                        "Filter exceeds max_items",
+                    ));
                 }
                 let mut kept = Vec::new();
                 for item in items {
@@ -360,14 +763,24 @@ impl<'b, B: Backend> Executor<'b, B> {
                 self.write(nid, into, SolValue::List(kept))?;
                 Ok(Flow::Done)
             }
-            Kind::Tee { body, side, side_root } => {
+            Kind::Tee {
+                body,
+                side,
+                side_root,
+            } => {
                 let out = self.exec(body, cursor)?;
                 if let Flow::Suspend(mut s) = out {
                     s.frames.push_front(Frame::Body);
                     return Ok(Flow::Suspend(s));
                 }
                 // Fire-and-record: side runs; failure is a report, main continues (§8.2).
-                let _ = self.exec(side, &mut VecDeque::new());
+                if let Err(error) = self.exec(side, &mut VecDeque::new()) {
+                    self.backend.report(
+                        nid,
+                        "side_failed",
+                        SolValue::map([("scope_nid", SolValue::str(nid)), ("err", error.to_sol())]),
+                    )?;
+                }
                 let _ = side_root;
                 Ok(out)
             }
@@ -390,7 +803,10 @@ impl<'b, B: Backend> Executor<'b, B> {
                     }
                     return Err(shape(nid, "exists expects a single pull(path) arg"));
                 }
-                let vals: Vec<SolValue> = args.iter().map(|a| self.eval(nid, a)).collect::<Result<_, _>>()?;
+                let vals: Vec<SolValue> = args
+                    .iter()
+                    .map(|a| self.eval(nid, a))
+                    .collect::<Result<_, _>>()?;
                 compute::apply(op, &vals).map_err(|e| ErrV1::new(e.code, nid, e.detail))
             }
         }
@@ -418,11 +834,18 @@ impl<'b, B: Backend> Executor<'b, B> {
                     }
                 }
                 "matches_format" => {
-                    let val_expr = args.first().ok_or_else(|| shape(nid, "matches_format(value, validator_id)"))?;
+                    let val_expr = args
+                        .first()
+                        .ok_or_else(|| shape(nid, "matches_format(value, validator_id)"))?;
                     let val = self.eval_fx(nid, val_expr)?;
                     let vid = match args.get(1) {
                         Some(Expr::Lit(SolValue::Str(s))) => s.clone(),
-                        _ => return Err(shape(nid, "matches_format validator_id must be a string literal (§5.4)")),
+                        _ => {
+                            return Err(shape(
+                                nid,
+                                "matches_format validator_id must be a string literal (§5.4)",
+                            ))
+                        }
                     };
                     Ok(SolValue::Bool(self.backend.validate(nid, &vid, &val)?))
                 }
@@ -440,15 +863,28 @@ impl<'b, B: Backend> Executor<'b, B> {
     fn eval_bool(&self, nid: &str, expr: &Expr) -> Result<bool, ErrV1> {
         match self.eval(nid, expr)? {
             SolValue::Bool(b) => Ok(b),
-            _ => Err(ErrV1::new(ReasonCode::Type, nid, "predicate must be bool (§8.2)")),
+            _ => Err(ErrV1::new(
+                ReasonCode::Type,
+                nid,
+                "predicate must be bool (§8.2)",
+            )),
         }
     }
 
-    fn check_guard(&mut self, nid: &str, invariant: &Expr, _on_violation: Option<&Node>) -> Result<(), ErrV1> {
+    fn check_guard(
+        &mut self,
+        nid: &str,
+        invariant: &Expr,
+        _on_violation: Option<&Node>,
+    ) -> Result<(), ErrV1> {
         if self.eval_bool(nid, invariant)? {
             Ok(())
         } else {
-            Err(ErrV1::new(ReasonCode::GuardViolation, nid, "guard invariant false (§8.3)"))
+            Err(ErrV1::new(
+                ReasonCode::GuardViolation,
+                nid,
+                "guard invariant false (§8.3)",
+            ))
         }
     }
 
@@ -475,7 +911,7 @@ impl<'b, B: Backend> Executor<'b, B> {
     }
 
     fn bag_get(&self, path: &Path) -> Option<&SolValue> {
-        path.get(&self.bag)
+        path.get(&self.bag).or_else(|| path.get(&self.scope))
     }
     fn bag_root(&self) -> &SolValue {
         &self.bag
@@ -485,13 +921,56 @@ impl<'b, B: Backend> Executor<'b, B> {
         self.enforce_limits(nid)
     }
 
+    fn remove(&mut self, nid: &str, path: &Path) -> Result<(), ErrV1> {
+        let mut bag = crate::bag::Bag::from_value(std::mem::replace(&mut self.bag, SolValue::Null));
+        let result = bag
+            .remove(path)
+            .map_err(|e| ErrV1::new(ReasonCode::Shape, nid, e));
+        self.bag = bag.value().clone();
+        result?;
+        self.enforce_limits(nid)
+    }
+
+    fn charge_call(&mut self) -> Result<(), ErrV1> {
+        let violation = self.active_budgets.iter().find_map(|budget| {
+            budget
+                .calls
+                .and_then(|limit| (budget.used_calls >= limit).then(|| (budget.nid.clone(), limit)))
+        });
+        if let Some((scope_nid, limit)) = violation {
+            self.backend.report(
+                &scope_nid,
+                "budget_trip",
+                SolValue::map([
+                    ("scope_nid", SolValue::str(scope_nid.clone())),
+                    ("meter", SolValue::str("calls")),
+                    ("limit", SolValue::Int(limit as i64)),
+                    ("observed", SolValue::Int((limit + 1) as i64)),
+                ]),
+            )?;
+            return Err(ErrV1::new(
+                ReasonCode::BudgetCalls,
+                scope_nid,
+                "Budget.calls exceeded",
+            ));
+        }
+        for budget in &mut self.active_budgets {
+            budget.used_calls = budget.used_calls.saturating_add(1);
+        }
+        Ok(())
+    }
+
     /// §4.4: after every commit the bag must satisfy the structural caps (depth 32, 1024 keys/map,
     /// 10k list len, 1 MiB canonical). Violations map to `Budget.Size` (§11). Enforced on every
     /// write so the bag invariant holds at all boundaries (persistence/Call/Park, §4.1).
     fn enforce_limits(&self, nid: &str) -> Result<(), ErrV1> {
-        aelio_sol::Limits::default()
-            .check(&self.bag)
-            .map_err(|e| ErrV1::new(ReasonCode::BudgetSize, nid, format!("§4.4 limit exceeded: {e}")))
+        aelio_sol::Limits::default().check(&self.bag).map_err(|e| {
+            ErrV1::new(
+                ReasonCode::BudgetSize,
+                nid,
+                format!("§4.4 limit exceeded: {e}"),
+            )
+        })
     }
 }
 
@@ -502,17 +981,45 @@ fn set_path(root: &mut SolValue, path: &Path, value: SolValue) -> Result<(), &'s
     r
 }
 
-fn best_catch<'a>(catch: &'a [(String, Node)], code: &ReasonCode) -> Option<&'a (String, Node)> {
+fn build_import_scope(
+    nid: &str,
+    parent: &SolValue,
+    imports: &[(String, Path)],
+) -> Result<SolValue, ErrV1> {
+    let mut scope = SolValue::map::<_, &str>([]);
+    for (alias, source) in imports {
+        let value = source.get(parent).cloned().ok_or_else(|| {
+            ErrV1::new(
+                ReasonCode::Missing,
+                nid,
+                format!("Map import source `{source:?}` is missing (§6.3)"),
+            )
+        })?;
+        let alias = Path::parse(alias).map_err(|e| shape(nid, format!("Map import alias: {e}")))?;
+        set_path(&mut scope, &alias, value).map_err(|e| ErrV1::new(ReasonCode::Shape, nid, e))?;
+    }
+    Ok(scope)
+}
+
+fn best_catch_index(catch: &[(String, Node)], code: &ReasonCode) -> Option<usize> {
     let full = code.code();
     catch
         .iter()
-        .filter(|(prefix, _)| full == prefix.as_str() || full.starts_with(&format!("{prefix}.")))
-        .max_by_key(|(prefix, _)| prefix.len())
+        .enumerate()
+        .filter(|(_, (prefix, _))| {
+            full == prefix.as_str() || full.starts_with(&format!("{prefix}."))
+        })
+        .max_by_key(|(_, (prefix, _))| prefix.len())
+        .map(|(index, _)| index)
 }
 
 fn shape(nid: &str, why: impl Into<String>) -> ErrV1 {
     ErrV1::new(ReasonCode::Shape, nid, why)
 }
 fn frame_mismatch(nid: &str, got: Frame) -> ErrV1 {
-    ErrV1::new(ReasonCode::Internal, nid, format!("resume frame mismatch: {got:?}"))
+    ErrV1::new(
+        ReasonCode::Internal,
+        nid,
+        format!("resume frame mismatch: {got:?}"),
+    )
 }

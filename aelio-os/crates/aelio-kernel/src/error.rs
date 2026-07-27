@@ -58,7 +58,37 @@ impl ReasonCode {
     /// Normative retryability (§11.3). Advisory — the kernel never auto-retries (§11.5).
     pub fn retryable(&self) -> bool {
         use ReasonCode::*;
-        matches!(self, ToolTransient | ToolRateLimit | Timeout | Internal | ModelParse)
+        matches!(
+            self,
+            ToolTransient | ToolRateLimit | Timeout | Internal | ModelParse
+        )
+    }
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        use ReasonCode::*;
+        Some(match code {
+            "Shape" => Shape,
+            "Type" => Type,
+            "Missing" => Missing,
+            "Budget.Calls" => BudgetCalls,
+            "Budget.Tokens" => BudgetTokens,
+            "Budget.Ms" => BudgetMs,
+            "Budget.Size" => BudgetSize,
+            "Budget.Iter" => BudgetIter,
+            "Timeout" => Timeout,
+            "Policy" => Policy,
+            "Guard.Violation" => GuardViolation,
+            "Tool.Transient" => ToolTransient,
+            "Tool.Permanent" => ToolPermanent,
+            "Tool.Auth" => ToolAuth,
+            "Tool.RateLimit" => ToolRateLimit,
+            "Model.Parse" => ModelParse,
+            "Model.Refuse" => ModelRefuse,
+            "Convert.NoEdge" => ConvertNoEdge,
+            "Convert.RuleFail" => ConvertRuleFail,
+            "Internal" => Internal,
+            _ => return None,
+        })
     }
 }
 
@@ -102,6 +132,33 @@ impl ErrV1 {
             pairs.push(("cause", cause.to_sol()));
         }
         SolValue::map(pairs)
+    }
+
+    pub fn from_sol(value: &SolValue) -> Option<Self> {
+        let map = value.as_map()?;
+        let code = match map.get("code")? {
+            SolValue::Str(code) => ReasonCode::from_code(code)?,
+            _ => return None,
+        };
+        let detail = match map.get("detail")? {
+            SolValue::Str(detail) => detail.clone(),
+            _ => return None,
+        };
+        let op_serial = match map.get("op_serial")? {
+            SolValue::Str(op_serial) => op_serial.clone(),
+            _ => return None,
+        };
+        let cause = match map.get("cause") {
+            Some(cause) => Some(Box::new(ErrV1::from_sol(cause)?)),
+            None => None,
+        };
+        Some(ErrV1 {
+            retryable: code.retryable(),
+            code,
+            detail,
+            op_serial,
+            cause,
+        })
     }
 }
 

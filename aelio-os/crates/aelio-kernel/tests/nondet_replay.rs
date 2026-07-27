@@ -27,12 +27,19 @@ fn nondet_sources_replay_bit_identical() {
         _ => panic!("should complete"),
     };
     // The nondet values landed in the ledger as INJECT entries.
-    let nondet_entries = ledger.entries().iter().filter(|e| e.kind == "nondet_value").count();
+    let nondet_entries = ledger
+        .entries()
+        .iter()
+        .filter(|e| e.kind == "nondet_value")
+        .count();
     assert_eq!(nondet_entries, 3, "now + uuid + random each ledgered once");
 
     // Replay reproduces the exact same bag despite the nondeterminism (values injected from ledger).
     let replay_hash = replay(&program, &ledger, SolValue::map::<_, &str>([])).unwrap();
-    assert_eq!(live_hash, replay_hash, "nondet turn is bit-identical on replay (§12.3)");
+    assert_eq!(
+        live_hash, replay_hash,
+        "nondet turn is bit-identical on replay (§12.3)"
+    );
 }
 
 #[test]
@@ -56,8 +63,17 @@ fn matches_format_dispatches_to_a_registered_validator_and_replays() {
     let initial = SolValue::map([("phone", SolValue::str("+15551234567"))]);
     let (live_hash, ledger) = match inst.start(initial.clone()).unwrap() {
         TurnOutcome::Completed { bag, bag_hash } => {
-            let ok = bag.as_map().unwrap().get("out").and_then(|o| o.as_map()).and_then(|m| m.get("ok"));
-            assert_eq!(ok, Some(&SolValue::Bool(true)), "validator passed for +E.164");
+            let ok = bag
+                .as_map()
+                .unwrap()
+                .get("out")
+                .and_then(|o| o.as_map())
+                .and_then(|m| m.get("ok"));
+            assert_eq!(
+                ok,
+                Some(&SolValue::Bool(true)),
+                "validator passed for +E.164"
+            );
             (bag_hash, inst.ledger().clone())
         }
         _ => panic!("should complete"),
@@ -65,5 +81,8 @@ fn matches_format_dispatches_to_a_registered_validator_and_replays() {
     assert!(ledger.entries().iter().any(|e| e.kind == "validate_result"));
     // Replay reproduces the validator result from the ledger (no registry needed in replay).
     let replay_hash = replay(&program, &ledger, initial).unwrap();
-    assert_eq!(live_hash, replay_hash, "matches_format is bit-identical on replay");
+    assert_eq!(
+        live_hash, replay_hash,
+        "matches_format is bit-identical on replay"
+    );
 }

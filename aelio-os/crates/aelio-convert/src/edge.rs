@@ -20,7 +20,10 @@ pub struct EdgeId {
 
 impl EdgeId {
     pub fn key(&self) -> String {
-        format!("{}|{}|{}|{}", self.tenant, self.flow_id, self.producer_nid, self.consumer_nid)
+        format!(
+            "{}|{}|{}|{}",
+            self.tenant, self.flow_id, self.producer_nid, self.consumer_nid
+        )
     }
 }
 
@@ -70,7 +73,10 @@ impl ConversionEdge {
         match crate::rules::apply_rules(&self.rules, input) {
             Ok(out) => Ok(out),
             Err(fail) => match &self.on_parse_fail {
-                OnParseFail::Error => Err(ConvertUseError::RuleFail { rule_index: fail.rule_index, detail: fail.detail }),
+                OnParseFail::Error => Err(ConvertUseError::RuleFail {
+                    rule_index: fail.rule_index,
+                    detail: fail.detail,
+                }),
                 OnParseFail::Default(v) => Ok(v.clone()),
             },
         }
@@ -92,16 +98,48 @@ pub fn rules_hash(rules: &[Rule]) -> String {
 fn rule_to_sol(r: &Rule) -> SolValue {
     // A stable tag+payload encoding; only identity matters (dedup), not round-trip.
     match r {
-        Rule::Rename { from, to } => tagged("rename", &[("from", path_str(from)), ("to", path_str(to))]),
+        Rule::Rename { from, to } => {
+            tagged("rename", &[("from", path_str(from)), ("to", path_str(to))])
+        }
         Rule::Drop { path } => tagged("drop", &[("path", path_str(path))]),
-        Rule::Keep { paths } => SolValue::map([("op", SolValue::str("keep")), ("paths", SolValue::List(paths.iter().map(|p| SolValue::str(path_str(p))).collect()))]),
-        Rule::Default { path, v } => SolValue::map([("op", SolValue::str("default")), ("path", SolValue::str(path_str(path))), ("v", v.clone())]),
-        Rule::Cast { path, to, mode } => tagged("cast", &[("path", path_str(path)), ("to", to.clone()), ("mode", mode.clone().unwrap_or_default())]),
-        Rule::Wrap { path, key } => tagged("wrap", &[("path", path_str(path)), ("key", key.clone())]),
+        Rule::Keep { paths } => SolValue::map([
+            ("op", SolValue::str("keep")),
+            (
+                "paths",
+                SolValue::List(paths.iter().map(|p| SolValue::str(path_str(p))).collect()),
+            ),
+        ]),
+        Rule::Default { path, v } => SolValue::map([
+            ("op", SolValue::str("default")),
+            ("path", SolValue::str(path_str(path))),
+            ("v", v.clone()),
+        ]),
+        Rule::Cast { path, to, mode } => tagged(
+            "cast",
+            &[
+                ("path", path_str(path)),
+                ("to", to.clone()),
+                ("mode", mode.clone().unwrap_or_default()),
+            ],
+        ),
+        Rule::Wrap { path, key } => {
+            tagged("wrap", &[("path", path_str(path)), ("key", key.clone())])
+        }
         Rule::Unwrap { path } => tagged("unwrap", &[("path", path_str(path))]),
-        Rule::MapEnum { path, table } => SolValue::map([("op", SolValue::str("map_enum")), ("path", SolValue::str(path_str(path))), ("table", SolValue::Map(table.clone()))]),
-        Rule::PathCopy { from, to } => tagged("path_copy", &[("from", path_str(from)), ("to", path_str(to))]),
-        Rule::ConstSet { path, v } => SolValue::map([("op", SolValue::str("const_set")), ("path", SolValue::str(path_str(path))), ("v", v.clone())]),
+        Rule::MapEnum { path, table } => SolValue::map([
+            ("op", SolValue::str("map_enum")),
+            ("path", SolValue::str(path_str(path))),
+            ("table", SolValue::Map(table.clone())),
+        ]),
+        Rule::PathCopy { from, to } => tagged(
+            "path_copy",
+            &[("from", path_str(from)), ("to", path_str(to))],
+        ),
+        Rule::ConstSet { path, v } => SolValue::map([
+            ("op", SolValue::str("const_set")),
+            ("path", SolValue::str(path_str(path))),
+            ("v", v.clone()),
+        ]),
         Rule::Trim { path } => tagged("trim", &[("path", path_str(path))]),
     }
 }
@@ -136,7 +174,11 @@ fn path_str(p: &aelio_sol::Path) -> String {
 
 /// Edge inspector (§26): "why did this Convert fire" + full evidence, straight from the edge record.
 pub fn inspect(edge: &ConversionEdge) -> String {
-    let fab = if crate::rules::any_fabricating(&edge.rules) { " (fabricating)" } else { "" };
+    let fab = if crate::rules::any_fabricating(&edge.rules) {
+        " (fabricating)"
+    } else {
+        ""
+    };
     let digest_keys: Vec<String> = edge
         .to_digest
         .required

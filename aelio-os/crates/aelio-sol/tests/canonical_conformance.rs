@@ -13,7 +13,11 @@ fn int_two_is_not_float_two() {
     let float2 = SolValue::float(2.0).unwrap();
     assert_eq!(canonical_string(&int2), "2");
     assert_eq!(canonical_string(&float2), "2.0");
-    assert_ne!(value_hash(&int2), value_hash(&float2), "§4.3 int/float distinction");
+    assert_ne!(
+        value_hash(&int2),
+        value_hash(&float2),
+        "§4.3 int/float distinction"
+    );
 }
 
 #[test]
@@ -48,8 +52,16 @@ fn map_hash_is_key_order_independent() {
     raw.insert("a".to_string(), SolValue::Int(1));
     raw.insert("b".to_string(), SolValue::Int(2));
     let b = SolValue::Map(raw);
-    assert_eq!(canonical_string(&a), r#"{"a":1,"b":2,"c":3}"#, "§4.3 sorted keys, no whitespace");
-    assert_eq!(value_hash(&a), value_hash(&b), "§4.3 canonical hash stable across build order");
+    assert_eq!(
+        canonical_string(&a),
+        r#"{"a":1,"b":2,"c":3}"#,
+        "§4.3 sorted keys, no whitespace"
+    );
+    assert_eq!(
+        value_hash(&a),
+        value_hash(&b),
+        "§4.3 canonical hash stable across build order"
+    );
 }
 
 #[test]
@@ -57,7 +69,13 @@ fn canonical_hash_round_trips_identically() {
     // §27 replay-determinism seed: hashing the same value twice yields the same digest.
     let v = SolValue::map([
         ("name", SolValue::str("Acme")),
-        ("scores", SolValue::list([SolValue::float(0.94).unwrap(), SolValue::float(0.88).unwrap()])),
+        (
+            "scores",
+            SolValue::list([
+                SolValue::float(0.94).unwrap(),
+                SolValue::float(0.88).unwrap(),
+            ]),
+        ),
         ("active", SolValue::Bool(true)),
         ("note", SolValue::Null),
     ]);
@@ -71,12 +89,19 @@ fn strings_are_not_unicode_normalized() {
     // must hash differently — normalizing would silently alter user data (§4.3).
     let precomposed = SolValue::Str("\u{00E9}".into());
     let decomposed = SolValue::Str("e\u{0301}".into());
-    assert_ne!(value_hash(&precomposed), value_hash(&decomposed), "§4.3 no normalization");
+    assert_ne!(
+        value_hash(&precomposed),
+        value_hash(&decomposed),
+        "§4.3 no normalization"
+    );
 }
 
 #[test]
 fn string_minimal_escapes() {
-    assert_eq!(canonical_string(&SolValue::str("a\"b\\c\n")), r#""a\"b\\c\n""#);
+    assert_eq!(
+        canonical_string(&SolValue::str("a\"b\\c\n")),
+        r#""a\"b\\c\n""#
+    );
 }
 
 // ── §4.1.3: structural imprint = shape hash, content-independent ──────────────────────────────
@@ -85,10 +110,21 @@ fn structural_imprint_is_shape_not_content() {
     let one = SolValue::map([("id", SolValue::str("acme")), ("n", SolValue::Int(1))]);
     let two = SolValue::map([("id", SolValue::str("globex")), ("n", SolValue::Int(999))]);
     // Same shape, different content → same structural imprint.
-    assert_eq!(structural_imprint(&one), structural_imprint(&two), "§4.1.3 shape imprint");
+    assert_eq!(
+        structural_imprint(&one),
+        structural_imprint(&two),
+        "§4.1.3 shape imprint"
+    );
     // Different shape → different imprint.
-    let three = SolValue::map([("id", SolValue::str("x")), ("n", SolValue::float(1.0).unwrap())]);
-    assert_ne!(structural_imprint(&one), structural_imprint(&three), "int≢float in shape too");
+    let three = SolValue::map([
+        ("id", SolValue::str("x")),
+        ("n", SolValue::float(1.0).unwrap()),
+    ]);
+    assert_ne!(
+        structural_imprint(&one),
+        structural_imprint(&three),
+        "int≢float in shape too"
+    );
     // Imprints are written `~<hash>` (§4.1.1).
     assert!(structural_imprint(&one).starts_with('~'));
 }
@@ -99,7 +135,10 @@ fn homogeneous_vs_mixed_lists_have_distinct_shapes() {
     let mixed = SolValue::list([SolValue::Int(1), SolValue::str("two")]);
     assert_eq!(aelio_sol::shape_signature(&homo), "list<int>");
     assert_eq!(aelio_sol::shape_signature(&mixed), "list<mixed>");
-    assert_eq!(aelio_sol::shape_signature(&SolValue::List(vec![])), "list<never>");
+    assert_eq!(
+        aelio_sol::shape_signature(&SolValue::List(vec![])),
+        "list<never>"
+    );
 }
 
 // ── §4.4: limits ──────────────────────────────────────────────────────────────────────────────
@@ -144,17 +183,17 @@ fn path_grammar_positive_examples() {
 fn path_grammar_negative_examples() {
     // ≥10 negative cases: empty, computed-ish, root index, bad tokens, unterminated.
     for p in [
-        "",           // empty
-        "[0]",        // first element cannot be an index (root is a map body)
-        "a..b",       // empty segment
-        "a.",         // trailing dot
-        "1abc",       // identifier can't start with a digit
-        "a[b]",       // non-integer index
-        "a[-1]",      // negative index
+        "",          // empty
+        "[0]",       // first element cannot be an index (root is a map body)
+        "a..b",      // empty segment
+        "a.",        // trailing dot
+        "1abc",      // identifier can't start with a digit
+        "a[b]",      // non-integer index
+        "a[-1]",     // negative index
         r#"a["k"]"#, // quoted key must follow '.'
         r#"a.["k"#,  // unterminated quoted key
-        "a b",        // space is not a valid token
-        "a[]",        // empty index
+        "a b",       // space is not a valid token
+        "a[]",       // empty index
     ] {
         assert!(Path::parse(p).is_err(), "should reject: {p}");
     }
@@ -164,14 +203,20 @@ fn path_grammar_negative_examples() {
 fn path_get_and_exists() {
     let bag = SolValue::map([
         ("user", SolValue::map([("phone", SolValue::str("+91..."))])),
-        ("items", SolValue::list([SolValue::Int(10), SolValue::Int(20)])),
+        (
+            "items",
+            SolValue::list([SolValue::Int(10), SolValue::Int(20)]),
+        ),
         (r#"weird key"#, SolValue::Bool(true)),
     ]);
     assert_eq!(
         Path::parse("user.phone").unwrap().get(&bag),
         Some(&SolValue::str("+91..."))
     );
-    assert_eq!(Path::parse("items[1]").unwrap().get(&bag), Some(&SolValue::Int(20)));
+    assert_eq!(
+        Path::parse("items[1]").unwrap().get(&bag),
+        Some(&SolValue::Int(20))
+    );
     assert!(Path::parse("items[9]").unwrap().get(&bag).is_none()); // out of range → None (§6.4)
     assert!(!Path::parse("user.missing").unwrap().exists(&bag));
     assert_eq!(
@@ -188,8 +233,17 @@ fn path_get_and_exists() {
 // ── §4.3 depth-32 path boundary (F2 completion) ───────────────────────────────────────────────
 #[test]
 fn path_depth_32_boundary() {
-    let at_limit = std::iter::repeat("a").take(32).collect::<Vec<_>>().join(".");
+    let at_limit = std::iter::repeat("a")
+        .take(32)
+        .collect::<Vec<_>>()
+        .join(".");
     assert!(Path::parse(&at_limit).is_ok(), "32 segments allowed");
-    let over_limit = std::iter::repeat("a").take(33).collect::<Vec<_>>().join(".");
-    assert!(Path::parse(&over_limit).is_err(), "33 segments rejected (§4.4 depth 32)");
+    let over_limit = std::iter::repeat("a")
+        .take(33)
+        .collect::<Vec<_>>()
+        .join(".");
+    assert!(
+        Path::parse(&over_limit).is_err(),
+        "33 segments rejected (§4.4 depth 32)"
+    );
 }

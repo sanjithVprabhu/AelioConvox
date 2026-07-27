@@ -35,15 +35,26 @@ fn switch_becomes_nested_branch_and_routes_the_matching_case() {
     }));
 
     let mut reg = Registry::default();
-    reg.register("io.mark_a@1", EffectClass::Read, |_| Ok(SolValue::map([("v", SolValue::str("a"))])));
-    reg.register("io.mark_b@1", EffectClass::Read, |_| Ok(SolValue::map([("v", SolValue::str("b"))])));
-    reg.register("io.mark_default@1", EffectClass::Read, |_| Ok(SolValue::map([("v", SolValue::str("default"))])));
+    reg.register("io.mark_a@1", EffectClass::Read, |_| {
+        Ok(SolValue::map([("v", SolValue::str("a"))]))
+    });
+    reg.register("io.mark_b@1", EffectClass::Read, |_| {
+        Ok(SolValue::map([("v", SolValue::str("b"))]))
+    });
+    reg.register("io.mark_default@1", EffectClass::Read, |_| {
+        Ok(SolValue::map([("v", SolValue::str("default"))]))
+    });
     let mut inst = Instance::new(program, &mut reg);
 
     let initial = SolValue::map([("input", SolValue::map([("kind", SolValue::str("b"))]))]);
     match inst.start(initial).unwrap() {
         TurnOutcome::Completed { bag, .. } => {
-            let picked = bag.as_map().unwrap().get("result").and_then(|r| r.as_map()).and_then(|m| m.get("v"));
+            let picked = bag
+                .as_map()
+                .unwrap()
+                .get("result")
+                .and_then(|r| r.as_map())
+                .and_then(|m| m.get("v"));
             assert_eq!(picked, Some(&SolValue::str("b")), "Switch routed to case b");
         }
         _ => panic!("should complete"),
@@ -59,12 +70,21 @@ fn switch_falls_through_to_default() {
         "default": {"nid":"cd","op":"Call","id":"io.mark_default@1","args":{},"into":"result"}
     }));
     let mut reg = Registry::default();
-    reg.register("io.mark_a@1", EffectClass::Read, |_| Ok(SolValue::map([("v", SolValue::str("a"))])));
-    reg.register("io.mark_default@1", EffectClass::Read, |_| Ok(SolValue::map([("v", SolValue::str("default"))])));
+    reg.register("io.mark_a@1", EffectClass::Read, |_| {
+        Ok(SolValue::map([("v", SolValue::str("a"))]))
+    });
+    reg.register("io.mark_default@1", EffectClass::Read, |_| {
+        Ok(SolValue::map([("v", SolValue::str("default"))]))
+    });
     let mut inst = Instance::new(program, &mut reg);
     let initial = SolValue::map([("input", SolValue::map([("kind", SolValue::str("zzz"))]))]);
     if let TurnOutcome::Completed { bag, .. } = inst.start(initial).unwrap() {
-        let v = bag.as_map().unwrap().get("result").and_then(|r| r.as_map()).and_then(|m| m.get("v"));
+        let v = bag
+            .as_map()
+            .unwrap()
+            .get("result")
+            .and_then(|r| r.as_map())
+            .and_then(|m| m.get("v"));
         assert_eq!(v, Some(&SolValue::str("default")));
     } else {
         panic!("should complete");
@@ -91,8 +111,17 @@ fn retry_compiles_to_try_and_re_runs_on_transient() {
     let mut inst = Instance::new(program, &mut reg);
     match inst.start(SolValue::map::<_, &str>([])).unwrap() {
         TurnOutcome::Completed { bag, .. } => {
-            let ok = bag.as_map().unwrap().get("out").and_then(|o| o.as_map()).and_then(|m| m.get("ok"));
-            assert_eq!(ok, Some(&SolValue::Bool(true)), "Retry re-ran and succeeded on attempt 2");
+            let ok = bag
+                .as_map()
+                .unwrap()
+                .get("out")
+                .and_then(|o| o.as_map())
+                .and_then(|m| m.get("ok"));
+            assert_eq!(
+                ok,
+                Some(&SolValue::Bool(true)),
+                "Retry re-ran and succeeded on attempt 2"
+            );
         }
         _ => panic!("should complete after retry"),
     }

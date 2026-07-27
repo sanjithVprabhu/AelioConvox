@@ -27,7 +27,10 @@ fn run_vector(path: &std::path::Path) {
     let plan_text = serde_json::to_string(&plan).unwrap();
     let expected = &v["expected"];
     let kind = expected["kind"].as_str().unwrap();
-    let plan_time_only = v.get("plan_time_only").and_then(|x| x.as_bool()).unwrap_or(false);
+    let plan_time_only = v
+        .get("plan_time_only")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
 
     match kind {
         "err" if plan_time_only || expected["code"].as_str() == Some("Policy") => {
@@ -35,20 +38,21 @@ fn run_vector(path: &std::path::Path) {
             match err {
                 Err(e) => {
                     let want = expected["code"].as_str().unwrap();
-                    assert_eq!(
-                        e.code.code(),
-                        want,
-                        "{name}: plan-time code"
-                    );
+                    assert_eq!(e.code.code(), want, "{name}: plan-time code");
                 }
                 Ok(_) if plan_time_only => panic!("{name}: expected plan-time reject"),
                 Ok(program) => {
                     // Runtime error path.
-                    let bag = load_bag(v.get("initial_bag").unwrap_or(&J::Object(Default::default())));
+                    let bag = load_bag(
+                        v.get("initial_bag")
+                            .unwrap_or(&J::Object(Default::default())),
+                    );
                     let mut reg = Registry::default();
                     let mut inst = Instance::new(program, &mut reg);
                     match inst.start(bag) {
-                        Err(e) => assert_eq!(e.code.code(), expected["code"].as_str().unwrap(), "{name}"),
+                        Err(e) => {
+                            assert_eq!(e.code.code(), expected["code"].as_str().unwrap(), "{name}")
+                        }
                         Ok(_) => panic!("{name}: expected runtime err"),
                     }
                 }
@@ -62,7 +66,10 @@ fn run_vector(path: &std::path::Path) {
                     return;
                 }
             };
-            let bag = load_bag(v.get("initial_bag").unwrap_or(&J::Object(Default::default())));
+            let bag = load_bag(
+                v.get("initial_bag")
+                    .unwrap_or(&J::Object(Default::default())),
+            );
             let mut reg = Registry::default();
             let mut inst = Instance::new(program, &mut reg);
             match inst.start(bag) {
@@ -71,8 +78,12 @@ fn run_vector(path: &std::path::Path) {
             }
         }
         "bag_hash" => {
-            let program = compile(&plan_text).unwrap_or_else(|e| panic!("{name}: compile {}", e.detail));
-            let bag = load_bag(v.get("initial_bag").unwrap_or(&J::Object(Default::default())));
+            let program =
+                compile(&plan_text).unwrap_or_else(|e| panic!("{name}: compile {}", e.detail));
+            let bag = load_bag(
+                v.get("initial_bag")
+                    .unwrap_or(&J::Object(Default::default())),
+            );
             let expected_bag = load_bag(&expected["bag"]);
             let want = value_hash(&expected_bag);
             let mut reg = Registry::default();
@@ -82,7 +93,10 @@ fn run_vector(path: &std::path::Path) {
                 TurnOutcome::Parked(p) => panic!("{name}: parked at {}", p.park_nid),
             };
             assert_eq!(got, want, "{name}: bag_hash");
-            if v.get("replay_twice").and_then(|x| x.as_bool()).unwrap_or(false) {
+            if v.get("replay_twice")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false)
+            {
                 let again = replay(&program, &ledger, bag).unwrap();
                 assert_eq!(again, want, "{name}: replay");
             }
@@ -101,11 +115,7 @@ fn all_conformance_vectors() {
         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
         .collect();
     files.sort();
-    assert!(
-        !files.is_empty(),
-        "no vectors in {}",
-        dir.display()
-    );
+    assert!(!files.is_empty(), "no vectors in {}", dir.display());
     for f in files {
         run_vector(&f);
     }

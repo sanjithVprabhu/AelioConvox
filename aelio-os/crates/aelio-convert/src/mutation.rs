@@ -33,14 +33,24 @@ pub fn run_harness(
     mutants: &[Vec<Rule>],
     th: &Thresholds,
 ) -> MutationReport {
-    let mut report = MutationReport { total: mutants.len(), ..Default::default() };
+    let mut report = MutationReport {
+        total: mutants.len(),
+        ..Default::default()
+    };
     for rules in mutants {
         if gate::structural_ok(rules).is_err() {
             report.caught_structural += 1;
             continue;
         }
-        let passes = inputs.iter().filter(|inp| gate::shadow_validate(rules, inp, digest)).count();
-        let rate = if inputs.is_empty() { 1.0 } else { passes as f64 / inputs.len() as f64 };
+        let passes = inputs
+            .iter()
+            .filter(|inp| gate::shadow_validate(rules, inp, digest))
+            .count();
+        let rate = if inputs.is_empty() {
+            1.0
+        } else {
+            passes as f64 / inputs.len() as f64
+        };
         let ev = Evidence {
             shadow_distinct: inputs.len() as u64,
             shadow_validation_rate: rate,

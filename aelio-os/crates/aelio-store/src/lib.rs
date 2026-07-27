@@ -114,10 +114,7 @@ pub fn once_complete(
     let row = store
         .get(tenant, ONCE_TABLE, idem_key)?
         .ok_or(StoreError::NotFound)?;
-    let next = SolValue::map([
-        ("status", SolValue::str("result")),
-        ("result", result),
-    ]);
+    let next = SolValue::map([("status", SolValue::str("result")), ("result", result)]);
     store.cas(tenant, ONCE_TABLE, idem_key, row.version, next)?;
     Ok(())
 }
@@ -144,7 +141,10 @@ impl MemoryStore {
 
 impl Store for MemoryStore {
     fn get(&self, tenant: &str, table: &str, key: &str) -> Result<Option<Versioned>, StoreError> {
-        let g = self.inner.lock().map_err(|e| StoreError::Internal(e.to_string()))?;
+        let g = self
+            .inner
+            .lock()
+            .map_err(|e| StoreError::Internal(e.to_string()))?;
         Ok(g.rows
             .get(&(tenant.into(), table.into(), key.into()))
             .cloned())
@@ -157,18 +157,15 @@ impl Store for MemoryStore {
         key: &str,
         value: SolValue,
     ) -> Result<PutIfAbsent, StoreError> {
-        let mut g = self.inner.lock().map_err(|e| StoreError::Internal(e.to_string()))?;
+        let mut g = self
+            .inner
+            .lock()
+            .map_err(|e| StoreError::Internal(e.to_string()))?;
         let k = (tenant.into(), table.into(), key.into());
         if let Some(existing) = g.rows.get(&k) {
             return Ok(PutIfAbsent::Existing(existing.clone()));
         }
-        g.rows.insert(
-            k,
-            Versioned {
-                value,
-                version: 1,
-            },
-        );
+        g.rows.insert(k, Versioned { value, version: 1 });
         Ok(PutIfAbsent::Inserted { version: 1 })
     }
 
@@ -180,7 +177,10 @@ impl Store for MemoryStore {
         expected_version: u64,
         value: SolValue,
     ) -> Result<u64, StoreError> {
-        let mut g = self.inner.lock().map_err(|e| StoreError::Internal(e.to_string()))?;
+        let mut g = self
+            .inner
+            .lock()
+            .map_err(|e| StoreError::Internal(e.to_string()))?;
         let k = (tenant.into(), table.into(), key.into());
         let row = g.rows.get_mut(&k).ok_or(StoreError::NotFound)?;
         if row.version != expected_version {
@@ -202,7 +202,10 @@ mod tests {
         let tenant = "t1";
         let key = "inst|n_send|abc";
 
-        assert_eq!(once_begin(&mut store, tenant, key).unwrap(), OnceState::Execute);
+        assert_eq!(
+            once_begin(&mut store, tenant, key).unwrap(),
+            OnceState::Execute
+        );
         // Crash window: intent without result.
         assert_eq!(
             once_begin(&mut store, tenant, key).unwrap_err(),
@@ -211,14 +214,20 @@ mod tests {
 
         // Fresh key completes and replays.
         let key2 = "inst|n_send|def";
-        assert_eq!(once_begin(&mut store, tenant, key2).unwrap(), OnceState::Execute);
-        once_complete(&mut store, tenant, key2, SolValue::map([("sent", SolValue::Bool(true))])).unwrap();
+        assert_eq!(
+            once_begin(&mut store, tenant, key2).unwrap(),
+            OnceState::Execute
+        );
+        once_complete(
+            &mut store,
+            tenant,
+            key2,
+            SolValue::map([("sent", SolValue::Bool(true))]),
+        )
+        .unwrap();
         match once_begin(&mut store, tenant, key2).unwrap() {
             OnceState::Replay(v) => {
-                assert_eq!(
-                    v.as_map().unwrap().get("sent"),
-                    Some(&SolValue::Bool(true))
-                );
+                assert_eq!(v.as_map().unwrap().get("sent"), Some(&SolValue::Bool(true)));
             }
             OnceState::Execute => panic!("must replay"),
         }
@@ -232,7 +241,9 @@ mod tests {
             .unwrap();
         assert!(store.cas("t", "states", "k", 1, SolValue::Int(2)).is_ok());
         assert_eq!(
-            store.cas("t", "states", "k", 1, SolValue::Int(3)).unwrap_err(),
+            store
+                .cas("t", "states", "k", 1, SolValue::Int(3))
+                .unwrap_err(),
             StoreError::Conflict
         );
     }

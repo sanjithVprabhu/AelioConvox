@@ -40,7 +40,9 @@ impl fmt::Display for SolError {
                 write!(f, "program-bearing bag has no canonical form (§4.1.4)")
             }
             SolError::UnresolvedVar { path } => write!(f, "unresolved var `{path}` (§4.1.3)"),
-            SolError::PathSyntax { at, why } => write!(f, "path syntax error at {at}: {why} (§6.1)"),
+            SolError::PathSyntax { at, why } => {
+                write!(f, "path syntax error at {at}: {why} (§6.1)")
+            }
             SolError::Limit(e) => write!(f, "limit exceeded: {e:?} (§4.4 → Budget.Size)"),
         }
     }

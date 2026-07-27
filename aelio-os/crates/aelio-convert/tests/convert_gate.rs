@@ -22,28 +22,42 @@ fn app_a_e1_rename_active_to_loggedin() {
         out.as_map().unwrap().get("loggedin"),
         Some(&SolValue::Bool(true))
     );
-    assert!(out.as_map().unwrap().get("active").is_none(), "renamed away");
+    assert!(
+        out.as_map().unwrap().get("active").is_none(),
+        "renamed away"
+    );
 
     // e1 reaches SendOtp (external) ⇒ reviewed tier — the founding-bug check (§16.2).
-    let reach = Reach { reaches_write_or_external: true, ..Default::default() };
+    let reach = Reach {
+        reaches_write_or_external: true,
+        ..Default::default()
+    };
     assert_eq!(gate::classify_tier(&reach, &rules), Tier::Reviewed);
 }
 
 // ── App A e2: reply2 → verify digest via trim + cast str→int ───────────────────────────────────
 #[test]
 fn app_a_e2_trim_and_cast() {
-    let rules = json_rules(r#"[{"op":"trim","path":"code"},{"op":"cast","path":"code","to":"int"}]"#);
+    let rules =
+        json_rules(r#"[{"op":"trim","path":"code"},{"op":"cast","path":"code","to":"int"}]"#);
     let input = SolValue::map([("code", SolValue::str("  434543  "))]);
     let out = apply_rules(&rules, &input).unwrap();
-    assert_eq!(out.as_map().unwrap().get("code"), Some(&SolValue::Int(434543)));
+    assert_eq!(
+        out.as_map().unwrap().get("code"),
+        Some(&SolValue::Int(434543))
+    );
 }
 
 #[test]
 fn map_enum_never_invents_on_unmapped() {
-    let rules = json_rules(r#"[{"op":"map_enum","path":"status","table":{"A":"active","I":"inactive"}}]"#);
+    let rules =
+        json_rules(r#"[{"op":"map_enum","path":"status","table":{"A":"active","I":"inactive"}}]"#);
     // Mapped value works.
     let ok = apply_rules(&rules, &SolValue::map([("status", SolValue::str("A"))])).unwrap();
-    assert_eq!(ok.as_map().unwrap().get("status"), Some(&SolValue::str("active")));
+    assert_eq!(
+        ok.as_map().unwrap().get("status"),
+        Some(&SolValue::str("active"))
+    );
     // Unmapped value ⇒ RuleFail; consumer never runs on unmapped data (§14, A14.2).
     let err = apply_rules(&rules, &SolValue::map([("status", SolValue::str("Z"))])).unwrap_err();
     assert_eq!(err.rule_index, 0);
@@ -57,10 +71,18 @@ fn cast_matrix_forbids_semantic_casts() {
     assert_eq!(err.rule_index, 0);
     // float→int without mode is plan-time-shaped rejection at apply.
     let no_mode = json_rules(r#"[{"op":"cast","path":"x","to":"int"}]"#);
-    assert!(apply_rules(&no_mode, &SolValue::map([("x", SolValue::float(1.9).unwrap())])).is_err());
+    assert!(apply_rules(
+        &no_mode,
+        &SolValue::map([("x", SolValue::float(1.9).unwrap())])
+    )
+    .is_err());
     // With mode it succeeds.
     let with_mode = json_rules(r#"[{"op":"cast","path":"x","to":"int","mode":"floor"}]"#);
-    let out = apply_rules(&with_mode, &SolValue::map([("x", SolValue::float(1.9).unwrap())])).unwrap();
+    let out = apply_rules(
+        &with_mode,
+        &SolValue::map([("x", SolValue::float(1.9).unwrap())]),
+    )
+    .unwrap();
     assert_eq!(out.as_map().unwrap().get("x"), Some(&SolValue::Int(1)));
 }
 
@@ -75,7 +97,10 @@ fn fabricating_rules_escalate_to_reviewed_regardless_of_reach() {
     let pure = json_rules(r#"[{"op":"rename","from":"a","to":"b"}]"#);
     assert_eq!(gate::classify_tier(&Reach::default(), &pure), Tier::Auto);
     // secret ⇒ locked.
-    let secret_reach = Reach { is_secret: true, ..Default::default() };
+    let secret_reach = Reach {
+        is_secret: true,
+        ..Default::default()
+    };
     assert_eq!(gate::classify_tier(&secret_reach, &pure), Tier::Locked);
 }
 
@@ -96,9 +121,17 @@ fn rules_are_non_computational_by_construction() {
         // Each rule's payload is data/paths only — never an Instruction or another Rule.
         let _program_free = matches!(
             r,
-            Rule::Rename { .. } | Rule::Drop { .. } | Rule::Keep { .. } | Rule::Default { .. }
-                | Rule::Cast { .. } | Rule::Wrap { .. } | Rule::Unwrap { .. } | Rule::MapEnum { .. }
-                | Rule::PathCopy { .. } | Rule::ConstSet { .. } | Rule::Trim { .. }
+            Rule::Rename { .. }
+                | Rule::Drop { .. }
+                | Rule::Keep { .. }
+                | Rule::Default { .. }
+                | Rule::Cast { .. }
+                | Rule::Wrap { .. }
+                | Rule::Unwrap { .. }
+                | Rule::MapEnum { .. }
+                | Rule::PathCopy { .. }
+                | Rule::ConstSet { .. }
+                | Rule::Trim { .. }
         );
         assert!(_program_free);
     }
@@ -109,24 +142,58 @@ fn rules_are_non_computational_by_construction() {
 #[test]
 fn lifecycle_transitions_follow_app_k() {
     use lifecycle::transition;
-    assert_eq!(transition(Status::Proposed, Trigger::StructuralPass).unwrap(), Status::Shadow);
-    assert_eq!(transition(Status::Proposed, Trigger::StructuralFail).unwrap(), Status::Rejected);
+    assert_eq!(
+        transition(Status::Proposed, Trigger::StructuralPass).unwrap(),
+        Status::Shadow
+    );
+    assert_eq!(
+        transition(Status::Proposed, Trigger::StructuralFail).unwrap(),
+        Status::Rejected
+    );
     // Reviewed tier: approval gates first consumption (shadow→canary), not promotion.
-    assert!(transition(Status::Shadow, Trigger::ShadowThresholdsMet { approved: false }).is_err());
-    assert_eq!(transition(Status::Shadow, Trigger::ShadowThresholdsMet { approved: true }).unwrap(), Status::Canary);
-    assert_eq!(transition(Status::Canary, Trigger::CanaryThresholdsMet).unwrap(), Status::Promoted);
+    assert!(transition(
+        Status::Shadow,
+        Trigger::ShadowThresholdsMet { approved: false }
+    )
+    .is_err());
+    assert_eq!(
+        transition(
+            Status::Shadow,
+            Trigger::ShadowThresholdsMet { approved: true }
+        )
+        .unwrap(),
+        Status::Canary
+    );
+    assert_eq!(
+        transition(Status::Canary, Trigger::CanaryThresholdsMet).unwrap(),
+        Status::Promoted
+    );
     // Demotion is an event → shadow; kernel bump → canary-all.
-    assert_eq!(transition(Status::Promoted, Trigger::AttributedFailure).unwrap(), Status::Shadow);
-    assert_eq!(transition(Status::Promoted, Trigger::KernelBump).unwrap(), Status::Canary);
+    assert_eq!(
+        transition(Status::Promoted, Trigger::AttributedFailure).unwrap(),
+        Status::Shadow
+    );
+    assert_eq!(
+        transition(Status::Promoted, Trigger::KernelBump).unwrap(),
+        Status::Canary
+    );
 }
 
 #[test]
 fn thresholds_over_distinct_inputs() {
     let th = Thresholds::default();
     // 19 distinct inputs is below the bar even at 100% validation (§16.4: ≥20 distinct).
-    let short = Evidence { shadow_distinct: 19, shadow_validation_rate: 1.0, ..Default::default() };
+    let short = Evidence {
+        shadow_distinct: 19,
+        shadow_validation_rate: 1.0,
+        ..Default::default()
+    };
     assert!(!gate::shadow_to_canary(&short, &th));
-    let ok = Evidence { shadow_distinct: 20, shadow_validation_rate: 0.96, ..Default::default() };
+    let ok = Evidence {
+        shadow_distinct: 20,
+        shadow_validation_rate: 0.96,
+        ..Default::default()
+    };
     assert!(gate::shadow_to_canary(&ok, &th));
 }
 
@@ -136,42 +203,68 @@ fn mutation_harness_catches_wrong_converters() {
     // Consumer wants {loggedin: bool}. Correct converter renames active→loggedin.
     let digest = Digest::new([("loggedin", "bool")]);
     let inputs: Vec<SolValue> = (0..25)
-        .map(|i| SolValue::map([("active", SolValue::Bool(i % 2 == 0)), ("noise", SolValue::Int(i))]))
+        .map(|i| {
+            SolValue::map([
+                ("active", SolValue::Bool(i % 2 == 0)),
+                ("noise", SolValue::Int(i)),
+            ])
+        })
         .collect();
 
     // Mutants: each a plausible-but-wrong converter.
     let mutants = vec![
-        json_rules(r#"[{"op":"drop","path":"active"}]"#),                     // drops the needed field
-        json_rules(r#"[{"op":"rename","from":"active","to":"wrongkey"}]"#),   // renames to the wrong key
+        json_rules(r#"[{"op":"drop","path":"active"}]"#), // drops the needed field
+        json_rules(r#"[{"op":"rename","from":"active","to":"wrongkey"}]"#), // renames to the wrong key
         json_rules(r#"[{"op":"rename","from":"nonexistent","to":"loggedin"}]"#), // renames from a missing key
-        json_rules(r#"[{"op":"const_set","path":"loggedin","v":"true"}]"#),   // wrong type (str, not bool)
+        json_rules(r#"[{"op":"const_set","path":"loggedin","v":"true"}]"#), // wrong type (str, not bool)
         json_rules(r#"[{"op":"map_enum","path":"active","table":{"true":"loggedin"}}]"#), // nonsense mapping
     ];
 
     let report = run_harness(&inputs, &digest, &mutants, &Thresholds::default());
     assert_eq!(report.total, 5);
     assert_eq!(report.escaped, 0, "no wrong converter should reach canary");
-    assert_eq!(report.catch_rate(), 1.0, "§16.6 published catch rate = 100% on this set");
+    assert_eq!(
+        report.catch_rate(),
+        1.0,
+        "§16.6 published catch rate = 100% on this set"
+    );
 
     // And the CORRECT converter passes shadow (would advance).
     let correct = json_rules(r#"[{"op":"rename","from":"active","to":"loggedin"}]"#);
-    let passes = inputs.iter().filter(|i| gate::shadow_validate(&correct, i, &digest)).count();
-    assert_eq!(passes, inputs.len(), "correct converter validates on every input");
+    let passes = inputs
+        .iter()
+        .filter(|i| gate::shadow_validate(&correct, i, &digest))
+        .count();
+    assert_eq!(
+        passes,
+        inputs.len(),
+        "correct converter validates on every input"
+    );
 }
 
 // ── §13 conversion-edge lifecycle + on_parse_fail + rejected short-circuit ─────────────────────
 #[test]
 fn edge_advances_through_lifecycle_and_honors_on_parse_fail() {
-    use aelio_convert::{ConversionEdge, ConvertUseError, EdgeId, OnParseFail, Sensitivity, Status, Trigger};
+    use aelio_convert::{
+        ConversionEdge, ConvertUseError, EdgeId, OnParseFail, Sensitivity, Status, Trigger,
+    };
     let rules = json_rules(r#"[{"op":"rename","from":"active","to":"loggedin"}]"#);
     let mut edge = ConversionEdge {
-        id: EdgeId { tenant: "t".into(), flow_id: "login.v1".into(), producer_nid: "n_read".into(), consumer_nid: "n_branch".into() },
+        id: EdgeId {
+            tenant: "t".into(),
+            flow_id: "login.v1".into(),
+            producer_nid: "n_read".into(),
+            consumer_nid: "n_branch".into(),
+        },
         conversion_id: "conv1".into(),
         version: 1,
         status: Status::Proposed,
         rules: rules.clone(),
         rules_hash: aelio_convert::rules_hash(&rules),
-        from_signature: aelio_sol::structural_imprint(&SolValue::map([("active", SolValue::Bool(true))])),
+        from_signature: aelio_sol::structural_imprint(&SolValue::map([(
+            "active",
+            SolValue::Bool(true),
+        )])),
         to_digest: aelio_convert::Digest::new([("loggedin", "bool")]),
         on_parse_fail: OnParseFail::Error,
         sensitivity: Sensitivity::Internal,
@@ -180,23 +273,36 @@ fn edge_advances_through_lifecycle_and_honors_on_parse_fail() {
     // proposed → shadow → (reviewed approval) canary → promoted.
     edge.advance(Trigger::StructuralPass).unwrap();
     assert_eq!(edge.status, Status::Shadow);
-    edge.advance(Trigger::ShadowThresholdsMet { approved: true }).unwrap();
+    edge.advance(Trigger::ShadowThresholdsMet { approved: true })
+        .unwrap();
     assert_eq!(edge.status, Status::Canary);
     edge.advance(Trigger::CanaryThresholdsMet).unwrap();
     assert_eq!(edge.status, Status::Promoted);
 
     // Warm use: the rename applies.
-    let out = edge.apply_at_use(&SolValue::map([("active", SolValue::Bool(true))])).unwrap();
-    assert_eq!(out.as_map().unwrap().get("loggedin"), Some(&SolValue::Bool(true)));
+    let out = edge
+        .apply_at_use(&SolValue::map([("active", SolValue::Bool(true))]))
+        .unwrap();
+    assert_eq!(
+        out.as_map().unwrap().get("loggedin"),
+        Some(&SolValue::Bool(true))
+    );
 
     // A RuleFail with on_parse_fail=Error propagates Convert.RuleFail (input lacks `active`).
-    let err = edge.apply_at_use(&SolValue::map([("other", SolValue::Bool(true))])).unwrap_err();
+    let err = edge
+        .apply_at_use(&SolValue::map([("other", SolValue::Bool(true))]))
+        .unwrap_err();
     assert!(matches!(err, ConvertUseError::RuleFail { .. }));
 
     // With on_parse_fail=Default, the same failing input yields the default instead.
     edge.on_parse_fail = OnParseFail::Default(SolValue::map([("loggedin", SolValue::Bool(false))]));
-    let defaulted = edge.apply_at_use(&SolValue::map([("other", SolValue::Bool(true))])).unwrap();
-    assert_eq!(defaulted.as_map().unwrap().get("loggedin"), Some(&SolValue::Bool(false)));
+    let defaulted = edge
+        .apply_at_use(&SolValue::map([("other", SolValue::Bool(true))]))
+        .unwrap();
+    assert_eq!(
+        defaulted.as_map().unwrap().get("loggedin"),
+        Some(&SolValue::Bool(false))
+    );
 }
 
 #[test]
@@ -220,23 +326,43 @@ fn edge_inspector_renders_identity_status_and_evidence() {
     use aelio_convert::{inspect, ConversionEdge, EdgeId, OnParseFail, Sensitivity};
     let rules = json_rules(r#"[{"op":"rename","from":"active","to":"loggedin"}]"#);
     let edge = ConversionEdge {
-        id: EdgeId { tenant: "t".into(), flow_id: "login.v1".into(), producer_nid: "n_read".into(), consumer_nid: "n_branch".into() },
+        id: EdgeId {
+            tenant: "t".into(),
+            flow_id: "login.v1".into(),
+            producer_nid: "n_read".into(),
+            consumer_nid: "n_branch".into(),
+        },
         conversion_id: "conv1".into(),
         version: 3,
         status: Status::Canary,
         rules: rules.clone(),
         rules_hash: aelio_convert::rules_hash(&rules),
-        from_signature: aelio_sol::structural_imprint(&SolValue::map([("active", SolValue::Bool(true))])),
+        from_signature: aelio_sol::structural_imprint(&SolValue::map([(
+            "active",
+            SolValue::Bool(true),
+        )])),
         to_digest: Digest::new([("loggedin", "bool")]),
         on_parse_fail: OnParseFail::Error,
         sensitivity: Sensitivity::Internal,
-        evidence: Evidence { shadow_distinct: 42, shadow_validation_rate: 0.98, canary_distinct: 12, canary_success_rate: 1.0, attributed_guard_violations: 0 },
+        evidence: Evidence {
+            shadow_distinct: 42,
+            shadow_validation_rate: 0.98,
+            canary_distinct: 12,
+            canary_success_rate: 1.0,
+            attributed_guard_violations: 0,
+        },
     };
     let text = inspect(&edge);
-    assert!(text.contains("t|login.v1|n_read|n_branch"), "shows the nid-based edge id: {text}");
+    assert!(
+        text.contains("t|login.v1|n_read|n_branch"),
+        "shows the nid-based edge id: {text}"
+    );
     assert!(text.contains("conv1@3"));
     assert!(text.contains("Canary"));
-    assert!(text.contains("loggedin:bool"), "shows the consumer digest requirement: {text}");
+    assert!(
+        text.contains("loggedin:bool"),
+        "shows the consumer digest requirement: {text}"
+    );
     assert!(text.contains("shadow 42/42@98%"));
     assert!(text.contains("canary 12@100%"));
 }

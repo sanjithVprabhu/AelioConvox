@@ -40,8 +40,13 @@ impl Registry {
         effect_class: EffectClass,
         func: impl FnMut(&SolValue) -> Result<SolValue, ErrV1> + 'static,
     ) {
-        self.entries
-            .insert(id.into(), Entry { effect_class, func: Box::new(func) });
+        self.entries.insert(
+            id.into(),
+            Entry {
+                effect_class,
+                func: Box::new(func),
+            },
+        );
     }
 
     pub fn effect_of(&self, id: &str) -> Option<EffectClass> {

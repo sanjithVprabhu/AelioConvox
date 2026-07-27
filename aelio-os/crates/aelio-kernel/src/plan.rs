@@ -15,13 +15,40 @@
 
 use crate::error::{ErrV1, ReasonCode};
 use crate::instr::{Kind, Node};
+use crate::waves;
 use aelio_sol::{Path, Segment};
+use std::collections::HashSet;
 
 /// Run all P0 static checks. Returns the first violation as a `Shape`/`Policy` error.
 pub fn plan(root: &Node) -> Result<(), ErrV1> {
+    let mut nids = HashSet::new();
+    check_unique_nids(root, &mut nids)?;
     check_writes(root)?;
     check_tee_and_park(root, false)?;
+    check_tee_dataflow(root)?;
+    check_map_imports(root)?;
     check_const_limits(root)?;
+    Ok(())
+}
+
+fn check_unique_nids(node: &Node, seen: &mut HashSet<String>) -> Result<(), ErrV1> {
+    if node.nid.is_empty() {
+        return Err(ErrV1::new(
+            ReasonCode::Shape,
+            &node.nid,
+            "nid must not be empty (§8.1)",
+        ));
+    }
+    if !seen.insert(node.nid.clone()) {
+        return Err(ErrV1::new(
+            ReasonCode::Shape,
+            &node.nid,
+            "duplicate nid in one plan (§8.1)",
+        ));
+    }
+    for child in children(node) {
+        check_unique_nids(child, seen)?;
+    }
     Ok(())
 }
 
@@ -29,9 +56,13 @@ pub fn plan(root: &Node) -> Result<(), ErrV1> {
 /// oversized literal is a broken flow, rejected at push, not discovered at runtime.
 fn check_const_limits(node: &Node) -> Result<(), ErrV1> {
     if let Kind::Const(v) = &node.kind {
-        aelio_sol::Limits::default()
-            .check(v)
-            .map_err(|e| ErrV1::new(ReasonCode::BudgetSize, &node.nid, format!("§4.4 Const literal exceeds limits: {e}")))?;
+        aelio_sol::Limits::default().check(v).map_err(|e| {
+            ErrV1::new(
+                ReasonCode::BudgetSize,
+                &node.nid,
+                format!("§4.4 Const literal exceeds limits: {e}"),
+            )
+        })?;
     }
     for child in children(node) {
         check_const_limits(child)?;
@@ -68,7 +99,11 @@ fn check_tee_and_park(node: &Node, in_tee_side: bool) -> Result<(), ErrV1> {
         }
     }
     match &node.kind {
-        Kind::Tee { body, side, side_root } => {
+        Kind::Tee {
+            body,
+            side,
+            side_root,
+        } => {
             // Side writes must stay within side_root (§8.2). Isolation from the main read set is a
             // richer check (P1); here we enforce the subtree containment.
             for w in side_writes(side) {
@@ -91,6 +126,68 @@ fn check_tee_and_park(node: &Node, in_tee_side: bool) -> Result<(), ErrV1> {
             Ok(())
         }
     }
+}
+
+/// A Tee side branch may not write anything read by a subsequent Seq step (§8.2). This is what
+/// makes its failure/non-observation semantically incapable of contaminating the main dataflow.
+fn check_tee_dataflow(node: &Node) -> Result<(), ErrV1> {
+    if let Kind::Seq(steps) = &node.kind {
+        for (index, step) in steps.iter().enumerate() {
+            if let Kind::Tee { side, .. } = &step.kind {
+                let writes = side_writes(side);
+                let later_reads: Vec<Path> = steps[index + 1..]
+                    .iter()
+                    .flat_map(|later| waves::rw_set(later).reads)
+                    .collect();
+                if paths_intersect(&writes, &later_reads) {
+                    return Err(ErrV1::new(
+                        ReasonCode::Shape,
+                        &step.nid,
+                        "Tee.side write intersects a subsequent read (§8.2)",
+                    ));
+                }
+            }
+        }
+    }
+    for child in children(node) {
+        check_tee_dataflow(child)?;
+    }
+    Ok(())
+}
+
+/// Map imports are explicit read-only projections. A child plan that can write an imported alias
+/// is rejected before execution (§6.3).
+fn check_map_imports(node: &Node) -> Result<(), ErrV1> {
+    if let Kind::Map { imports, body, .. } = &node.kind {
+        let writes = waves::rw_set(body).writes;
+        for (alias, _) in imports {
+            let alias_path = Path::parse(alias).map_err(|e| {
+                ErrV1::new(
+                    ReasonCode::Shape,
+                    &node.nid,
+                    format!("Map import alias must be a literal child path: {e}"),
+                )
+            })?;
+            if paths_intersect(std::slice::from_ref(&alias_path), &writes) {
+                return Err(ErrV1::new(
+                    ReasonCode::Policy,
+                    &node.nid,
+                    format!("Map body writes read-only import `{alias}` (§6.3)"),
+                ));
+            }
+        }
+    }
+    for child in children(node) {
+        check_map_imports(child)?;
+    }
+    Ok(())
+}
+
+fn paths_intersect(a: &[Path], b: &[Path]) -> bool {
+    a.iter().any(|left| {
+        b.iter()
+            .any(|right| prefix_of(left, right) || prefix_of(right, left))
+    })
 }
 
 fn side_writes(node: &Node) -> Vec<Path> {
@@ -146,7 +243,12 @@ fn children(node: &Node) -> Vec<&Node> {
             }
             v
         }
-        Kind::Try { body, catch, finally, .. } => {
+        Kind::Try {
+            body,
+            catch,
+            finally,
+            ..
+        } => {
             let mut v = vec![body.as_ref()];
             v.extend(catch.iter().map(|(_, n)| n));
             if let Some(f) = finally {

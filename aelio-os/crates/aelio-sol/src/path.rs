@@ -10,6 +10,7 @@
 
 use crate::error::{LimitError, SolError, SolResult};
 use crate::value::SolValue;
+use std::fmt;
 
 const MAX_PATH_DEPTH: usize = 32;
 
@@ -103,6 +104,40 @@ impl Path {
     }
 }
 
+impl fmt::Display for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, segment) in self.segments.iter().enumerate() {
+            match segment {
+                Segment::Key(key)
+                    if key
+                        .bytes()
+                        .enumerate()
+                        .all(|(i, byte)| {
+                            byte == b'_'
+                                || byte.is_ascii_alphabetic()
+                                || (i > 0 && byte.is_ascii_digit())
+                        }) =>
+                {
+                    if index > 0 {
+                        f.write_str(".")?;
+                    }
+                    f.write_str(key)?;
+                }
+                Segment::Key(key) => {
+                    if index > 0 {
+                        f.write_str(".")?;
+                    }
+                    let quoted =
+                        serde_json::to_string(key).map_err(|_| fmt::Error)?;
+                    write!(f, "[{quoted}]")?;
+                }
+                Segment::Index(value) => write!(f, "[{value}]")?,
+            }
+        }
+        Ok(())
+    }
+}
+
 fn parse_key_segment(bytes: &[u8], pos: usize) -> SolResult<(Segment, usize)> {
     match bytes.get(pos) {
         Some(b'[') => parse_quoted_key(bytes, pos),
@@ -172,10 +207,12 @@ fn parse_quoted_key(bytes: &[u8], pos: usize) -> SolResult<(Segment, usize)> {
                 // Copy one UTF-8 code point.
                 let ch_len = utf8_len(bytes[i]);
                 let slice = &bytes[i..i + ch_len];
-                key.push_str(std::str::from_utf8(slice).map_err(|_| SolError::PathSyntax {
-                    at: i,
-                    why: "invalid UTF-8 in quoted key",
-                })?);
+                key.push_str(
+                    std::str::from_utf8(slice).map_err(|_| SolError::PathSyntax {
+                        at: i,
+                        why: "invalid UTF-8 in quoted key",
+                    })?,
+                );
                 i += ch_len;
             }
         }

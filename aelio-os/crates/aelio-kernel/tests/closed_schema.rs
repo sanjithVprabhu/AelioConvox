@@ -14,7 +14,11 @@ fn unknown_field_is_rejected() {
 #[test]
 fn unknown_field_on_control_op_is_rejected() {
     let err = compile(r#"{"nid":"i","op":"Identity","bogus":123}"#).unwrap_err();
-    assert!(err.detail.contains("unknown field `bogus`"), "{}", err.detail);
+    assert!(
+        err.detail.contains("unknown field `bogus`"),
+        "{}",
+        err.detail
+    );
 }
 
 #[test]
@@ -26,7 +30,10 @@ fn known_fields_still_compile() {
 #[test]
 fn oversized_const_literal_is_rejected_at_plan_time() {
     // A Const list literal beyond the 10k cap → Budget.Size at compile (plan) time.
-    let items: String = (0..10_001).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+    let items: String = (0..10_001)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     let plan = format!(r#"{{"nid":"c","op":"Const","v":[{items}]}}"#);
     let err = compile(&plan).unwrap_err();
     assert_eq!(err.code.code(), "Budget.Size", "{}", err.detail);

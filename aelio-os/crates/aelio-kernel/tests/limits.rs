@@ -15,7 +15,8 @@ fn nested(depth: usize) -> SolValue {
 /// Returns the error reason-code string, or "OK" if the write completed within limits.
 fn write_code(value: SolValue) -> String {
     // A Call whose Read output is written into `out` — the write triggers the §4.4 check.
-    let program = compile(r#"{"nid":"c","op":"Call","id":"io.big@1","args":{},"into":"out"}"#).unwrap();
+    let program =
+        compile(r#"{"nid":"c","op":"Call","id":"io.big@1","args":{},"into":"out"}"#).unwrap();
     let mut reg = Registry::default();
     reg.register("io.big@1", EffectClass::Read, move |_| Ok(value.clone()));
     let mut inst = Instance::new(program, &mut reg);
@@ -28,12 +29,20 @@ fn write_code(value: SolValue) -> String {
 #[test]
 fn depth_over_32_is_rejected() {
     // out + 33 nested = depth 34 at the deepest scalar → over the cap.
-    assert_eq!(write_code(nested(33)), "Budget.Size", "deep nest → §4.4 Budget.Size");
+    assert_eq!(
+        write_code(nested(33)),
+        "Budget.Size",
+        "deep nest → §4.4 Budget.Size"
+    );
 }
 
 #[test]
 fn map_over_1024_keys_is_rejected() {
-    let big = SolValue::Map((0..1100).map(|i| (format!("k{i}"), SolValue::Int(i))).collect());
+    let big = SolValue::Map(
+        (0..1100)
+            .map(|i| (format!("k{i}"), SolValue::Int(i)))
+            .collect(),
+    );
     assert_eq!(write_code(big), "Budget.Size");
 }
 

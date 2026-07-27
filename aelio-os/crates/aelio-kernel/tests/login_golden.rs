@@ -37,13 +37,18 @@ fn login_program() -> &'static str {
 
 fn login_registry() -> Registry {
     let mut r = Registry::default();
-    r.register("io.sense_hydrate@1", EffectClass::Read, |_| Ok(SolValue::map::<_, &str>([])));
+    r.register("io.sense_hydrate@1", EffectClass::Read, |_| {
+        Ok(SolValue::map::<_, &str>([]))
+    });
     // Unauthenticated → Branch takes the else (login) path.
     r.register("io.state_read@1", EffectClass::Read, |_| {
         Ok(SolValue::map([("loggedin", SolValue::Bool(false))]))
     });
     r.register("model.ask_phone@1", EffectClass::Read, |_| {
-        Ok(SolValue::map([("text", SolValue::str("What's your number?"))]))
+        Ok(SolValue::map([(
+            "text",
+            SolValue::str("What's your number?"),
+        )]))
     });
     r.register("compute.validate_phone@1", EffectClass::Pure, |_args| {
         // A real validator is a registered target (§5.4); the stub normalizes to E164.
@@ -53,21 +58,30 @@ fn login_registry() -> Registry {
         Ok(SolValue::map([("sent", SolValue::Bool(true))]))
     });
     r.register("model.ask_otp@1", EffectClass::Read, |_| {
-        Ok(SolValue::map([("text", SolValue::str("Enter the 6-digit code"))]))
+        Ok(SolValue::map([(
+            "text",
+            SolValue::str("Enter the 6-digit code"),
+        )]))
     });
     r.register("tool.verify_otp@1", EffectClass::External, |args| {
-        let ok = args
-            .as_map()
-            .and_then(|m| m.get("code"))
-            .and_then(|c| if let SolValue::Str(s) = c { Some(s.as_str()) } else { None })
-            == Some("434543");
+        let ok = args.as_map().and_then(|m| m.get("code")).and_then(|c| {
+            if let SolValue::Str(s) = c {
+                Some(s.as_str())
+            } else {
+                None
+            }
+        }) == Some("434543");
         Ok(SolValue::map([("ok", SolValue::Bool(ok))]))
     });
-    r.register("io.state_write@1", EffectClass::Write, |_| Ok(SolValue::map::<_, &str>([])));
+    r.register("io.state_write@1", EffectClass::Write, |_| {
+        Ok(SolValue::map::<_, &str>([]))
+    });
     r.register("model.express_success@1", EffectClass::Read, |_| {
         Ok(SolValue::map([("text", SolValue::str("You're in."))]))
     });
-    r.register("flow.authed_menu@1", EffectClass::Read, |_| Ok(SolValue::map::<_, &str>([])));
+    r.register("flow.authed_menu@1", EffectClass::Read, |_| {
+        Ok(SolValue::map::<_, &str>([]))
+    });
     r
 }
 
@@ -110,15 +124,24 @@ fn login_flow_end_to_end_with_replay_bit_identity() {
         .and_then(|v| v.as_map())
         .and_then(|m| m.get("ok"));
     assert_eq!(verify_ok, Some(&SolValue::Bool(true)), "OTP verified");
-    assert!(bag.as_map().unwrap().contains_key("out"), "success expressed");
+    assert!(
+        bag.as_map().unwrap().contains_key("out"),
+        "success expressed"
+    );
 
     // Ledger integrity: per-instance chain gapless + linked (App G, §28).
-    instance.ledger().verify_chain().expect("ledger chain gapless + linked");
+    instance
+        .ledger()
+        .verify_chain()
+        .expect("ledger chain gapless + linked");
 
     // ── G2: replay the whole instance ledger as a pure function; bit-identity or hard refuse. ──
     let recomputed = replay(&program, instance.ledger(), SolValue::map::<_, &str>([]))
         .expect("replay must not diverge");
-    assert_eq!(recomputed, bag_hash, "replay bag_hash bit-identical (§12.3, G2)");
+    assert_eq!(
+        recomputed, bag_hash,
+        "replay bag_hash bit-identical (§12.3, G2)"
+    );
 }
 
 #[test]
@@ -136,5 +159,8 @@ fn planner_rejects_park_in_tee_side() {
     {"nid":"t","op":"Tee","side_root":"log",
       "body":{"nid":"b","op":"Identity"},
       "side":{"nid":"p","op":"Park","until":{"kind":"event"},"into":"log.x"}}"#;
-    assert!(compile(program).is_err(), "Park inside Tee.side is plan-time rejected");
+    assert!(
+        compile(program).is_err(),
+        "Park inside Tee.side is plan-time rejected"
+    );
 }

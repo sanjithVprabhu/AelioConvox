@@ -40,7 +40,12 @@ fn drop_and_keep() {
 fn path_copy_copies_nested_value() {
     let container = V::map([("src", V::map([("token", s("xyz"))]))]);
     let out = apply("path_copy", &[container, s("src.token"), s("dst.token")]).unwrap();
-    let dst = out.as_map().unwrap().get("dst").and_then(|d| d.as_map()).and_then(|m| m.get("token"));
+    let dst = out
+        .as_map()
+        .unwrap()
+        .get("dst")
+        .and_then(|d| d.as_map())
+        .and_then(|m| m.get("token"));
     assert_eq!(dst, Some(&s("xyz")));
     // missing source → Missing
     let empty = V::map::<_, &str>([]);
@@ -52,12 +57,24 @@ fn path_copy_copies_nested_value() {
 fn list_count_first_last_contains() {
     let l = V::list([V::Int(10), V::Int(20), V::Int(30)]);
     assert_eq!(apply("count", std::slice::from_ref(&l)).unwrap(), V::Int(3));
-    assert_eq!(apply("first", std::slice::from_ref(&l)).unwrap(), V::Int(10));
+    assert_eq!(
+        apply("first", std::slice::from_ref(&l)).unwrap(),
+        V::Int(10)
+    );
     assert_eq!(apply("last", std::slice::from_ref(&l)).unwrap(), V::Int(30));
-    assert_eq!(apply("list_contains", &[l.clone(), V::Int(20)]).unwrap(), V::Bool(true));
-    assert_eq!(apply("list_contains", &[l, V::Int(99)]).unwrap(), V::Bool(false));
+    assert_eq!(
+        apply("list_contains", &[l.clone(), V::Int(20)]).unwrap(),
+        V::Bool(true)
+    );
+    assert_eq!(
+        apply("list_contains", &[l, V::Int(99)]).unwrap(),
+        V::Bool(false)
+    );
     // first/last on empty → Missing
-    assert_eq!(apply("first", &[V::list([])]).unwrap_err().code, ReasonCode::Missing);
+    assert_eq!(
+        apply("first", &[V::list([])]).unwrap_err().code,
+        ReasonCode::Missing
+    );
 }
 
 #[test]
@@ -74,7 +91,17 @@ fn append_and_slice_enforce_max_items() {
     let sl = apply("slice", &[big.clone(), V::Int(1), V::Int(3), V::Int(5)]).unwrap();
     assert_eq!(sl.as_list().unwrap(), &[V::Int(1), V::Int(2)]);
     // slice wider than max_items → Budget.Size
-    assert_eq!(apply("slice", &[big.clone(), V::Int(0), V::Int(4), V::Int(2)]).unwrap_err().code, ReasonCode::BudgetSize);
+    assert_eq!(
+        apply("slice", &[big.clone(), V::Int(0), V::Int(4), V::Int(2)])
+            .unwrap_err()
+            .code,
+        ReasonCode::BudgetSize
+    );
     // out-of-range bounds → Type
-    assert_eq!(apply("slice", &[big, V::Int(0), V::Int(9), V::Int(9)]).unwrap_err().code, ReasonCode::Type);
+    assert_eq!(
+        apply("slice", &[big, V::Int(0), V::Int(9), V::Int(9)])
+            .unwrap_err()
+            .code,
+        ReasonCode::Type
+    );
 }

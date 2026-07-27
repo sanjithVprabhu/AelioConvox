@@ -15,7 +15,11 @@ pub fn desugar(node: &J) -> Result<J, String> {
     let Some(obj) = node.as_object() else {
         return Ok(node.clone());
     };
-    let nid = obj.get("nid").and_then(J::as_str).unwrap_or("?").to_string();
+    let nid = obj
+        .get("nid")
+        .and_then(J::as_str)
+        .unwrap_or("?")
+        .to_string();
     match obj.get("op").and_then(J::as_str) {
         Some("Switch") => desugar_switch(&nid, obj),
         Some("Pipe") => {
@@ -31,7 +35,10 @@ pub fn desugar(node: &J) -> Result<J, String> {
 /// `Switch{on, cases:{label:instr,...}, default}` → nested `Branch`.
 fn desugar_switch(nid: &str, obj: &Map<String, J>) -> Result<J, String> {
     let on = obj.get("on").ok_or("Switch.on required")?;
-    let cases = obj.get("cases").and_then(J::as_object).ok_or("Switch.cases object")?;
+    let cases = obj
+        .get("cases")
+        .and_then(J::as_object)
+        .ok_or("Switch.cases object")?;
     let default = obj.get("default").ok_or("Switch.default required")?;
 
     // Fold cases into an else-chain terminating in the default.
@@ -53,30 +60,59 @@ fn desugar_switch(nid: &str, obj: &Map<String, J>) -> Result<J, String> {
 /// retryable codes. Innermost has no catch (propagates) — bounded by construction (§11.5, §8.4 G1).
 fn desugar_retry(nid: &str, obj: &Map<String, J>) -> Result<J, String> {
     let body = desugar(obj.get("body").ok_or("Retry.body required")?)?;
-    let max = obj.get("max").and_then(J::as_u64).filter(|&n| n >= 1).ok_or("Retry.max >= 1")?;
+    let max = obj
+        .get("max")
+        .and_then(J::as_u64)
+        .filter(|&n| n >= 1)
+        .ok_or("Retry.max >= 1")?;
     let retry_on: Vec<String> = obj
         .get("retry_on")
         .and_then(J::as_array)
-        .map(|a| a.iter().filter_map(|c| c.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| c.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_else(|| vec!["Tool.Transient".into(), "Timeout".into()]);
     let err_into = format!("{nid}__retry_err");
 
-    // Attempt `max` runs: attempt(k) = Try(body, catch{codes → attempt(k-1)}); attempt(1) = body.
-    let mut current = body.clone();
-    for k in 2..=max {
+    // Every expanded occurrence is a distinct authored node and therefore needs a distinct derived
+    // nid (§8.1). Reusing the body's nid in each catch would make ledger attribution ambiguous.
+    let mut current = remint(&body, &format!("__attempt{max}"));
+    for attempt in (1..max).rev() {
         let mut catch = Map::new();
-        for code in &retry_on {
-            catch.insert(code.clone(), current.clone());
+        for (code_index, code) in retry_on.iter().enumerate() {
+            catch.insert(
+                code.clone(),
+                remint(&current, &format!("__from{attempt}_catch{code_index}")),
+            );
         }
         current = json!({
-            "nid": format!("{nid}__retry{k}"),
+            "nid": format!("{nid}__retry{attempt}"),
             "op": "Try",
-            "body": body,
+            "body": remint(&body, &format!("__attempt{attempt}")),
             "catch": catch,
             "err_into": err_into,
         });
     }
     Ok(current)
+}
+
+fn remint(value: &J, suffix: &str) -> J {
+    match value {
+        J::Array(values) => J::Array(values.iter().map(|value| remint(value, suffix)).collect()),
+        J::Object(object) => {
+            let mut reminted = object
+                .iter()
+                .map(|(key, value)| (key.clone(), remint(value, suffix)))
+                .collect::<Map<_, _>>();
+            if let Some(J::String(nid)) = object.get("nid") {
+                reminted.insert("nid".into(), J::String(format!("{nid}{suffix}")));
+            }
+            J::Object(reminted)
+        }
+        scalar => scalar.clone(),
+    }
 }
 
 fn desugar_children(node: &J) -> Result<J, String> {
@@ -102,5 +138,7 @@ fn desugar_children(node: &J) -> Result<J, String> {
 }
 
 fn arr<'a>(obj: &'a Map<String, J>, key: &str) -> Result<&'a Vec<J>, String> {
-    obj.get(key).and_then(J::as_array).ok_or(format!("expected `{key}` array"))
+    obj.get(key)
+        .and_then(J::as_array)
+        .ok_or(format!("expected `{key}` array"))
 }

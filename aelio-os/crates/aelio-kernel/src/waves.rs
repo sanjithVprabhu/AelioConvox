@@ -49,14 +49,21 @@ fn collect(node: &Node, set: &mut RwSet) {
                 expr_reads(e, set);
             }
         }
-        Kind::Map { into, over, imports, .. } => {
+        Kind::Map {
+            into,
+            over,
+            imports,
+            ..
+        } => {
             set.writes.push(into.clone());
             set.reads.push(over.clone());
             for (_, p) in imports {
                 set.reads.push(p.clone());
             }
         }
-        Kind::Filter { into, over, pred, .. } => {
+        Kind::Filter {
+            into, over, pred, ..
+        } => {
             set.writes.push(into.clone());
             set.reads.push(over.clone());
             expr_reads(pred, set);
@@ -75,7 +82,10 @@ fn collect(node: &Node, set: &mut RwSet) {
         Kind::Branch { pred, .. } => expr_reads(pred, set),
         Kind::Loop { while_, .. } => expr_reads(while_, set),
         Kind::Guard { invariant, .. } => expr_reads(invariant, set),
-        Kind::Once { idem_key: Some(exprs), .. } => {
+        Kind::Once {
+            idem_key: Some(exprs),
+            ..
+        } => {
             for e in exprs {
                 expr_reads(e, set);
             }
@@ -116,7 +126,12 @@ fn child_nodes(node: &Node) -> Vec<&Node> {
             }
             v
         }
-        Kind::Try { body, catch, finally, .. } => {
+        Kind::Try {
+            body,
+            catch,
+            finally,
+            ..
+        } => {
             let mut v = vec![body.as_ref()];
             v.extend(catch.iter().map(|(_, n)| n));
             if let Some(f) = finally {
