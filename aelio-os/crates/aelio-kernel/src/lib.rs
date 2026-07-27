@@ -15,6 +15,7 @@ mod json;
 pub mod ledger;
 pub mod plan;
 pub mod registry;
+pub mod waves;
 
 pub use driver::{replay, Instance, Parked, TurnOutcome};
 pub use error::{ErrV1, ExecResult, ReasonCode};
