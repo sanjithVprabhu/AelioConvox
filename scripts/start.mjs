@@ -16,6 +16,10 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { DEFAULT_AELIO_PORT, resolveAelioPort } from './lib/aelio-port.mjs';
 
 const root = process.cwd();
+const astrolobeRoot = join(root, 'Sunjet/Astrolobe');
+const llServerBin = join(astrolobeRoot, 'target/release/ll-server');
+const defaultSunjetUrl = 'http://127.0.0.1:8080';
+const defaultSunjetApiKey = 'change-me-sunjet';
 
 function log(step, message) {
   console.log(`[start] ${step} ${message}`);
@@ -54,6 +58,143 @@ function loadEnvFile(path) {
 
 function hasPnpm() {
   return spawnSync('pnpm', ['--version'], { stdio: 'ignore' }).status === 0;
+}
+
+function hasCargo() {
+  return spawnSync('cargo', ['--version'], { stdio: 'ignore' }).status === 0;
+}
+
+function resolveEnvRefs(value) {
+  return value.replace(/\$\{([A-Z0-9_]+)\}/g, (_, name) => process.env[name] ?? '');
+}
+
+function readSunjetUrl(configFile) {
+  const fromEnv = process.env.AELIO_SUNJET_URL?.trim();
+  if (fromEnv) return fromEnv;
+
+  if (!existsSync(configFile)) return defaultSunjetUrl;
+
+  const lines = readFileSync(configFile, 'utf8').split('\n');
+  let inSunjet = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^sunjet:/.test(trimmed)) {
+      inSunjet = true;
+      continue;
+    }
+    if (inSunjet && trimmed && !/^\s/.test(line) && !trimmed.startsWith('#')) {
+      break;
+    }
+    const urlMatch = line.match(/^\s+url:\s*(\S+)/);
+    if (inSunjet && urlMatch) {
+      return resolveEnvRefs(urlMatch[1]);
+    }
+  }
+
+  return defaultSunjetUrl;
+}
+
+function resolveSunjetApiKey() {
+  return (
+    process.env.AELIO_SUNJET_API_KEY?.trim() ||
+    process.env.SUNJET_API_KEY?.trim() ||
+    defaultSunjetApiKey
+  );
+}
+
+async function isSunjetHealthy(url) {
+  try {
+    const response = await fetch(`${url}/v1/health`);
+    if (!response.ok) return false;
+    const body = await response.json();
+    return body?.status === 'ok';
+  } catch {
+    return false;
+  }
+}
+
+function ensureLlServerBinary() {
+  if (existsSync(llServerBin)) return;
+
+  if (!existsSync(join(astrolobeRoot, 'Cargo.toml'))) {
+    fail(
+      'Sunjet/Astrolobe is missing. Run: git submodule update --init --recursive Sunjet/Astrolobe',
+    );
+  }
+
+  if (!hasCargo()) {
+    fail(
+      'Sunjet ll-server is not built and cargo is unavailable. Install Rust (https://rustup.rs) or start Sunjet separately and set AELIO_SUNJET_URL.',
+    );
+  }
+
+  log('setup', 'building Sunjet ll-server (first run may take 1–2 min)…');
+  runSync('cargo', ['build', '--release', '-p', 'll-server'], { cwd: astrolobeRoot });
+}
+
+async function ensureSunjet(sunjetUrl, apiKey, procs) {
+  if (await isSunjetHealthy(sunjetUrl)) {
+    log('boot', `Sunjet already healthy at ${sunjetUrl}`);
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(sunjetUrl);
+  } catch {
+    fail(`invalid Sunjet URL "${sunjetUrl}" — set AELIO_SUNJET_URL or sunjet.url in config`);
+  }
+
+  const host = parsed.hostname;
+  const port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+  if (host !== '127.0.0.1' && host !== 'localhost') {
+    fail(
+      `Sunjet is not reachable at ${sunjetUrl}. Start ll-server there or point AELIO_SUNJET_URL at a running instance.`,
+    );
+  }
+
+  if (!(await isPortFree(port))) {
+    fail(
+      `port ${port} is in use but Sunjet is not healthy — check what's bound (lsof -i :${port}) or stop stale containers (bash scripts/docker-cleanup-stale.sh)`,
+    );
+  }
+
+  ensureLlServerBinary();
+
+  const dataDir = process.env.LL_DATA_DIR ?? join(root, 'data/sunjet');
+  log('boot', `starting Sunjet ll-server on ${host}:${port}…`);
+
+  const llEnv = {
+    ...process.env,
+    LL_BIND: `${host}:${port}`,
+    LL_DATA_DIR: dataDir,
+    LL_API_KEYS: apiKey,
+  };
+
+  const child = spawn(llServerBin, [], {
+    cwd: astrolobeRoot,
+    env: llEnv,
+    stdio: 'inherit',
+  });
+  procs.push(child);
+  child.on('exit', (code) => {
+    if (code !== 0 && code !== null) {
+      console.log(`[sunjet] exited (${code})`);
+    }
+  });
+
+  for (let i = 0; i < 60; i += 1) {
+    if (child.exitCode !== null) {
+      fail(`ll-server exited before becoming healthy (code ${child.exitCode})`);
+    }
+    if (await isSunjetHealthy(sunjetUrl)) {
+      log('boot', `Sunjet ready at ${sunjetUrl}`);
+      return;
+    }
+    await sleep(500);
+  }
+
+  fail(`timed out waiting for Sunjet at ${sunjetUrl}`);
 }
 
 function needsBuild() {
@@ -115,13 +256,17 @@ loadEnvFile(envPath);
 const secret = process.env.AELIO_SDK_SECRET ?? 'change-me-in-production';
 const configPath = process.env.AELIO_CONFIG ?? join(root, 'config.yaml');
 const resolvedConfig = configPath.startsWith('/') ? configPath : join(root, configPath);
+const sunjetUrl = readSunjetUrl(resolvedConfig);
+const sunjetApiKey = resolveSunjetApiKey();
+
+if (!process.env.SUNJET_API_KEY) {
+  process.env.SUNJET_API_KEY = sunjetApiKey;
+}
 
 // ── Install & build ─────────────────────────────────────────────────────────
 
-if (!existsSync(join(root, 'node_modules'))) {
-  log('setup', 'installing dependencies…');
-  runSync('pnpm', ['install']);
-}
+log('setup', 'syncing dependencies…');
+runSync('pnpm', ['install']);
 
 if (needsBuild()) {
   log('setup', 'building packages and widget…');
@@ -152,14 +297,7 @@ if (!(await isPortFree(serverPort))) {
 const examplePort =
   process.env.PORT !== undefined
     ? Number(process.env.PORT)
-    : await pickPort([8080, 8083, 8084, 8085, 8086, 8087, 8088, 8089, 8092, 8093, 9000, 9001]);
-
-if (examplePort !== 8080) {
-  log(
-    'setup',
-    `port 8080 busy (often leftover aelio-sunjet-1) — example SDK will use :${examplePort}`,
-  );
-}
+    : await pickPort([8083, 8084, 8085, 8086, 8087, 8088, 8089, 8092, 8093, 9000, 9001]);
 
 const childEnv = {
   ...process.env,
@@ -167,6 +305,8 @@ const childEnv = {
   AELIO_SDK_SECRET: secret,
   AELIO_PORT: String(serverPort),
   AELIO_SERVER_URL: process.env.AELIO_SERVER_URL ?? `ws://127.0.0.1:${serverPort}`,
+  AELIO_SUNJET_URL: sunjetUrl,
+  SUNJET_API_KEY: sunjetApiKey,
   PORT: String(examplePort),
 };
 
@@ -223,6 +363,8 @@ const shutdown = () => {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
+await ensureSunjet(sunjetUrl, sunjetApiKey, procs);
+
 log('boot', 'starting Aelio server…');
 // Use dev:once (no file watchers) — tsx watch hits ENOSPC when IDE/tsserver
 // processes exhaust the kernel inotify limit on Linux.
@@ -239,6 +381,8 @@ console.log(`  Chat demo:    http://localhost:${serverPort}/demo.html`);
 console.log(`  Health:       http://localhost:${serverPort}/health`);
 console.log(`  Ready:        http://localhost:${serverPort}/ready`);
 console.log(`  Port:         ${serverPort} (set AELIO_PORT to change; default ${DEFAULT_AELIO_PORT})`);
+console.log(`  Sunjet:       ${sunjetUrl}`);
+console.log(`  Example SDK:  http://localhost:${examplePort}`);
 console.log('  Config:       ' + resolvedConfig);
 console.log('  LLM:          mock (edit config.yaml or .env for a real provider)');
 console.log('  Stop:         Ctrl+C');

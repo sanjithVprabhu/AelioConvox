@@ -3,426 +3,963 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AelioConvox — Astrolobe Database</title>
+    <title>Astrolobe Database Admin — AelioConvox</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <style>
       :root {
-        --bg: #0b0f14;
-        --panel: #121820;
-        --panel-2: #171f2a;
-        --border: #243041;
-        --text: #e8edf4;
-        --muted: #8b9bb0;
-        --accent: #3b82f6;
-        --accent-dim: #1e3a5f;
-        --green: #22c55e;
-        --amber: #f59e0b;
-        --violet: #a855f7;
-        --red: #ef4444;
+        --bg: #ffffff;
+        --bg-subtle: #fafafa;
+        --bg-muted: #f4f4f5;
+        --bg-sidebar: #fafafa;
+        --border: #e4e4e7;
+        --border-subtle: #ebebef;
+        --text: #18181b;
+        --text-2: #52525b;
+        --muted: #71717a;
+        --faint: #a1a1aa;
+        --primary: #18181b;
+        --primary-hover: #27272a;
+        --green: #059669;
+        --green-bg: #ecfdf5;
+        --red: #dc2626;
+        --red-bg: #fef2f2;
+        --blue: #2563eb;
+        --violet: #7c3aed;
+        --nav-w: 220px;
+        --tables-w: 268px;
+        --topbar-h: 52px;
+        --font: 'Inter', system-ui, sans-serif;
+        --mono: 'IBM Plex Mono', ui-monospace, monospace;
+        --radius: 6px;
+        --shadow: 0 4px 24px rgba(0,0,0,.08);
       }
       * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
       body {
-        margin: 0;
-        min-height: 100vh;
-        font-family: 'Instrument Sans', system-ui, sans-serif;
+        font-family: var(--font);
         background: var(--bg);
         color: var(--text);
-        display: flex;
-        flex-direction: column;
+        font-size: 13px;
+        line-height: 1.45;
+        overflow: hidden;
+        -webkit-font-smoothing: antialiased;
       }
-      header {
+      button, input, select, textarea { font: inherit; }
+      code { font-family: var(--mono); font-size: .9em; }
+
+      /* ── Top bar ─────────────────────────────────────────────── */
+      .topbar {
+        height: var(--topbar-h);
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        padding: 14px 24px;
+        gap: 12px;
+        padding: 0 16px;
         border-bottom: 1px solid var(--border);
-        background: linear-gradient(180deg, #10161f, var(--bg));
-        position: sticky;
-        top: 0;
-        z-index: 20;
+        background: var(--bg);
       }
-      header h1 { margin: 0; font-size: 1.1rem; font-weight: 700; letter-spacing: -0.02em; }
-      header p { margin: 3px 0 0; font-size: 0.8rem; color: var(--muted); }
-      .header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-      .pill {
+      .topbar-logo {
+        display: flex; align-items: center; gap: 8px;
+        font-weight: 700; font-size: 15px; letter-spacing: -.02em;
+        flex-shrink: 0;
+      }
+      .neon-mark {
+        width: 22px; height: 22px; border-radius: 50%;
+        background: linear-gradient(135deg, #00e599, #00b87a);
+      }
+      .topbar-selectors { display: flex; gap: 6px; align-items: center; }
+      .selector {
         display: inline-flex; align-items: center; gap: 6px;
-        padding: 6px 12px; border-radius: 999px; font-size: 0.78rem;
-        border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+        padding: 5px 10px; border: 1px solid var(--border);
+        border-radius: var(--radius); background: var(--bg);
+        font-size: 13px; font-weight: 500; color: var(--text);
+        cursor: default; max-width: 180px;
       }
-      .pill.live { color: #86efac; border-color: #166534; background: #052e16; }
-      .pill.off { color: #fca5a5; border-color: #7f1d1d; background: #450a0a; }
-      .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-      .pill.live .dot { animation: pulse 1.4s ease-in-out infinite; }
-      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
-      button, input, select, textarea { font: inherit; }
+      .selector svg { color: var(--muted); flex-shrink: 0; }
+      .selector span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+      .topbar-search {
+        flex: 1; max-width: 360px; position: relative;
+      }
+      .topbar-search input {
+        width: 100%; padding: 7px 12px 7px 34px;
+        border: 1px solid var(--border); border-radius: 999px;
+        background: var(--bg-subtle); font-size: 13px; outline: none;
+      }
+      .topbar-search input:focus { border-color: var(--text-2); background: var(--bg); }
+      .topbar-search svg {
+        position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+        color: var(--faint);
+      }
+      .topbar-search kbd {
+        position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+        font-size: 10px; color: var(--faint); background: var(--bg);
+        border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px;
+      }
+
+      .topbar-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+      .status-ok {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-size: 12px; color: var(--green); font-weight: 500;
+      }
+      .status-ok.off { color: var(--red); }
+      .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
       .btn {
-        border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
-        border-radius: 10px; padding: 8px 14px; cursor: pointer; font-size: 0.85rem;
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        border: 1px solid var(--border); background: var(--bg);
+        color: var(--text); border-radius: var(--radius);
+        padding: 6px 12px; cursor: pointer; font-size: 12px; font-weight: 500;
+        transition: .1s; white-space: nowrap;
       }
-      .btn:hover { border-color: #3d5168; }
-      .btn.primary { background: var(--accent-dim); border-color: #2563eb; color: #dbeafe; }
-      .btn.danger { background: #450a0a; border-color: #7f1d1d; color: #fca5a5; }
-      .btn.small { padding: 5px 9px; font-size: 0.75rem; border-radius: 8px; }
+      .btn:hover { background: var(--bg-muted); }
+      .btn.primary {
+        background: var(--primary); border-color: var(--primary);
+        color: #fff; font-weight: 600;
+      }
+      .btn.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+      .btn.ghost { border-color: transparent; background: transparent; }
+      .btn.ghost:hover { background: var(--bg-muted); }
+      .btn.sm { padding: 5px 10px; font-size: 12px; }
+      .btn.icon { width: 30px; height: 30px; padding: 0; }
+      .btn.danger { color: var(--red); border-color: #fecaca; background: var(--red-bg); }
       a.btn { text-decoration: none; }
 
-      .layout { display: grid; grid-template-columns: 300px 1fr; flex: 1; min-height: 0; }
-      aside {
-        border-right: 1px solid var(--border); background: var(--panel);
-        overflow-y: auto; padding: 16px;
-      }
-      aside h2 {
-        margin: 0 0 12px; font-size: 0.72rem; text-transform: uppercase;
-        letter-spacing: 0.08em; color: var(--muted);
-      }
-      .coll {
-        border: 1px solid var(--border); background: var(--panel-2); border-radius: 12px;
-        padding: 11px 12px; margin-bottom: 9px; cursor: pointer; transition: border-color 0.15s;
-      }
-      .coll:hover { border-color: #3d5168; }
-      .coll.active { border-color: #2563eb; background: var(--accent-dim); }
-      .coll .name { font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; }
-      .coll .tname { font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; color: var(--muted); margin-top: 3px; }
-      .coll .desc { font-size: 0.75rem; color: var(--muted); margin-top: 6px; line-height: 1.4; }
-      .tag {
-        font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em;
-        padding: 2px 6px; border-radius: 5px; font-weight: 700;
-      }
-      .tag.active { background: #052e16; color: #86efac; }
-      .tag.mirror { background: #422006; color: #fcd34d; }
-      .tag.schema-only { background: #1e293b; color: #94a3b8; }
-      .tag.missing { background: #450a0a; color: #fca5a5; }
-
-      main { overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
-      .table-head {
-        padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--panel);
-      }
-      .table-head h2 { margin: 0; font-size: 1rem; display: flex; align-items: center; gap: 10px; }
-      .table-head .sub {
-        font-size: 0.78rem; color: var(--muted); margin-top: 5px; line-height: 1.5;
-        font-family: 'IBM Plex Mono', monospace;
-      }
-      .toolbar {
-        display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
-        padding: 12px 24px; border-bottom: 1px solid var(--border); background: var(--panel);
-      }
-      .toolbar input, .toolbar select {
-        background: var(--bg); border: 1px solid var(--border); color: var(--text);
-        border-radius: 9px; padding: 8px 11px; font-size: 0.82rem;
-      }
-      .toolbar .grow { flex: 1; min-width: 120px; }
-      .spacer { flex: 1; }
-
-      .scroll { flex: 1; overflow: auto; padding: 0; }
-      table.grid { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
-      table.grid th {
-        position: sticky; top: 0; background: var(--panel-2); text-align: left;
-        padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap;
-        font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); z-index: 5;
-      }
-      table.grid th .kind { display: block; font-size: 0.62rem; color: #5f7089; text-transform: none; letter-spacing: 0; margin-top: 2px; }
-      table.grid td {
-        padding: 9px 12px; border-bottom: 1px solid #1a2430; vertical-align: top;
-        max-width: 360px; overflow: hidden; text-overflow: ellipsis;
-      }
-      table.grid tr:hover td { background: #10171f; }
-      td.rowid { font-family: 'IBM Plex Mono', monospace; color: var(--accent); font-weight: 600; }
-      .cell-val { white-space: pre-wrap; word-break: break-word; max-height: 84px; overflow: auto; }
-      .cell-null { color: #5f7089; font-style: italic; }
-      .cell-vec { font-family: 'IBM Plex Mono', monospace; color: var(--violet); font-size: 0.74rem; }
-      .cell-num { font-family: 'IBM Plex Mono', monospace; }
-      .cell-time { color: var(--muted); font-size: 0.72rem; }
-      .actions-col { white-space: nowrap; }
-
-      .empty { margin: 70px auto; max-width: 460px; text-align: center; color: var(--muted); line-height: 1.6; }
-      .banner {
-        padding: 10px 24px; font-size: 0.8rem; display: none; align-items: center; gap: 10px;
-        border-bottom: 1px solid var(--border);
-      }
-      .banner.show { display: flex; }
-      .banner.err { background: #450a0a; color: #fca5a5; }
-      .banner.ok { background: #052e16; color: #86efac; }
-
-      /* Secret gate */
-      #gate {
-        display: none; align-items: center; gap: 10px; padding: 12px 24px;
-        background: #422006; border-bottom: 1px solid #713f12; color: #fcd34d; font-size: 0.82rem;
-      }
-      #gate.show { display: flex; }
-      #gate input {
-        background: var(--bg); border: 1px solid var(--border); color: var(--text);
-        border-radius: 9px; padding: 8px 11px; font-size: 0.82rem; min-width: 260px;
+      /* ── Body layout ─────────────────────────────────────────── */
+      .app-body {
+        display: flex;
+        height: calc(100vh - var(--topbar-h));
       }
 
-      /* Modal */
-      .modal-bg {
-        display: none; position: fixed; inset: 0; background: rgba(3,6,10,0.7);
-        z-index: 100; align-items: center; justify-content: center; padding: 20px;
+      /* Left nav */
+      .nav-sidebar {
+        width: var(--nav-w);
+        border-right: 1px solid var(--border);
+        background: var(--bg-sidebar);
+        overflow-y: auto;
+        flex-shrink: 0;
+        padding: 12px 0;
       }
-      .modal-bg.show { display: flex; }
-      .modal {
-        background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
-        width: min(720px, 100%); max-height: 88vh; overflow: hidden; display: flex; flex-direction: column;
+      .nav-section { margin-bottom: 16px; }
+      .nav-section-label {
+        padding: 0 16px 6px;
+        font-size: 10px; font-weight: 600; letter-spacing: .06em;
+        text-transform: uppercase; color: var(--faint);
       }
-      .modal-head {
-        padding: 16px 20px; border-bottom: 1px solid var(--border);
+      .nav-item {
+        display: flex; align-items: center; gap: 10px;
+        padding: 7px 16px; font-size: 13px; color: var(--text-2);
+        cursor: pointer; border: none; background: none; width: 100%;
+        text-align: left; text-decoration: none; transition: .1s;
+      }
+      .nav-item:hover { background: var(--bg-muted); color: var(--text); }
+      .nav-item.active {
+        background: var(--bg-muted); color: var(--text); font-weight: 500;
+      }
+      .nav-item svg { flex-shrink: 0; color: var(--muted); }
+      .nav-item.active svg { color: var(--text); }
+
+      /* Tables browser (middle) */
+      .tables-panel {
+        width: var(--tables-w);
+        border-right: 1px solid var(--border);
+        background: var(--bg);
+        display: flex; flex-direction: column; min-height: 0; flex-shrink: 0;
+      }
+      .tables-head {
+        padding: 16px 14px 12px;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+      .tables-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+      .tables-head .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+      .tables-selectors {
+        display: flex; flex-direction: column; gap: 6px;
+        padding: 10px 14px; border-bottom: 1px solid var(--border-subtle);
+      }
+      .tables-selectors select {
+        width: 100%; padding: 6px 10px;
+        border: 1px solid var(--border); border-radius: var(--radius);
+        background: var(--bg); font-size: 12px; color: var(--text); outline: none;
+      }
+
+      .tables-toolbar {
+        display: flex; align-items: center; gap: 4px;
+        padding: 8px 10px; border-bottom: 1px solid var(--border-subtle);
+      }
+      .tables-toolbar input {
+        flex: 1; min-width: 0; padding: 5px 8px;
+        border: 1px solid var(--border); border-radius: var(--radius);
+        font-size: 12px; outline: none;
+      }
+      .tables-toolbar input:focus { border-color: var(--text-2); }
+
+      #collections { flex: 1; overflow-y: auto; }
+
+      .table-row {
+        display: flex; align-items: center; gap: 8px;
+        padding: 7px 14px; cursor: pointer;
+        border-left: 2px solid transparent; transition: .08s;
+      }
+      .table-row:hover { background: var(--bg-subtle); }
+      .table-row.active {
+        background: var(--bg-muted); border-left-color: var(--primary);
+      }
+      .table-row .tbl-icon { color: var(--muted); flex-shrink: 0; }
+      .table-row.active .tbl-icon { color: var(--text); }
+      .table-row .tbl-name {
+        font-size: 13px; font-family: var(--mono); color: var(--text);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+      }
+      .table-row .tbl-cols {
+        font-size: 10px; color: var(--faint); flex-shrink: 0;
+      }
+
+      /* Data panel (right) */
+      .data-panel {
+        flex: 1; min-width: 0; display: flex; flex-direction: column;
+        background: var(--bg);
+      }
+
+      .data-empty {
+        flex: 1; display: flex; align-items: center; justify-content: center;
+        color: var(--muted); font-size: 14px;
+      }
+
+      #data-workspace { display: none; flex: 1; flex-direction: column; min-height: 0; }
+
+      .grid-toolbar {
+        display: flex; align-items: center; gap: 6px;
+        padding: 8px 12px; border-bottom: 1px solid var(--border);
+        background: var(--bg); flex-wrap: wrap;
+      }
+      .grid-toolbar .tb-group { display: flex; align-items: center; gap: 4px; }
+      .grid-toolbar .spacer { flex: 1; }
+      .grid-toolbar .meta {
+        font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 12px;
+      }
+      .grid-toolbar .meta strong { color: var(--text); font-weight: 500; }
+
+      .popover-wrap { position: relative; }
+      .popover {
+        display: none; position: absolute; top: calc(100% + 4px); left: 0;
+        min-width: 280px; background: var(--bg); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 12px; z-index: 50;
+        box-shadow: var(--shadow);
+      }
+      .popover.show { display: block; }
+      .popover.right { left: auto; right: 0; }
+      .popover h4 { margin: 0 0 10px; font-size: 12px; font-weight: 600; }
+      .popover-row { display: flex; gap: 6px; margin-bottom: 8px; }
+      .popover-row select, .popover-row input {
+        flex: 1; padding: 6px 8px; border: 1px solid var(--border);
+        border-radius: 4px; font-size: 12px; outline: none;
+      }
+      .popover-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 4px; }
+
+      .col-check {
+        display: flex; align-items: center; gap: 8px;
+        padding: 5px 4px; font-size: 12px; cursor: pointer;
+      }
+      .col-check:hover { background: var(--bg-subtle); border-radius: 4px; }
+
+      .grid-wrap { flex: 1; overflow: auto; position: relative; }
+      .grid-wrap.resizing { cursor: col-resize; user-select: none; }
+
+      .sheet {
+        table-layout: fixed;
+        border-collapse: separate;
+        border-spacing: 0;
+        width: max-content;
+        min-width: 100%;
+      }
+      .sheet th, .sheet td {
+        border-bottom: 1px solid var(--border-subtle);
+        border-right: 1px solid var(--border-subtle);
+        font-size: 12px;
+        color: var(--text-2);
+        background: var(--bg);
+      }
+      .sheet th { overflow: visible; padding: 0; vertical-align: middle; }
+      .sheet td { overflow: hidden; padding: 0; vertical-align: middle; }
+      .sheet tbody tr:nth-child(even) td { background: var(--bg-subtle); }
+      .sheet tbody tr:hover td { background: #eef2ff; }
+      .sheet tbody tr { cursor: pointer; }
+
+      .sheet th {
+        position: sticky;
+        top: 0;
+        z-index: 4;
+        background: var(--bg-subtle);
+        text-align: left;
+        font-weight: 400;
+      }
+      .sheet th .th-wrap {
+        padding: 8px 14px 8px 12px;
+        cursor: pointer;
+        min-height: 42px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+      .sheet th .th-wrap:hover { background: var(--bg-muted); }
+      .sheet th .col-name { font-size: 12px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .sheet th .col-type { font-size: 11px; color: var(--muted); font-family: var(--mono); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .sheet th .sort-icon { color: var(--faint); margin-left: 4px; font-size: 10px; }
+      .sheet th.sorted .col-name { color: var(--blue); }
+
+      .cell-pad {
+        padding: 0 12px;
+        height: 34px;
+        display: flex;
+        align-items: center;
+        min-width: 0;
+      }
+      .cell-inner {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .cell-null { color: var(--faint); font-style: italic; }
+      .cell-num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+      .cell-vec { font-family: var(--mono); font-size: 11px; color: var(--violet); }
+
+      /* Sticky columns — explicit opaque backgrounds (no bleed-through) */
+      .sheet .col-check-th,
+      .sheet .col-check-td {
+        position: sticky;
+        left: 0;
+        z-index: 3;
+        width: 36px;
+        min-width: 36px;
+        max-width: 36px;
+        text-align: center;
+        background: var(--bg);
+        border-right: 1px solid var(--border);
+      }
+      .sheet th.col-check-th { z-index: 7; background: var(--bg-subtle); }
+      .sheet tbody tr:nth-child(even) .col-check-td { background: var(--bg-subtle); }
+      .sheet tbody tr:hover .col-check-td { background: #eef2ff; }
+      .sheet .col-check-td .cell-pad,
+      .sheet .col-check-th .cell-pad { justify-content: center; padding: 0 6px; }
+
+      .sheet .col-id {
+        position: sticky;
+        left: 36px;
+        z-index: 3;
+        background: var(--bg);
+        border-right: 1px solid var(--border);
+        box-shadow: 4px 0 8px -2px rgba(0, 0, 0, 0.08);
+      }
+      .sheet th.col-id { z-index: 7; background: var(--bg-subtle); left: 36px; }
+      .sheet tbody tr:nth-child(even) .col-id { background: var(--bg-subtle); }
+      .sheet tbody tr:hover .col-id { background: #eef2ff; }
+      .sheet .col-id .cell-inner {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--blue);
+        font-weight: 500;
+      }
+
+      /* Column resize handle */
+      .col-resize {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 6px;
+        height: 100%;
+        cursor: col-resize;
+        user-select: none;
+        z-index: 8;
+        touch-action: none;
+      }
+      .col-resize::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: 2px;
+        width: 2px;
+        background: transparent;
+        transition: background .12s;
+      }
+      .col-resize:hover::after,
+      .col-resize.active::after { background: var(--blue); }
+      .sheet th[data-col] { position: sticky; top: 0; }
+
+      .grid-footer {
         display: flex; align-items: center; justify-content: space-between;
+        padding: 6px 12px; border-top: 1px solid var(--border);
+        background: var(--bg-subtle); font-size: 11px; color: var(--muted);
       }
-      .modal-head h3 { margin: 0; font-size: 1rem; }
-      .modal-body { padding: 16px 20px; overflow-y: auto; }
-      .modal-foot {
-        padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end;
+
+      /* Row editor panel */
+      .editor-backdrop {
+        display: none; position: fixed; inset: 0;
+        background: rgba(0,0,0,.25); z-index: 80;
       }
+      .editor-backdrop.show { display: block; }
+      .editor-panel {
+        position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 100vw);
+        background: var(--bg); border-left: 1px solid var(--border);
+        z-index: 90; display: flex; flex-direction: column;
+        transform: translateX(100%); transition: transform .2s ease;
+        box-shadow: var(--shadow);
+      }
+      .editor-panel.show { transform: translateX(0); }
+      .editor-head {
+        padding: 16px 18px; border-bottom: 1px solid var(--border);
+        display: flex; justify-content: space-between; align-items: flex-start;
+      }
+      .editor-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+      .editor-head .sub { font-size: 11px; color: var(--muted); font-family: var(--mono); margin-top: 2px; }
+      .editor-body { flex: 1; overflow-y: auto; padding: 16px 18px; }
+      .editor-foot {
+        padding: 12px 18px; border-top: 1px solid var(--border);
+        display: flex; gap: 8px; justify-content: flex-end;
+      }
+
       .field { margin-bottom: 14px; }
-      .field label { display: block; font-size: 0.8rem; margin-bottom: 5px; font-weight: 600; }
-      .field label .k { font-family: 'IBM Plex Mono', monospace; color: var(--muted); font-weight: 400; font-size: 0.72rem; margin-left: 6px; }
-      .field input, .field select, .field textarea {
-        width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
-        border-radius: 9px; padding: 9px 11px; font-size: 0.85rem;
+      .field label {
+        display: block; font-size: 12px; font-weight: 500; margin-bottom: 4px;
       }
-      .field textarea { min-height: 70px; resize: vertical; font-family: 'IBM Plex Mono', monospace; font-size: 0.78rem; }
-      .field .hint { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
-      .close-x { background: none; border: none; color: var(--muted); font-size: 1.4rem; cursor: pointer; }
+      .field label span { font-family: var(--mono); font-weight: 400; color: var(--muted); font-size: 11px; margin-left: 6px; }
+      .field input, .field select, .field textarea {
+        width: 100%; padding: 8px 10px; border: 1px solid var(--border);
+        border-radius: var(--radius); font-size: 12px; outline: none;
+      }
+      .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--text-2); }
+      .field textarea { min-height: 72px; resize: vertical; font-family: var(--mono); font-size: 11px; }
+      .field .hint { font-size: 10px; color: var(--faint); margin-top: 3px; }
+
+      /* Auth gate */
+      #gate-overlay {
+        display: none; position: fixed; inset: 0; z-index: 200;
+        background: rgba(255,255,255,.85); backdrop-filter: blur(4px);
+        align-items: center; justify-content: center;
+      }
+      #gate-overlay.show { display: flex; }
+      .gate-card {
+        background: var(--bg); border: 1px solid var(--border);
+        border-radius: 10px; padding: 28px; width: min(380px, 92vw);
+        box-shadow: var(--shadow);
+      }
+      .gate-card h3 { margin: 0 0 6px; font-size: 16px; }
+      .gate-card p { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+      .gate-card input {
+        width: 100%; padding: 9px 12px; border: 1px solid var(--border);
+        border-radius: var(--radius); margin-bottom: 12px; outline: none;
+      }
+
+      /* Toast */
+      #toasts {
+        position: fixed; bottom: 16px; right: 16px; z-index: 300;
+        display: flex; flex-direction: column; gap: 8px;
+      }
+      .toast {
+        padding: 10px 14px; border-radius: var(--radius); font-size: 12px;
+        border: 1px solid var(--border); background: var(--bg);
+        box-shadow: var(--shadow);
+      }
+      .toast.ok { border-color: #a7f3d0; background: var(--green-bg); color: var(--green); }
+      .toast.err { border-color: #fecaca; background: var(--red-bg); color: var(--red); }
+
+      .loading { padding: 40px; text-align: center; color: var(--muted); }
+      .spinner {
+        width: 20px; height: 20px; border: 2px solid var(--border);
+        border-top-color: var(--primary); border-radius: 50%;
+        animation: spin .7s linear infinite; margin: 0 auto 8px;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 4px; }
 
       @media (max-width: 900px) {
-        /* Keep collections selectable — never hide the only way to pick a table. */
-        .layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-        aside {
-          display: block;
-          max-height: 42vh;
-          border-right: none;
-          border-bottom: 1px solid var(--border);
-        }
+        .nav-sidebar { display: none; }
+        .tables-panel { width: 220px; }
       }
     </style>
   </head>
   <body>
-    <header>
-      <div>
-        <h1>Astrolobe Database Admin</h1>
-        <p>Browse &amp; edit the Sunjet (Astrolobe) collections — live via ll-server</p>
+    <!-- Global top bar (Neon-style) -->
+    <header class="topbar">
+      <div class="topbar-logo">
+        <div class="neon-mark"></div>
+        <span>Astrolobe Database Admin</span>
       </div>
-      <div class="header-actions">
-        <span class="pill" id="status-pill"><span class="dot"></span><span id="status-text">Connecting…</span></span>
-        <a class="btn" href="/telemetry">Telemetry</a>
-        <a class="btn" href="/demo.html">Chat demo</a>
-        <button class="btn" id="secret-btn" type="button">Set secret</button>
+      <div class="topbar-selectors">
+        <div class="selector" id="sel-project" title="Project">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <span id="project-name">—</span>
+        </div>
+        <div class="selector" id="sel-branch" title="Sunjet endpoint">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+          <span id="branch-name">production</span>
+        </div>
+      </div>
+      <div class="topbar-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input id="global-search" type="search" placeholder="Search tables…" />
+        <kbd>⌘K</kbd>
+      </div>
+      <div class="topbar-right">
+        <span class="status-ok" id="status-pill"><span class="status-dot"></span><span id="status-text">Connecting</span></span>
+        <button class="btn sm" id="secret-btn" type="button">Set secret</button>
       </div>
     </header>
 
-    <div id="gate">
-      <span>Enter the SDK secret (<code>AELIO_SDK_SECRET</code>) to access the database:</span>
-      <input id="gate-input" type="password" placeholder="SDK secret" />
-      <button class="btn primary" id="gate-save" type="button">Save</button>
-    </div>
+    <div class="app-body">
+      <!-- Left project nav -->
+      <nav class="nav-sidebar">
+        <div class="nav-section">
+          <div class="nav-section-label">Project</div>
+          <button class="nav-item" type="button" id="nav-connect">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            Connect
+          </button>
+          <a class="nav-item" href="/telemetry">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 5-6"/></svg>
+            Telemetry
+          </a>
+          <a class="nav-item" href="/demo.html">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat demo
+          </a>
+        </div>
+        <div class="nav-section">
+          <div class="nav-section-label">Branch</div>
+          <button class="nav-item active" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+            Tables
+          </button>
+        </div>
+        <div class="nav-section">
+          <div class="nav-section-label">Maintenance</div>
+          <button class="nav-item" type="button" id="flush-btn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            Flush
+          </button>
+          <button class="nav-item" type="button" id="compact-btn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+            Compact
+          </button>
+        </div>
+      </nav>
 
-    <div class="banner" id="banner"></div>
-
-    <div class="layout">
-      <aside>
-        <h2>Collections</h2>
-        <div id="collections"><div class="empty" style="margin:20px 0">Loading…</div></div>
+      <!-- Middle: Collections / table browser -->
+      <aside class="tables-panel">
+        <div class="tables-head">
+          <h2>Tables</h2>
+          <div class="sub" id="tables-sub">Collections</div>
+        </div>
+        <div class="tables-selectors">
+          <select id="sel-database" disabled title="Database"><option>astrolobe</option></select>
+          <select id="sel-schema" disabled title="Schema"><option>collections</option></select>
+        </div>
+        <div class="tables-toolbar">
+          <input id="coll-search" type="search" placeholder="Search…" />
+          <button class="btn icon sm" id="refresh-catalog" type="button" title="Refresh">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+          </button>
+        </div>
+        <div id="collections">
+          <div class="loading"><div class="spinner"></div>Loading…</div>
+        </div>
       </aside>
 
-      <main>
-        <div class="table-head">
-          <h2 id="tbl-title">Select a collection</h2>
-          <div class="sub" id="tbl-sub">Choose a collection on the left to view stored rows.</div>
-        </div>
+      <!-- Right: data grid -->
+      <main class="data-panel">
+        <div class="data-empty" id="data-empty">Select a table to view data</div>
 
-        <div class="toolbar" id="toolbar" style="display:none">
-          <select id="filter-col" title="Filter column"></select>
-          <select id="filter-op" title="Operator">
-            <option value="eq">=</option>
-            <option value="ne">≠</option>
-            <option value="gt">&gt;</option>
-            <option value="ge">≥</option>
-            <option value="lt">&lt;</option>
-            <option value="le">≤</option>
-          </select>
-          <input id="filter-val" class="grow" type="text" placeholder="Filter value (leave blank for none)" />
-          <select id="limit-select" title="Max rows">
-            <option value="50">50 rows</option>
-            <option value="100" selected>100 rows</option>
-            <option value="500">500 rows</option>
-            <option value="2000">2000 rows</option>
-          </select>
-          <button class="btn" id="refresh-btn" type="button">Refresh</button>
-          <div class="spacer"></div>
-          <button class="btn primary" id="add-btn" type="button">+ Add row</button>
-          <button class="btn" id="flush-btn" type="button" title="Persist memtable → segment">Flush</button>
-          <button class="btn" id="compact-btn" type="button" title="Merge segments, reclaim space">Compact</button>
-        </div>
+        <div id="data-workspace">
+          <div class="grid-toolbar">
+            <div class="tb-group">
+              <button class="btn icon sm" id="refresh-btn" type="button" title="Refresh">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+              </button>
+            </div>
+            <div class="popover-wrap">
+              <button class="btn sm" id="filter-btn" type="button">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                Filter
+              </button>
+              <div class="popover" id="filter-popover">
+                <h4>Filter rows</h4>
+                <div class="popover-row">
+                  <select id="filter-col"></select>
+                  <select id="filter-op">
+                    <option value="eq">=</option><option value="ne">≠</option>
+                    <option value="gt">&gt;</option><option value="ge">≥</option>
+                    <option value="lt">&lt;</option><option value="le">≤</option>
+                  </select>
+                </div>
+                <div class="popover-row"><input id="filter-val" type="text" placeholder="Value…" style="flex:1" /></div>
+                <div class="popover-actions">
+                  <button class="btn sm ghost" id="clear-filter" type="button">Clear</button>
+                  <button class="btn sm primary" id="apply-filter" type="button">Apply</button>
+                </div>
+              </div>
+            </div>
+            <div class="popover-wrap">
+              <button class="btn sm" id="columns-btn" type="button">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/></svg>
+                Columns
+              </button>
+              <div class="popover right" id="columns-popover" style="min-width:200px">
+                <h4>Visible columns</h4>
+                <div id="columns-list"></div>
+              </div>
+            </div>
+            <button class="btn sm" id="export-csv" type="button">Export CSV</button>
+            <button class="btn sm" id="export-json" type="button">Export JSON</button>
+            <div class="spacer"></div>
+            <button class="btn primary sm" id="add-btn" type="button">+ Add record</button>
+            <div class="meta">
+              <span id="query-ms">—</span>
+              <span id="pagination">—</span>
+            </div>
+            <select id="limit-select" class="btn sm" style="padding:5px 8px" title="Row limit">
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="500">500</option>
+              <option value="2000">2000</option>
+            </select>
+          </div>
 
-        <div class="scroll" id="scroll">
-          <div class="empty">No collection selected.</div>
+          <div class="grid-wrap" id="scroll"></div>
+          <div class="grid-footer" id="grid-footer">
+            <span id="footer-left">—</span>
+            <span>Drag column edges to resize · Double-click cell to copy</span>
+          </div>
         </div>
       </main>
     </div>
 
-    <!-- Row editor modal -->
-    <div class="modal-bg" id="modal-bg">
-      <div class="modal">
-        <div class="modal-head">
-          <h3 id="modal-title">Edit row</h3>
-          <button class="close-x" id="modal-close" type="button">&times;</button>
-        </div>
-        <div class="modal-body" id="modal-body"></div>
-        <div class="modal-foot">
-          <button class="btn" id="modal-cancel" type="button">Cancel</button>
-          <button class="btn primary" id="modal-save" type="button">Save</button>
-        </div>
+    <div id="gate-overlay">
+      <div class="gate-card">
+        <h3>Connect to Astrolobe</h3>
+        <p>Enter your <code>AELIO_SDK_SECRET</code> to browse Collections.</p>
+        <input id="gate-input" type="password" placeholder="SDK secret" autocomplete="off" />
+        <button class="btn primary" id="gate-save" type="button" style="width:100%">Continue</button>
       </div>
     </div>
 
+    <div class="editor-backdrop" id="editor-backdrop"></div>
+    <aside class="editor-panel" id="editor-panel">
+      <div class="editor-head">
+        <div>
+          <h3 id="editor-title">Edit record</h3>
+          <div class="sub" id="editor-sub"></div>
+        </div>
+        <button class="btn icon ghost" id="editor-close" type="button">&times;</button>
+      </div>
+      <div class="editor-body" id="editor-body"></div>
+      <div class="editor-foot">
+        <button class="btn sm danger" id="editor-delete" type="button" style="display:none">Delete</button>
+        <div style="flex:1"></div>
+        <button class="btn sm" id="editor-cancel" type="button">Cancel</button>
+        <button class="btn sm primary" id="editor-save" type="button">Save</button>
+      </div>
+    </aside>
+
+    <div id="toasts"></div>
+
     <script>
       const SECRET_KEY = 'aelio_admin_secret';
+      const COLS_KEY = 'aelio_hidden_cols';
+      const WIDTHS_KEY = 'aelio_col_widths';
+
       let secret = localStorage.getItem(SECRET_KEY) || '';
+      let colWidths = {};
       let catalog = [];
-      let current = null; // selected table entry {name, columns, ...}
-      let editState = null; // { mode:'insert'|'edit', rowId }
+      let current = null;
+      let editState = null;
+      let collFilter = '';
+      let lastScan = null;
+      let hiddenCols = {};
+      let activeFilter = null;
+      let sortCol = null;
+      let sortDir = 'desc';
+      let datasetInfo = { dataset: '—', url: '—' };
 
       const $ = (id) => document.getElementById(id);
-      const statusPill = $('status-pill');
-      const statusText = $('status-text');
 
       function esc(v) {
-        return String(v)
-          .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
-          .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+        return String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
       }
-      function setStatus(mode, text) {
-        statusText.textContent = text;
-        statusPill.classList.remove('live', 'off');
-        if (mode) statusPill.classList.add(mode);
-      }
-      function banner(kind, msg) {
-        const b = $('banner');
-        b.className = 'banner show ' + kind;
-        b.textContent = msg;
-        if (kind === 'ok') setTimeout(() => b.classList.remove('show'), 3000);
-      }
-      function clearBanner() { $('banner').classList.remove('show'); }
 
-      function showGate(show) { $('gate').classList.toggle('show', show); }
+      function toast(kind, msg) {
+        const el = document.createElement('div');
+        el.className = 'toast ' + kind;
+        el.textContent = msg;
+        $('toasts').appendChild(el);
+        setTimeout(() => el.remove(), 3500);
+      }
+
+      function setStatus(mode, text) {
+        $('status-text').textContent = text;
+        const pill = $('status-pill');
+        pill.classList.toggle('off', mode === 'off');
+      }
+
+      function showGate(show) { $('gate-overlay').classList.toggle('show', show); }
+
+      function getHidden(name) {
+        if (!hiddenCols[name]) {
+          try { hiddenCols[name] = new Set(JSON.parse(localStorage.getItem(COLS_KEY + ':' + name) || '[]')); }
+          catch { hiddenCols[name] = new Set(); }
+        }
+        return hiddenCols[name];
+      }
+
+      function saveHidden(name) {
+        localStorage.setItem(COLS_KEY + ':' + name, JSON.stringify([...getHidden(name)]));
+      }
+
+      function getColWidths(tableName) {
+        if (!colWidths[tableName]) {
+          try { colWidths[tableName] = JSON.parse(localStorage.getItem(WIDTHS_KEY + ':' + tableName) || '{}'); }
+          catch { colWidths[tableName] = {}; }
+        }
+        return colWidths[tableName];
+      }
+
+      function saveColWidths(tableName) {
+        localStorage.setItem(WIDTHS_KEY + ':' + tableName, JSON.stringify(getColWidths(tableName)));
+      }
+
+      function defaultColWidth(colKey, colMeta) {
+        if (colKey === 'row_id') return 72;
+        if (!colMeta) return 160;
+        if (colMeta.kind === 'vector') return 200;
+        if (colMeta.kind === 'text') return 240;
+        if (colMeta.kind === 'edge') return 160;
+        if (['i64', 'f64', 'timestamp', 'bool'].includes(colMeta.kind)) return 120;
+        return 160;
+      }
+
+      function colWidth(colKey, colMeta) {
+        if (!current) return defaultColWidth(colKey, colMeta);
+        const saved = getColWidths(current.name)[colKey];
+        return saved || defaultColWidth(colKey, colMeta);
+      }
+
+      function colWidthStyle(colKey, colMeta) {
+        const w = colWidth(colKey, colMeta);
+        return `width:${w}px;min-width:${w}px;max-width:${w}px`;
+      }
+
+      function applyColWidth(table, colKey, width) {
+        table.querySelectorAll(`[data-col="${CSS.escape(colKey)}"]`).forEach((el) => {
+          el.style.width = width + 'px';
+          el.style.minWidth = width + 'px';
+          el.style.maxWidth = width + 'px';
+        });
+      }
+
+      function initColumnResize(table) {
+        table.querySelectorAll('.col-resize').forEach((handle) => {
+          handle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const colKey = handle.dataset.col;
+            const th = handle.closest('th');
+            const startX = e.clientX;
+            const startW = th.offsetWidth;
+            const wrap = $('scroll');
+            handle.classList.add('active');
+            wrap.classList.add('resizing');
+
+            function onMove(ev) {
+              const w = Math.max(56, Math.min(640, startW + (ev.clientX - startX)));
+              getColWidths(current.name)[colKey] = w;
+              applyColWidth(table, colKey, w);
+            }
+            function onUp() {
+              handle.classList.remove('active');
+              wrap.classList.remove('resizing');
+              saveColWidths(current.name);
+              document.removeEventListener('mousemove', onMove);
+              document.removeEventListener('mouseup', onUp);
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+          });
+        });
+      }
+
+      function cellInner(display, title) {
+        const tip = title ?? display;
+        return `<span class="cell-inner" title="${esc(tip)}">${esc(display)}</span>`;
+      }
+
+      function filteredCatalog() {
+        const q = (collFilter || $('global-search')?.value || '').trim().toLowerCase();
+        if (!q) return [...catalog].sort((a, b) => a.name.localeCompare(b.name));
+        return catalog.filter((e) =>
+          e.name.toLowerCase().includes(q) ||
+          e.label.toLowerCase().includes(q) ||
+          e.key.toLowerCase().includes(q)
+        ).sort((a, b) => a.name.localeCompare(b.name));
+      }
+
+      function renderCollections() {
+        const el = $('collections');
+        const list = filteredCatalog();
+        if (!catalog.length) {
+          el.innerHTML = '<div class="loading">No Collections</div>';
+          return;
+        }
+        if (!list.length) {
+          el.innerHTML = '<div class="loading">No matches</div>';
+          return;
+        }
+        el.innerHTML = list.map((entry) => `
+          <div class="table-row ${current && current.name === entry.name ? 'active' : ''}" data-name="${esc(entry.name)}">
+            <svg class="tbl-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
+            <span class="tbl-name">${esc(entry.name)}</span>
+            <span class="tbl-cols">${entry.columns.length}</span>
+          </div>`).join('');
+        el.querySelectorAll('.table-row').forEach((n) =>
+          n.addEventListener('click', () => selectTable(n.dataset.name))
+        );
+      }
+
+      function renderColumnPicker() {
+        if (!current) return;
+        const hidden = getHidden(current.name);
+        $('columns-list').innerHTML = current.columns.map((c) => `
+          <label class="col-check">
+            <input type="checkbox" data-col="${esc(c.name)}" ${hidden.has(c.name) ? '' : 'checked'} />
+            <span>${esc(c.name)}</span>
+          </label>`).join('');
+        $('columns-list').querySelectorAll('input').forEach((inp) => {
+          inp.addEventListener('change', () => {
+            if (inp.checked) hidden.delete(inp.dataset.col);
+            else hidden.add(inp.dataset.col);
+            saveHidden(current.name);
+            if (lastScan) renderRows(lastScan);
+          });
+        });
+      }
 
       async function api(method, path, body) {
         const headers = { Authorization: 'Bearer ' + secret };
         if (body !== undefined) headers['content-type'] = 'application/json';
-        const res = await fetch(path, {
-          method, headers,
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
-        if (res.status === 401) {
-          showGate(true);
-          throw new Error('Unauthorized — set the SDK secret.');
-        }
+        const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+        if (res.status === 401) { showGate(true); throw new Error('Unauthorized — set the SDK secret.'); }
         const text = await res.text();
         const data = text ? JSON.parse(text) : {};
         if (!res.ok) throw new Error(data.error || data.message || ('HTTP ' + res.status));
         return data;
       }
 
-      // ---- Column kind helpers ------------------------------------------------
+      const TIME_COLS = ['created_at','updated_at','expires_at','covers_from','covers_to'];
       function kindOf(col) { return (col && col.kind) || 'utf8'; }
-      const TIME_COLS = ['created_at', 'updated_at', 'expires_at', 'covers_from', 'covers_to'];
 
       function fmtTime(ms) {
-        if (ms === null || ms === undefined || ms === 0) return '—';
+        if (ms == null || ms === 0) return '—';
         try { return new Date(Number(ms)).toLocaleString(); } catch { return String(ms); }
       }
 
+      function typeLabel(kind, dim) {
+        if (kind === 'i64') return 'bigint';
+        if (kind === 'f64') return 'double';
+        if (kind === 'utf8') return 'text';
+        if (kind === 'vector') return dim ? `vector(${dim})` : 'vector';
+        if (kind === 'edge') return 'edge[]';
+        return kind;
+      }
+
+      function cellRaw(col, value) {
+        if (!value || value.type === 'null') return null;
+        if (value.type === 'vector') return JSON.stringify(value.value);
+        if (value.type === 'edges') return JSON.stringify(value.value);
+        return String(value.value);
+      }
+
       function renderCell(col, value) {
-        if (!value || value.type === 'null' || value.value === undefined || value.value === null) {
-          return '<span class="cell-null">null</span>';
+        if (!value || value.type === 'null' || value.value == null) {
+          return `<span class="cell-inner cell-null">NULL</span>`;
         }
-        const kind = kindOf(col);
         if (value.type === 'vector') {
-          const omitted = value.__omitted;
+          const dim = value.__omitted || (Array.isArray(value.value) ? value.value.length : '?');
           const preview = Array.isArray(value.value) ? value.value.slice(0, 4).map((n) => Number(n).toFixed(3)).join(', ') : '';
-          const dim = omitted || (Array.isArray(value.value) ? value.value.length : '?');
-          return `<span class="cell-vec">vec[${dim}] · ${esc(preview)}…</span>`;
+          const full = `[${dim}] ${preview}…`;
+          return `<span class="cell-inner cell-vec" title="${esc(full)}">${esc(full)}</span>`;
         }
         if (value.type === 'edges') {
           const arr = Array.isArray(value.value) ? value.value : [];
-          return `<span class="cell-vec">edges[${arr.length}] ${esc(JSON.stringify(arr.slice(0, 12)))}</span>`;
+          const full = `[${arr.length}] ${JSON.stringify(arr)}`;
+          return `<span class="cell-inner cell-vec" title="${esc(full)}">[${arr.length}] ${esc(JSON.stringify(arr.slice(0, 4)))}…</span>`;
         }
         if (value.type === 'i64' && TIME_COLS.includes(col.name)) {
-          return `<span class="cell-time">${esc(fmtTime(value.value))}<br><span style="color:#5f7089">${esc(value.value)}</span></span>`;
+          const display = fmtTime(value.value);
+          return cellInner(display, `${display} (${value.value})`);
         }
         if (value.type === 'i64' || value.type === 'f64') {
-          return `<span class="cell-num">${esc(value.value)}</span>`;
+          return `<span class="cell-inner cell-num">${esc(value.value)}</span>`;
         }
         if (value.type === 'bool') {
-          return `<span class="cell-num">${value.value ? 'true' : 'false'}</span>`;
+          return `<span class="cell-inner cell-num">${value.value ? 'true' : 'false'}</span>`;
         }
-        return `<div class="cell-val">${esc(value.value)}</div>`;
+        const raw = String(value.value);
+        return `<span class="cell-inner" data-copy="${esc(raw)}" title="${esc(raw)}">${esc(raw)}</span>`;
       }
 
-      // ---- Collections sidebar -----------------------------------------------
-      function statusTag(entry) {
-        if (!entry.exists) return '<span class="tag missing">not created</span>';
-        return `<span class="tag ${entry.status}">${entry.status.replace('-', ' ')}</span>`;
-      }
-
-      function renderCollections() {
-        const el = $('collections');
-        if (!catalog.length) { el.innerHTML = '<div class="empty" style="margin:20px 0">No collections.</div>'; return; }
-        el.innerHTML = catalog.map((entry) => `
-          <div class="coll ${current && current.name === entry.name ? 'active' : ''}" data-name="${esc(entry.name)}">
-            <div class="name">${esc(entry.label)} ${statusTag(entry)}</div>
-            <div class="tname">${esc(entry.name)} · ${entry.columns.length} cols</div>
-            <div class="desc">${esc(entry.description)}</div>
-          </div>`).join('');
-        el.querySelectorAll('.coll').forEach((node) => {
-          node.addEventListener('click', () => selectTable(node.dataset.name));
-        });
+      function visibleColumns() {
+        const hidden = getHidden(current.name);
+        return current.columns.filter((c) => !hidden.has(c.name));
       }
 
       async function loadCatalog() {
         try {
           const data = await api('GET', '/api/v1/admin/db/tables');
           catalog = data.tables || [];
+          datasetInfo = { dataset: data.dataset || '—', url: data.url || '—' };
+          $('project-name').textContent = data.dataset || 'Aelio';
+          $('branch-name').textContent = 'production';
+          $('tables-sub').textContent = data.dataset || 'Collections';
           if (!data.enabled) {
-            setStatus('off', 'Sunjet disabled');
+            setStatus('off', 'Offline');
             renderCollections();
-            $('scroll').innerHTML = `<div class="empty"><strong>Sunjet is not enabled</strong><br>Set <code>sunjet.enabled: true</code> in <code>config.yaml</code>, start <code>ll-server</code>, and restart Aelio to browse the Astrolobe database.</div>`;
             return;
           }
-          setStatus('live', `Live · ${esc(data.dataset)} · ${esc(data.url)}`);
+          setStatus('ok', 'All OK');
           renderCollections();
           showGate(false);
         } catch (err) {
           setStatus('off', 'Error');
           if (!secret) showGate(true);
-          banner('err', err.message);
+          toast('err', err.message);
         }
       }
 
-      // ---- Selecting / scanning a table --------------------------------------
       async function selectTable(name) {
         current = catalog.find((e) => e.name === name);
         if (!current) return;
-        renderCollections();
-        $('tbl-title').innerHTML = `${esc(current.label)} ${statusTag(current)}`;
-        $('tbl-sub').innerHTML = `<code>${esc(current.name)}</code> · ${current.columns.length} columns · written by <code>${esc(current.writtenBy)}</code>`;
-        $('toolbar').style.display = current.exists ? 'flex' : 'none';
 
-        // Populate filter columns.
+        renderCollections();
+        $('data-empty').style.display = 'none';
+        $('data-workspace').style.display = 'flex';
+        lastScan = null;
+        activeFilter = null;
+        sortCol = null;
+
+        renderColumnPicker();
         const fcol = $('filter-col');
-        fcol.innerHTML = '<option value="">(no filter)</option>' +
-          current.columns
-            .filter((c) => ['utf8', 'i64', 'f64', 'bool', 'timestamp', 'text'].includes(c.kind))
-            .map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`)
-            .join('');
+        fcol.innerHTML = current.columns
+          .filter((c) => ['utf8','i64','f64','bool','timestamp','text'].includes(c.kind))
+          .map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
 
         if (!current.exists) {
-          $('scroll').innerHTML = `<div class="empty"><strong>Table not created yet</strong><br>This collection has a defined schema but has not been created in Astrolobe (no rows written).</div>`;
+          $('scroll').innerHTML = '<div class="loading">Table not created yet</div>';
+          $('pagination').textContent = '0 rows';
           return;
         }
         await scan();
@@ -436,191 +973,281 @@
         if (kind === 'vector') {
           const t = s.trim();
           if (t.startsWith('[')) return { type: 'vector', value: JSON.parse(t) };
-          return { type: 'embed', value: s }; // let ll-server embed the text
+          return { type: 'embed', value: s };
         }
         if (kind === 'edge') return { type: 'edges', value: JSON.parse(s.trim() || '[]') };
-        return { type: 'utf8', value: s }; // utf8 + text
+        return { type: 'utf8', value: s };
       }
 
       async function scan() {
-        if (!current) return;
-        clearBanner();
-        $('scroll').innerHTML = '<div class="empty">Loading rows…</div>';
+        if (!current || !current.exists) return;
+        $('scroll').innerHTML = '<div class="loading"><div class="spinner"></div>Loading…</div>';
+        const t0 = performance.now();
         const limit = Number($('limit-select').value);
-        const fcol = $('filter-col').value;
-        const fop = $('filter-op').value;
-        const fval = $('filter-val').value.trim();
-
         const body = { limit };
-        if (fcol && fval !== '') {
-          const col = current.columns.find((c) => c.name === fcol);
+
+        if (activeFilter) {
+          const col = current.columns.find((c) => c.name === activeFilter.col);
           try {
-            body.filters = [{ col: fcol, op: fop, value: buildApiValue(kindOf(col), fval) }];
-          } catch (e) {
-            banner('err', 'Invalid filter value: ' + e.message);
-            return;
-          }
+            body.filters = [{ col: activeFilter.col, op: activeFilter.op, value: buildApiValue(kindOf(col), activeFilter.val) }];
+          } catch (e) { toast('err', 'Invalid filter: ' + e.message); return; }
         }
+        if (sortCol) body.sort = { col: sortCol, dir: sortDir };
 
         try {
-          const data = await api('POST', `/api/v1/admin/db/tables/${encodeURIComponent(current.name)}/scan`, body);
-          renderRows(data);
+          lastScan = await api('POST', `/api/v1/admin/db/tables/${encodeURIComponent(current.name)}/scan`, body);
+          const ms = Math.round(performance.now() - t0);
+          $('query-ms').textContent = ms + 'ms';
+          renderRows(lastScan);
         } catch (err) {
-          $('scroll').innerHTML = `<div class="empty"><strong>Could not load rows</strong><br>${esc(err.message)}</div>`;
+          $('scroll').innerHTML = `<div class="loading">${esc(err.message)}</div>`;
         }
       }
 
       function renderRows(data) {
-        const cols = current.columns;
+        const cols = visibleColumns();
+        const n = data.count;
+        $('pagination').innerHTML = `1 – ${n}${data.capped ? '+' : ''} of ${n}${data.capped ? '+' : ''}`;
+        $('footer-left').textContent = `${current.name} · ${n} row${n === 1 ? '' : 's'}${data.capped ? ' (limit reached)' : ''}`;
+
         if (!data.rows.length) {
-          $('scroll').innerHTML = `<div class="empty"><strong>No rows</strong><br>This collection is empty (or the filter matched nothing).</div>`;
+          $('scroll').innerHTML = '<div class="loading">No rows — try adjusting filters</div>';
           return;
         }
-        const header = `<tr><th>row_id</th>${cols.map((c) => `<th>${esc(c.name)}<span class="kind">${esc(c.kind)}${c.dim ? '(' + c.dim + ')' : ''}</span></th>`).join('')}<th>actions</th></tr>`;
+
+        const sortIcon = (col) => {
+          if (sortCol !== col) return '';
+          return `<span class="sort-icon">${sortDir === 'asc' ? '↑' : '↓'}</span>`;
+        };
+
+        const rowIdW = colWidthStyle('row_id');
+        const header = `<tr>
+          <th class="col-check-th"><div class="cell-pad"><input type="checkbox" id="select-all" /></div></th>
+          <th class="col-id" data-col="row_id" style="${rowIdW}">
+            <div class="th-wrap" data-sort="row_id"><span class="col-name">row_id</span><span class="col-type">bigint</span>${sortIcon('row_id')}</div>
+            <span class="col-resize" data-col="row_id"></span>
+          </th>
+          ${cols.map((c) => `<th class="${sortCol === c.name ? 'sorted' : ''}" data-col="${esc(c.name)}" style="${colWidthStyle(c.name, c)}">
+            <div class="th-wrap" data-sort="${esc(c.name)}">
+              <span class="col-name">${esc(c.name)}</span>
+              <span class="col-type">${esc(typeLabel(c.kind, c.dim))}</span>${sortIcon(c.name)}
+            </div>
+            <span class="col-resize" data-col="${esc(c.name)}"></span>
+          </th>`).join('')}
+        </tr>`;
+
         const rows = data.rows.map((row) => {
-          const cells = cols.map((c) => `<td>${renderCell(c, row.values[c.name])}</td>`).join('');
+          const cells = cols.map((c) =>
+            `<td data-col="${esc(c.name)}" style="${colWidthStyle(c.name, c)}"><div class="cell-pad">${renderCell(c, row.values[c.name])}</div></td>`
+          ).join('');
           return `<tr data-id="${row.row_id}">
-            <td class="rowid">${row.row_id}</td>
+            <td class="col-check-td"><div class="cell-pad"><input type="checkbox" class="row-check" data-id="${row.row_id}" /></div></td>
+            <td class="col-id" data-col="row_id" style="${rowIdW}"><div class="cell-pad"><span class="cell-inner">${row.row_id}</span></div></td>
             ${cells}
-            <td class="actions-col">
-              <button class="btn small" data-act="edit" data-id="${row.row_id}">Edit</button>
-              <button class="btn small danger" data-act="del" data-id="${row.row_id}">Del</button>
-            </td>
           </tr>`;
         }).join('');
-        const note = data.capped ? `<div style="padding:8px 24px;color:var(--amber);font-size:0.78rem">Showing first ${data.count} rows (limit reached — narrow with a filter to see more).</div>` : '';
-        $('scroll').innerHTML = `${note}<table class="grid"><thead>${header}</thead><tbody>${rows}</tbody></table>`;
-        $('scroll').querySelectorAll('button[data-act]').forEach((b) => {
-          b.addEventListener('click', () => {
-            const id = Number(b.dataset.id);
-            if (b.dataset.act === 'edit') openEditor('edit', id);
-            else deleteRow(id);
+
+        $('scroll').innerHTML = `<table class="sheet"><thead>${header}</thead><tbody>${rows}</tbody></table>`;
+        const table = $('scroll').querySelector('.sheet');
+
+        $('scroll').querySelectorAll('tbody tr').forEach((tr) => {
+          tr.addEventListener('click', (e) => {
+            if (e.target.matches('input')) return;
+            openEditor('edit', Number(tr.dataset.id));
           });
         });
+        $('scroll').querySelectorAll('.cell-inner[data-copy]').forEach((cell) => {
+          cell.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            navigator.clipboard.writeText(cell.dataset.copy).then(() => toast('ok', 'Copied'));
+          });
+        });
+        $('scroll').querySelectorAll('.th-wrap[data-sort]').forEach((th) => {
+          th.addEventListener('click', () => {
+            const col = th.dataset.sort;
+            if (sortCol === col) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+            else { sortCol = col === 'row_id' ? 'row_id' : col; sortDir = 'asc'; }
+            scan();
+          });
+        });
+        initColumnResize(table);
+        const selectAll = $('select-all');
+        if (selectAll) {
+          selectAll.addEventListener('change', () => {
+            $('scroll').querySelectorAll('.row-check').forEach((cb) => { cb.checked = selectAll.checked; });
+          });
+        }
       }
 
-      // ---- Editor modal -------------------------------------------------------
-      function fieldFor(col, value) {
-        const kind = col.kind;
-        const name = col.name;
-        let control;
-        const cur = value && value.value !== undefined ? value.value : '';
-        if (kind === 'bool') {
-          const v = value && value.type === 'bool' ? String(value.value) : '';
-          control = `<select data-col="${esc(name)}" data-kind="${kind}">
-            <option value=""${v === '' ? ' selected' : ''}>(unset)</option>
-            <option value="true"${v === 'true' ? ' selected' : ''}>true</option>
-            <option value="false"${v === 'false' ? ' selected' : ''}>false</option>
-          </select>`;
-        } else if (kind === 'text' || kind === 'vector' || kind === 'edge') {
-          let display = cur;
-          if (kind === 'vector' && value && value.type === 'vector') display = JSON.stringify(value.value);
-          if (kind === 'edge' && value && value.type === 'edges') display = JSON.stringify(value.value);
-          control = `<textarea data-col="${esc(name)}" data-kind="${kind}">${esc(display)}</textarea>`;
+      function exportData(fmt) {
+        if (!lastScan?.rows.length) { toast('err', 'No data'); return; }
+        const cols = visibleColumns();
+        let content, mime, ext;
+        if (fmt === 'json') {
+          content = JSON.stringify(lastScan.rows.map((r) => {
+            const o = { row_id: r.row_id };
+            cols.forEach((c) => { o[c.name] = cellRaw(c, r.values[c.name]); });
+            return o;
+          }), null, 2);
+          mime = 'application/json'; ext = 'json';
         } else {
-          const type = (kind === 'i64' || kind === 'f64' || kind === 'timestamp') ? 'number' : 'text';
-          const step = kind === 'f64' ? ' step="any"' : '';
-          control = `<input data-col="${esc(name)}" data-kind="${kind}" type="${type}"${step} value="${esc(cur)}" />`;
+          const hdr = ['row_id', ...cols.map((c) => c.name)];
+          const lines = [hdr.join(',')];
+          lastScan.rows.forEach((r) => {
+            lines.push([r.row_id, ...cols.map((c) => {
+              const v = cellRaw(c, r.values[c.name]);
+              if (v == null) return '';
+              const s = String(v).replace(/"/g, '""');
+              return /[,"\n]/.test(s) ? `"${s}"` : s;
+            })].join(','));
+          });
+          content = lines.join('\n'); mime = 'text/csv'; ext = 'csv';
+        }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([content], { type: mime }));
+        a.download = `${current.name}.${ext}`;
+        a.click();
+        toast('ok', `Exported ${lastScan.count} rows`);
+      }
+
+      function fieldFor(col, value) {
+        const kind = col.kind, name = col.name;
+        const cur = value?.value ?? '';
+        let control;
+        if (kind === 'bool') {
+          const v = value?.type === 'bool' ? String(value.value) : '';
+          control = `<select data-col="${esc(name)}" data-kind="${kind}">
+            <option value=""${v === '' ? ' selected' : ''}>NULL</option>
+            <option value="true"${v === 'true' ? ' selected' : ''}>true</option>
+            <option value="false"${v === 'false' ? ' selected' : ''}>false</option></select>`;
+        } else if (['text','vector','edge'].includes(kind)) {
+          let d = cur;
+          if (kind === 'vector' && value?.type === 'vector') d = JSON.stringify(value.value);
+          if (kind === 'edge' && value?.type === 'edges') d = JSON.stringify(value.value);
+          control = `<textarea data-col="${esc(name)}" data-kind="${kind}">${esc(d)}</textarea>`;
+        } else {
+          const type = ['i64','f64','timestamp'].includes(kind) ? 'number' : 'text';
+          control = `<input data-col="${esc(name)}" data-kind="${kind}" type="${type}"${kind === 'f64' ? ' step="any"' : ''} value="${esc(cur)}" />`;
         }
         let hint = '';
-        if (kind === 'vector') hint = '<div class="hint">JSON array of numbers, or plain text to auto-embed (requires embedder). Leave blank to skip.</div>';
-        if (kind === 'edge') hint = '<div class="hint">JSON array of row ids, e.g. [1, 2, 3]. Leave blank to skip.</div>';
-        if (TIME_COLS.includes(name)) hint = '<div class="hint">Epoch milliseconds. Leave blank to skip.</div>';
-        return `<div class="field">
-          <label>${esc(name)}<span class="k">${esc(kind)}${col.dim ? '(' + col.dim + ')' : ''}</span></label>
-          ${control}${hint}
-        </div>`;
+        if (kind === 'vector') hint = '<div class="hint">JSON array or text to auto-embed</div>';
+        if (kind === 'edge') hint = '<div class="hint">JSON array of row ids</div>';
+        return `<div class="field"><label>${esc(name)}<span>${esc(typeLabel(kind, col.dim))}</span></label>${control}${hint}</div>`;
       }
 
       async function openEditor(mode, rowId) {
         editState = { mode, rowId };
-        $('modal-title').textContent = mode === 'insert'
-          ? `Insert row into ${current.name}`
-          : `Edit row #${rowId} · ${current.name}`;
+        $('editor-title').textContent = mode === 'insert' ? 'Add record' : `Record #${rowId}`;
+        $('editor-sub').textContent = current.name;
+        $('editor-delete').style.display = mode === 'edit' ? 'inline-flex' : 'none';
         let values = {};
         if (mode === 'edit') {
           try {
             const row = await api('GET', `/api/v1/admin/db/tables/${encodeURIComponent(current.name)}/rows/${rowId}`);
             values = row.values || {};
-          } catch (err) { banner('err', err.message); return; }
+          } catch (err) { toast('err', err.message); return; }
         }
-        $('modal-body').innerHTML = current.columns.map((c) => fieldFor(c, values[c.name])).join('');
-        $('modal-bg').classList.add('show');
+        $('editor-body').innerHTML = current.columns.map((c) => fieldFor(c, values[c.name])).join('');
+        $('editor-backdrop').classList.add('show');
+        $('editor-panel').classList.add('show');
       }
 
-      function closeModal() { $('modal-bg').classList.remove('show'); editState = null; }
+      function closeEditor() {
+        $('editor-backdrop').classList.remove('show');
+        $('editor-panel').classList.remove('show');
+        editState = null;
+      }
 
       async function saveRow() {
         if (!editState) return;
-        const controls = $('modal-body').querySelectorAll('[data-col]');
         const values = {};
         try {
-          controls.forEach((ctrl) => {
-            const col = ctrl.dataset.col;
-            const kind = ctrl.dataset.kind;
-            const raw = ctrl.value;
-            if (raw === '' || raw === null) return; // skip unset fields
-            values[col] = buildApiValue(kind, raw);
+          $('editor-body').querySelectorAll('[data-col]').forEach((ctrl) => {
+            if (ctrl.value === '') return;
+            values[ctrl.dataset.col] = buildApiValue(ctrl.dataset.kind, ctrl.value);
           });
-        } catch (e) {
-          banner('err', 'Invalid value: ' + e.message);
-          return;
-        }
-        if (Object.keys(values).length === 0) {
-          banner('err', 'Nothing to save — fill at least one field.');
-          return;
-        }
+        } catch (e) { toast('err', e.message); return; }
+        if (!Object.keys(values).length) { toast('err', 'Fill at least one field'); return; }
         try {
           if (editState.mode === 'insert') {
             const r = await api('POST', `/api/v1/admin/db/tables/${encodeURIComponent(current.name)}/rows`, { values });
-            banner('ok', `Inserted row #${r.row_id}.`);
+            toast('ok', `Inserted #${r.row_id}`);
           } else {
             await api('PATCH', `/api/v1/admin/db/tables/${encodeURIComponent(current.name)}/rows/${editState.rowId}`, { values });
-            banner('ok', `Updated row #${editState.rowId}.`);
+            toast('ok', `Updated #${editState.rowId}`);
           }
-          closeModal();
+          closeEditor();
           await scan();
-        } catch (err) {
-          banner('err', err.message);
-        }
+        } catch (err) { toast('err', err.message); }
       }
 
       async function deleteRow(rowId) {
-        if (!confirm(`Delete row #${rowId} from ${current.name}? This writes a tombstone (space reclaimed on compaction).`)) return;
+        if (!confirm(`Delete record #${rowId}?`)) return;
         try {
           await api('DELETE', `/api/v1/admin/db/tables/${encodeURIComponent(current.name)}/rows/${rowId}`);
-          banner('ok', `Deleted row #${rowId}.`);
+          toast('ok', `Deleted #${rowId}`);
+          closeEditor();
           await scan();
-        } catch (err) { banner('err', err.message); }
+        } catch (err) { toast('err', err.message); }
       }
 
       async function adminOp(op) {
-        if (!confirm(`Run ${op} on the whole database now?`)) return;
+        if (!confirm(`Run ${op}?`)) return;
         try {
           await api('POST', `/api/v1/admin/db/${op}`);
-          banner('ok', `${op} complete.`);
-        } catch (err) { banner('err', err.message); }
+          toast('ok', `${op} done`);
+        } catch (err) { toast('err', err.message); }
       }
 
-      // ---- Wiring -------------------------------------------------------------
+      function togglePopover(id) {
+        document.querySelectorAll('.popover').forEach((p) => { if (p.id !== id) p.classList.remove('show'); });
+        $(id).classList.toggle('show');
+      }
+
+      // ── Events ────────────────────────────────────────────────────
+      $('refresh-catalog').addEventListener('click', loadCatalog);
       $('refresh-btn').addEventListener('click', scan);
       $('limit-select').addEventListener('change', scan);
-      $('filter-col').addEventListener('change', scan);
-      $('filter-op').addEventListener('change', () => { if ($('filter-val').value.trim()) scan(); });
-      $('filter-val').addEventListener('keydown', (e) => { if (e.key === 'Enter') scan(); });
-      $('add-btn').addEventListener('click', () => openEditor('insert'));
+      $('add-btn').addEventListener('click', () => current && openEditor('insert'));
       $('flush-btn').addEventListener('click', () => adminOp('flush'));
       $('compact-btn').addEventListener('click', () => adminOp('compact'));
-      $('modal-close').addEventListener('click', closeModal);
-      $('modal-cancel').addEventListener('click', closeModal);
-      $('modal-save').addEventListener('click', saveRow);
-      $('modal-bg').addEventListener('click', (e) => { if (e.target === $('modal-bg')) closeModal(); });
+      $('export-csv').addEventListener('click', () => exportData('csv'));
+      $('export-json').addEventListener('click', () => exportData('json'));
 
-      function promptSecret() {
-        showGate(true);
-        $('gate-input').focus();
-      }
-      $('secret-btn').addEventListener('click', promptSecret);
+      $('filter-btn').addEventListener('click', (e) => { e.stopPropagation(); togglePopover('filter-popover'); });
+      $('columns-btn').addEventListener('click', (e) => { e.stopPropagation(); togglePopover('columns-popover'); });
+      document.addEventListener('click', () => document.querySelectorAll('.popover').forEach((p) => p.classList.remove('show')));
+
+      $('apply-filter').addEventListener('click', () => {
+        const col = $('filter-col').value;
+        const val = $('filter-val').value.trim();
+        if (!col || !val) { activeFilter = null; scan(); return; }
+        activeFilter = { col, op: $('filter-op').value, val };
+        $('filter-popover').classList.remove('show');
+        scan();
+      });
+      $('clear-filter').addEventListener('click', () => {
+        activeFilter = null;
+        $('filter-val').value = '';
+        $('filter-popover').classList.remove('show');
+        scan();
+      });
+      $('filter-val').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('apply-filter').click(); });
+
+      $('editor-close').addEventListener('click', closeEditor);
+      $('editor-cancel').addEventListener('click', closeEditor);
+      $('editor-backdrop').addEventListener('click', closeEditor);
+      $('editor-save').addEventListener('click', saveRow);
+      $('editor-delete').addEventListener('click', () => editState && deleteRow(editState.rowId));
+
+      $('coll-search').addEventListener('input', (e) => { collFilter = e.target.value.trim(); renderCollections(); });
+      $('global-search').addEventListener('input', () => renderCollections());
+
+      $('nav-connect').addEventListener('click', () => {
+        toast('ok', datasetInfo.url || 'Sunjet connected');
+      });
+
+      $('secret-btn').addEventListener('click', () => { showGate(true); $('gate-input').focus(); });
       $('gate-save').addEventListener('click', () => {
         secret = $('gate-input').value.trim();
         localStorage.setItem(SECRET_KEY, secret);
@@ -629,7 +1256,13 @@
       });
       $('gate-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('gate-save').click(); });
 
-      if (!secret) promptSecret();
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeEditor();
+        if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); $('global-search').focus(); }
+        if ((e.metaKey || e.ctrlKey) && e.key === 'r') { e.preventDefault(); if (current) scan(); }
+      });
+
+      if (!secret) showGate(true);
       loadCatalog();
     </script>
   </body>

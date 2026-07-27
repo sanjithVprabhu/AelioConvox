@@ -3,574 +3,432 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AelioConvox — Conversation Telemetry</title>
+    <title>Conversation Telemetry — AelioConvox</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <style>
       :root {
-        --bg: #0b0f14;
-        --panel: #121820;
-        --panel-2: #171f2a;
-        --border: #243041;
-        --text: #e8edf4;
-        --muted: #8b9bb0;
-        --accent: #3b82f6;
-        --accent-dim: #1e3a5f;
-        --user: #22c55e;
-        --assistant: #6366f1;
-        --tool: #f59e0b;
-        --intent: #06b6d4;
-        --state: #a855f7;
-        --flow: #ec4899;
-        --warn: #f97316;
+        --bg: #ffffff;
+        --bg-subtle: #fafafa;
+        --bg-muted: #f4f4f5;
+        --bg-sidebar: #fafafa;
+        --border: #e4e4e7;
+        --border-subtle: #ebebef;
+        --text: #18181b;
+        --text-2: #52525b;
+        --muted: #71717a;
+        --faint: #a1a1aa;
+        --primary: #18181b;
+        --primary-hover: #27272a;
+        --green: #059669;
+        --green-bg: #ecfdf5;
+        --red: #dc2626;
+        --red-bg: #fef2f2;
+        --blue: #2563eb;
+        --blue-bg: #eff6ff;
+        --violet: #7c3aed;
+        --violet-bg: #f5f3ff;
+        --cyan: #0891b2;
+        --cyan-bg: #ecfeff;
+        --amber: #d97706;
+        --amber-bg: #fffbeb;
+        --pink: #db2777;
+        --pink-bg: #fdf2f8;
+        --user: #059669;
+        --user-bg: #ecfdf5;
+        --assistant: #4f46e5;
+        --assistant-bg: #eef2ff;
+        --tool: #d97706;
+        --tool-bg: #fffbeb;
+        --nav-w: 220px;
+        --side-w: 300px;
+        --topbar-h: 52px;
+        --font: 'Inter', system-ui, sans-serif;
+        --mono: 'IBM Plex Mono', ui-monospace, monospace;
+        --radius: 6px;
+        --shadow: 0 4px 24px rgba(0,0,0,.08);
       }
-
-      * {
-        box-sizing: border-box;
-      }
-
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
       body {
-        margin: 0;
-        min-height: 100vh;
-        font-family: 'Instrument Sans', system-ui, sans-serif;
+        font-family: var(--font);
         background: var(--bg);
         color: var(--text);
-        display: flex;
-        flex-direction: column;
+        font-size: 13px;
+        line-height: 1.45;
+        overflow: hidden;
+        -webkit-font-smoothing: antialiased;
       }
+      button, input, select, textarea { font: inherit; }
+      code, a { font-family: var(--mono); font-size: .9em; }
+      a { color: var(--blue); }
 
-      header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        padding: 16px 24px;
-        border-bottom: 1px solid var(--border);
-        background: linear-gradient(180deg, #10161f, var(--bg));
-        position: sticky;
-        top: 0;
-        z-index: 10;
+      /* ── Top bar ─────────────────────────────────────────────── */
+      .topbar {
+        height: var(--topbar-h);
+        display: flex; align-items: center; gap: 12px;
+        padding: 0 16px; border-bottom: 1px solid var(--border); background: var(--bg);
       }
-
-      header h1 {
-        margin: 0;
-        font-size: 1.1rem;
-        font-weight: 700;
-        letter-spacing: -0.02em;
+      .topbar-logo {
+        display: flex; align-items: center; gap: 8px;
+        font-weight: 700; font-size: 15px; letter-spacing: -.02em; flex-shrink: 0;
       }
-
-      header p {
-        margin: 4px 0 0;
-        font-size: 0.82rem;
-        color: var(--muted);
+      .neon-mark {
+        width: 22px; height: 22px; border-radius: 50%;
+        background: linear-gradient(135deg, #00e599, #00b87a);
       }
-
-      .header-actions {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
+      .topbar-title span { color: var(--muted); font-weight: 500; }
+      .topbar-selectors { display: flex; gap: 6px; }
+      .selector {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 5px 10px; border: 1px solid var(--border);
+        border-radius: var(--radius); background: var(--bg);
+        font-size: 13px; font-weight: 500; max-width: 180px;
       }
-
-      .pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 12px;
-        border-radius: 999px;
-        font-size: 0.78rem;
-        border: 1px solid var(--border);
-        background: var(--panel);
-        color: var(--muted);
+      .selector svg { color: var(--muted); flex-shrink: 0; }
+      .selector span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .topbar-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+      .status-ok {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-size: 12px; color: var(--green); font-weight: 500;
       }
-
-      .pill.live {
-        color: #86efac;
-        border-color: #166534;
-        background: #052e16;
-      }
-
-      .dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: currentColor;
-      }
-
-      .pill.live .dot {
-        animation: pulse 1.4s ease-in-out infinite;
-      }
-
-      @keyframes pulse {
-        0%,
-        100% {
-          opacity: 1;
-        }
-        50% {
-          opacity: 0.35;
-        }
-      }
-
-      button,
-      input,
-      select {
-        font: inherit;
-      }
+      .status-ok.off { color: var(--red); }
+      .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+      .status-ok:not(.off) .status-dot { animation: pulse 1.5s ease infinite; }
+      @keyframes pulse { 50% { opacity: .35; } }
 
       .btn {
-        border: 1px solid var(--border);
-        background: var(--panel-2);
-        color: var(--text);
-        border-radius: 10px;
-        padding: 8px 14px;
-        cursor: pointer;
-        font-size: 0.85rem;
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        border: 1px solid var(--border); background: var(--bg);
+        color: var(--text); border-radius: var(--radius);
+        padding: 6px 12px; cursor: pointer; font-size: 12px; font-weight: 500;
+        transition: .1s; white-space: nowrap; text-decoration: none;
+      }
+      .btn:hover { background: var(--bg-muted); }
+      .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+      .btn.primary:hover { background: var(--primary-hover); }
+      .btn.sm { padding: 5px 10px; font-size: 12px; }
+
+      /* ── Body layout ─────────────────────────────────────────── */
+      .app-body { display: flex; height: calc(100vh - var(--topbar-h)); }
+
+      .nav-sidebar {
+        width: var(--nav-w); border-right: 1px solid var(--border);
+        background: var(--bg-sidebar); overflow-y: auto; flex-shrink: 0; padding: 12px 0;
+      }
+      .nav-section { margin-bottom: 16px; }
+      .nav-section-label {
+        padding: 0 16px 6px; font-size: 10px; font-weight: 600;
+        letter-spacing: .06em; text-transform: uppercase; color: var(--faint);
+      }
+      .nav-item {
+        display: flex; align-items: center; gap: 10px;
+        padding: 7px 16px; font-size: 13px; color: var(--text-2);
+        cursor: pointer; border: none; background: none; width: 100%;
+        text-align: left; text-decoration: none; transition: .1s;
+      }
+      .nav-item:hover { background: var(--bg-muted); color: var(--text); }
+      .nav-item.active { background: var(--bg-muted); color: var(--text); font-weight: 500; }
+      .nav-item svg { flex-shrink: 0; color: var(--muted); }
+      .nav-item.active svg { color: var(--text); }
+
+      /* Side panel */
+      .side-panel {
+        width: var(--side-w); border-right: 1px solid var(--border);
+        background: var(--bg); display: flex; flex-direction: column;
+        min-height: 0; flex-shrink: 0; overflow-y: auto;
+      }
+      .side-head {
+        padding: 16px 14px 12px; border-bottom: 1px solid var(--border-subtle);
+      }
+      .side-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+      .side-head p { margin: 4px 0 0; font-size: 11px; color: var(--muted); line-height: 1.45; }
+
+      .side-section { padding: 14px; border-bottom: 1px solid var(--border-subtle); }
+      .side-section h3 {
+        margin: 0 0 10px; font-size: 10px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: .05em; color: var(--faint);
       }
 
-      .btn:hover {
-        border-color: #3d5168;
+      .field { margin-bottom: 8px; }
+      .field label {
+        display: block; font-size: 11px; font-weight: 500;
+        color: var(--muted); margin-bottom: 4px;
       }
-
-      .btn.primary {
-        background: var(--accent-dim);
-        border-color: #2563eb;
-        color: #dbeafe;
+      .field input, .field select {
+        width: 100%; padding: 6px 10px; border: 1px solid var(--border);
+        border-radius: var(--radius); font-size: 12px; outline: none;
       }
+      .field input:focus, .field select:focus { border-color: var(--text-2); }
 
-      .api-calls {
-        margin-top: 18px;
-        display: grid;
-        gap: 8px;
-        max-height: 320px;
-        overflow-y: auto;
-      }
+      .field-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+      .field-row label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); cursor: pointer; }
 
-      .api-call {
-        background: var(--panel-2);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 10px;
-        font-size: 0.78rem;
-      }
-
-      .api-call .head {
-        display: flex;
-        justify-content: space-between;
-        gap: 8px;
-        margin-bottom: 6px;
-      }
-
-      .api-call .purpose {
-        font-family: 'IBM Plex Mono', monospace;
-        color: var(--tool);
-        font-weight: 600;
-      }
-
-      .api-call .preview {
-        color: var(--muted);
-        line-height: 1.4;
-        word-break: break-word;
-      }
-
-      .toolbar {
-        display: grid;
-        grid-template-columns: 1fr 1fr auto auto auto;
-        gap: 10px;
-        padding: 14px 24px;
-        border-bottom: 1px solid var(--border);
-        background: var(--panel);
-      }
-
-      .toolbar input,
-      .toolbar select {
-        background: var(--bg);
-        border: 1px solid var(--border);
-        color: var(--text);
-        border-radius: 10px;
-        padding: 9px 12px;
-        font-size: 0.85rem;
-      }
-
-      .layout {
-        display: grid;
-        grid-template-columns: 280px 1fr;
-        flex: 1;
-        min-height: 0;
-      }
-
-      aside {
-        border-right: 1px solid var(--border);
-        padding: 18px;
-        background: var(--panel);
-        overflow-y: auto;
-      }
-
-      aside h2 {
-        margin: 0 0 12px;
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-      }
-
-      .stat-grid {
-        display: grid;
-        gap: 10px;
-        margin-bottom: 22px;
-      }
-
+      .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
       .stat {
-        background: var(--panel-2);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 12px;
+        background: var(--bg-subtle); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 10px 12px;
       }
+      .stat .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+      .stat .value { margin-top: 4px; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+      .stat .value.sm { font-size: 12px; font-weight: 500; font-family: var(--mono); }
 
-      .stat .label {
-        font-size: 0.72rem;
-        color: var(--muted);
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-      }
-
-      .stat .value {
-        margin-top: 4px;
-        font-size: 1.35rem;
-        font-weight: 700;
-        font-family: 'IBM Plex Mono', monospace;
-      }
-
-      .legend {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        font-size: 0.82rem;
-        color: var(--muted);
-      }
-
+      .legend { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-2); }
+      .legend span { display: flex; align-items: center; gap: 8px; }
       .legend span::before {
-        content: '';
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 3px;
-        margin-right: 8px;
-        vertical-align: middle;
+        content: ''; width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0;
       }
+      .legend .user::before { background: var(--user); }
+      .legend .assistant::before { background: var(--assistant); }
+      .legend .intent::before { background: var(--cyan); }
+      .legend .state::before { background: var(--violet); }
+      .legend .flow::before { background: var(--pink); }
 
-      .legend .user::before {
-        background: var(--user);
+      .api-calls { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; }
+      .api-call {
+        background: var(--bg-subtle); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 10px; font-size: 12px;
       }
-      .legend .assistant::before {
-        background: var(--assistant);
-      }
-      .legend .intent::before {
-        background: var(--intent);
-      }
-      .legend .state::before {
-        background: var(--state);
-      }
-      .legend .flow::before {
-        background: var(--flow);
-      }
+      .api-call .head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+      .api-call .purpose { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--amber); }
+      .api-call .preview { color: var(--muted); line-height: 1.4; word-break: break-word; font-size: 11px; }
+      .api-call .meta { margin-top: 4px; font-family: var(--mono); font-size: 10px; color: var(--faint); }
 
-      main {
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
+      /* Main feed */
+      .main-panel {
+        flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-subtle);
       }
+      .feed-toolbar {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--bg);
+      }
+      .feed-toolbar .meta { font-size: 12px; color: var(--muted); }
+      .feed-toolbar .meta strong { color: var(--text); }
 
       #feed {
-        flex: 1;
-        overflow-y: auto;
-        padding: 20px 24px 40px;
-        scroll-behavior: smooth;
+        flex: 1; overflow-y: auto; padding: 16px 20px 32px; scroll-behavior: smooth;
       }
 
       .empty {
-        margin: 80px auto;
-        max-width: 420px;
-        text-align: center;
-        color: var(--muted);
-        line-height: 1.6;
+        max-width: 420px; margin: 60px auto; text-align: center;
+        color: var(--muted); line-height: 1.6; font-size: 14px;
       }
+      .empty strong { color: var(--text); display: block; margin-bottom: 8px; }
 
       .event {
-        display: grid;
-        grid-template-columns: 88px 1fr;
-        gap: 16px;
-        margin-bottom: 16px;
-        animation: fadeIn 0.25s ease;
+        display: grid; grid-template-columns: 72px 1fr; gap: 14px;
+        margin-bottom: 12px; animation: fadeIn .2s ease;
       }
-
       @keyframes fadeIn {
-        from {
-          opacity: 0;
-          transform: translateY(6px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
+        from { opacity: 0; transform: translateY(4px); }
+        to { opacity: 1; transform: none; }
       }
 
       .time-col {
-        text-align: right;
-        padding-top: 14px;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 0.72rem;
-        color: var(--muted);
-        line-height: 1.5;
+        text-align: right; padding-top: 12px;
+        font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.5;
       }
 
       .card {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        overflow: hidden;
+        background: var(--bg); border: 1px solid var(--border);
+        border-radius: var(--radius); overflow: hidden;
+        box-shadow: 0 1px 2px rgba(0,0,0,.04);
       }
-
-      .card.user {
-        border-color: #14532d;
-        box-shadow: inset 3px 0 0 var(--user);
-      }
-
-      .card.assistant {
-        border-color: #312e81;
-        box-shadow: inset 3px 0 0 var(--assistant);
-      }
-
-      .card.tool,
-      .card.system {
-        box-shadow: inset 3px 0 0 var(--tool);
-      }
+      .card.user { border-left: 3px solid var(--user); }
+      .card.assistant { border-left: 3px solid var(--assistant); }
+      .card.tool, .card.system { border-left: 3px solid var(--tool); }
 
       .card-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 12px 16px;
-        background: var(--panel-2);
-        border-bottom: 1px solid var(--border);
-        flex-wrap: wrap;
+        display: flex; align-items: center; justify-content: space-between; gap: 10px;
+        padding: 10px 14px; background: var(--bg-subtle);
+        border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap;
       }
-
-      .card-head-left {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
+      .card-head-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
       .badge {
-        font-size: 0.72rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        padding: 4px 8px;
-        border-radius: 6px;
+        font-size: 10px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: .04em; padding: 2px 7px; border-radius: 4px;
       }
+      .badge.role-user { background: var(--user-bg); color: var(--user); }
+      .badge.role-assistant { background: var(--assistant-bg); color: var(--assistant); }
+      .badge.role-tool, .badge.role-system { background: var(--tool-bg); color: var(--tool); }
 
-      .badge.role-user {
-        background: #052e16;
-        color: #86efac;
-      }
-      .badge.role-assistant {
-        background: #1e1b4b;
-        color: #c7d2fe;
-      }
-      .badge.role-tool,
-      .badge.role-system {
-        background: #451a03;
-        color: #fcd34d;
-      }
+      .sender { font-size: 13px; font-weight: 500; }
+      .meta-line { font-size: 11px; color: var(--muted); font-family: var(--mono); }
 
-      .sender {
-        font-size: 0.85rem;
-        font-weight: 600;
-      }
+      .card-body { padding: 14px; }
+      .message { font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; color: var(--text); }
 
-      .meta-line {
-        font-size: 0.78rem;
-        color: var(--muted);
-        font-family: 'IBM Plex Mono', monospace;
-      }
-
-      .card-body {
-        padding: 16px;
-      }
-
-      .message {
-        font-size: 0.95rem;
-        line-height: 1.55;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-
-      .chips {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-top: 14px;
-      }
-
+      .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
       .chip {
-        font-size: 0.75rem;
-        padding: 5px 10px;
-        border-radius: 999px;
+        font-size: 11px; padding: 3px 8px; border-radius: 999px; font-weight: 500;
         border: 1px solid var(--border);
-        background: var(--bg);
       }
-
-      .chip.intent {
-        border-color: #155e75;
-        color: #67e8f9;
-        background: #042f2e;
-      }
-      .chip.state {
-        border-color: #581c87;
-        color: #e9d5ff;
-        background: #2e1065;
-      }
-      .chip.flow {
-        border-color: #9d174d;
-        color: #fbcfe8;
-        background: #500724;
-      }
-      .chip.tool {
-        border-color: #92400e;
-        color: #fde68a;
-        background: #451a03;
-      }
-      .chip.warn {
-        border-color: #9a3412;
-        color: #fdba74;
-        background: #431407;
-      }
+      .chip.intent { background: var(--cyan-bg); color: var(--cyan); border-color: #a5f3fc; }
+      .chip.state { background: var(--violet-bg); color: var(--violet); border-color: #ddd6fe; }
+      .chip.flow { background: var(--pink-bg); color: var(--pink); border-color: #fbcfe8; }
+      .chip.tool { background: var(--tool-bg); color: var(--tool); border-color: #fde68a; }
+      .chip.warn { background: var(--amber-bg); color: var(--amber); border-color: #fde68a; }
+      .chip.assistant { background: var(--assistant-bg); color: var(--assistant); border-color: #c7d2fe; }
 
       details {
-        margin-top: 14px;
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        background: var(--bg);
+        margin-top: 10px; border: 1px solid var(--border);
+        border-radius: var(--radius); background: var(--bg-subtle);
       }
-
       summary {
-        cursor: pointer;
-        padding: 10px 12px;
-        font-size: 0.8rem;
-        color: var(--muted);
-        user-select: none;
+        cursor: pointer; padding: 8px 12px; font-size: 12px;
+        color: var(--muted); user-select: none; font-weight: 500;
       }
-
+      summary:hover { color: var(--text); }
       pre {
-        margin: 0;
-        padding: 12px;
-        overflow-x: auto;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 0.72rem;
-        line-height: 1.5;
-        color: #cbd5e1;
-        border-top: 1px solid var(--border);
+        margin: 0; padding: 12px; overflow-x: auto;
+        font-family: var(--mono); font-size: 11px; line-height: 1.5;
+        color: var(--text-2); border-top: 1px solid var(--border); background: var(--bg);
       }
 
-      .stack-item {
-        padding: 8px 0;
-        border-bottom: 1px solid var(--border);
-      }
+      .stack-item { padding: 6px 0; border-bottom: 1px solid var(--border-subtle); font-size: 12px; }
+      .stack-item:last-child { border-bottom: none; }
+      .stack-item strong { color: var(--cyan); font-size: 10px; }
 
-      .stack-item:last-child {
-        border-bottom: none;
-      }
+      .side-empty { font-size: 12px; color: var(--muted); line-height: 1.5; padding: 4px 0; }
 
-      .stack-item strong {
-        color: var(--intent);
-      }
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 4px; }
 
-      @media (max-width: 900px) {
-        .layout {
-          grid-template-columns: 1fr;
-        }
-        aside {
-          display: none;
-        }
-        .toolbar {
-          grid-template-columns: 1fr 1fr;
-        }
+      @media (max-width: 960px) {
+        .nav-sidebar { display: none; }
+        .side-panel { width: 260px; }
+        .event { grid-template-columns: 1fr; }
+        .time-col { text-align: left; padding: 0 0 4px; }
       }
     </style>
   </head>
   <body>
-    <header>
-      <div>
-        <h1>Conversation Telemetry</h1>
-        <p>Live Sunjet archive — intent, lifecycle state, flows, and tools per message</p>
+    <header class="topbar">
+      <div class="topbar-logo">
+        <div class="neon-mark"></div>
+        <div class="topbar-title">Telemetry <span>· Conversation events</span></div>
       </div>
-      <div class="header-actions">
-        <span class="pill" id="status-pill"><span class="dot"></span><span id="status-text">Connecting…</span></span>
-        <a class="btn" href="/admin/db">Database</a>
-        <a class="btn" href="/demo.html">Open chat demo</a>
-        <button class="btn primary" id="refresh-btn" type="button">Refresh now</button>
+      <div class="topbar-selectors">
+        <div class="selector" title="Dataset">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <span id="dataset-name">—</span>
+        </div>
+        <div class="selector" title="Table">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
+          <span id="table-name">conversations</span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span class="status-ok" id="status-pill"><span class="status-dot"></span><span id="status-text">Connecting…</span></span>
+        <a class="btn sm" href="/admin/db">Database</a>
+        <a class="btn sm" href="/demo.html">Chat demo</a>
+        <button class="btn primary sm" id="refresh-btn" type="button">Refresh</button>
       </div>
     </header>
 
-    <div class="toolbar">
-      <input id="filter-customer" type="text" placeholder="Filter by customer id (e.g. demo-user-123)" />
-      <input id="filter-session" type="text" placeholder="Filter by session id" />
-      <input id="filter-turn" type="text" placeholder="Filter by turn id (LLM/embed calls)" />
-      <select id="limit-select">
-        <option value="50">Last 50 events</option>
-        <option value="100" selected>Last 100 events</option>
-        <option value="200">Last 200 events</option>
-      </select>
-      <label class="pill" style="cursor: pointer">
-        <input id="auto-scroll" type="checkbox" checked style="accent-color: var(--accent)" />
-        Auto-scroll
-      </label>
-    </div>
+    <div class="app-body">
+      <nav class="nav-sidebar">
+        <div class="nav-section">
+          <div class="nav-section-label">Project</div>
+          <a class="nav-item" href="/admin/db">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
+            Tables
+          </a>
+          <a class="nav-item" href="/demo.html">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat demo
+          </a>
+        </div>
+        <div class="nav-section">
+          <div class="nav-section-label">Branch</div>
+          <button class="nav-item active" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 5-6"/></svg>
+            Monitoring
+          </button>
+        </div>
+      </nav>
 
-    <div class="layout">
-      <aside>
-        <h2>Overview</h2>
-        <div class="stat-grid">
-          <div class="stat">
-            <div class="label">Events loaded</div>
-            <div class="value" id="stat-count">0</div>
+      <aside class="side-panel">
+        <div class="side-head">
+          <h2>Filters</h2>
+          <p>Intent, lifecycle state, flows, and tools per message</p>
+        </div>
+
+        <div class="side-section">
+          <h3>Query</h3>
+          <div class="field">
+            <label for="filter-customer">Customer id</label>
+            <input id="filter-customer" type="text" placeholder="e.g. demo-user-123" />
           </div>
-          <div class="stat">
-            <div class="label">Unique sessions</div>
-            <div class="value" id="stat-sessions">0</div>
+          <div class="field">
+            <label for="filter-session">Session id</label>
+            <input id="filter-session" type="text" placeholder="Filter by session" />
           </div>
-          <div class="stat">
-            <div class="label">Latest intent</div>
-            <div class="value" id="stat-intent" style="font-size: 0.95rem">—</div>
+          <div class="field">
+            <label for="filter-turn">Turn id</label>
+            <input id="filter-turn" type="text" placeholder="LLM / embed calls" />
           </div>
-          <div class="stat">
-            <div class="label">API calls (turn)</div>
-            <div class="value" id="stat-api-calls" style="font-size: 0.95rem">—</div>
+          <div class="field">
+            <label for="limit-select">Event limit</label>
+            <select id="limit-select">
+              <option value="50">Last 50 events</option>
+              <option value="100" selected>Last 100 events</option>
+              <option value="200">Last 200 events</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label><input id="auto-scroll" type="checkbox" checked /> Auto-scroll</label>
           </div>
         </div>
-        <h2>LLM / Embed calls</h2>
-        <div id="api-calls-panel" class="api-calls">
-          <div class="empty" style="padding: 8px 0">Enter a turn id or session id to inspect per-turn API usage.</div>
+
+        <div class="side-section">
+          <h3>Overview</h3>
+          <div class="stat-grid">
+            <div class="stat">
+              <div class="label">Events</div>
+              <div class="value" id="stat-count">0</div>
+            </div>
+            <div class="stat">
+              <div class="label">Sessions</div>
+              <div class="value" id="stat-sessions">0</div>
+            </div>
+            <div class="stat" style="grid-column: span 2">
+              <div class="label">Latest intent</div>
+              <div class="value sm" id="stat-intent">—</div>
+            </div>
+            <div class="stat" style="grid-column: span 2">
+              <div class="label">API calls (turn)</div>
+              <div class="value sm" id="stat-api-calls">—</div>
+            </div>
+          </div>
         </div>
-        <h2>Legend</h2>
-        <div class="legend">
-          <span class="user">User message</span>
-          <span class="assistant">Assistant reply</span>
-          <span class="intent">Intent assignment</span>
-          <span class="state">Lifecycle state</span>
-          <span class="flow">Active flow step</span>
+
+        <div class="side-section">
+          <h3>LLM / Embed calls</h3>
+          <div id="api-calls-panel" class="api-calls">
+            <div class="side-empty">Enter a turn id or session id to inspect per-turn API usage.</div>
+          </div>
+        </div>
+
+        <div class="side-section">
+          <h3>Legend</h3>
+          <div class="legend">
+            <span class="user">User message</span>
+            <span class="assistant">Assistant reply</span>
+            <span class="intent">Intent assignment</span>
+            <span class="state">Lifecycle state</span>
+            <span class="flow">Active flow step</span>
+          </div>
         </div>
       </aside>
 
-      <main>
+      <main class="main-panel">
+        <div class="feed-toolbar">
+          <span class="meta">Live Sunjet archive — <strong id="feed-meta">waiting for events</strong></span>
+          <span class="meta" id="poll-meta">Polling every 2s</span>
+        </div>
         <div id="feed"></div>
       </main>
     </div>
@@ -584,6 +442,9 @@
       const statIntent = document.getElementById('stat-intent');
       const statApiCalls = document.getElementById('stat-api-calls');
       const apiCallsPanel = document.getElementById('api-calls-panel');
+      const feedMeta = document.getElementById('feed-meta');
+      const datasetName = document.getElementById('dataset-name');
+      const tableName = document.getElementById('table-name');
 
       let lastSeenCreatedAt = 0;
       let knownEventIds = new Set();
@@ -592,8 +453,7 @@
 
       function fmtTime(ms) {
         if (!ms) return '—';
-        const d = new Date(ms);
-        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       }
 
       function fmtDate(ms) {
@@ -690,7 +550,7 @@
 
       function setStatus(mode, text) {
         statusText.textContent = text;
-        statusPill.classList.toggle('live', mode === 'live');
+        statusPill.classList.toggle('off', mode === 'off');
       }
 
       function updateStats(events) {
@@ -698,6 +558,7 @@
         statSessions.textContent = String(new Set(events.map((e) => e.sessionId)).size);
         const latest = events[events.length - 1];
         statIntent.textContent = latest?.intentLabel || '—';
+        feedMeta.textContent = `${events.length} event${events.length === 1 ? '' : 's'} loaded`;
       }
 
       async function fetchEvents(reset = false) {
@@ -718,12 +579,14 @@
         }
 
         if (!body.enabled) {
-          feed.innerHTML = `<div class="empty"><strong>Sunjet not enabled</strong><br>Turn on <code>sunjet.enabled</code> in config and restart the server. Messages from the chat widget will appear here in real time.</div>`;
-          setStatus('off', 'Sunjet disabled');
+          feed.innerHTML = `<div class="empty"><strong>Sunjet not enabled</strong>Turn on <code>sunjet.enabled</code> in config and restart the server. Messages from the chat widget will appear here in real time.</div>`;
+          setStatus('off', 'Offline');
           return;
         }
 
-        setStatus('live', `Live · ${body.table}`);
+        setStatus('ok', 'All OK');
+        datasetName.textContent = body.dataset || 'Aelio';
+        if (body.table) tableName.textContent = body.table;
 
         const events = body.events || [];
 
@@ -736,7 +599,8 @@
 
         if (events.length === 0 && knownEventIds.size === 0) {
           feed.innerHTML =
-            '<div class="empty"><strong>Waiting for conversation events…</strong><br>Open <a href="/demo.html" style="color:var(--accent)">/demo.html</a>, send a message in the chat widget, and watch assignments appear here.</div>';
+            '<div class="empty"><strong>Waiting for conversation events…</strong>Open <a href="/demo.html">/demo.html</a>, send a message in the chat widget, and watch assignments appear here.</div>';
+          feedMeta.textContent = 'no events yet';
         } else if (events.length === 0) {
           return;
         }
@@ -762,8 +626,7 @@
         while (loadedEvents.length > trim) {
           const removed = loadedEvents.shift();
           if (removed?.eventId) knownEventIds.delete(removed.eventId);
-          const first = feed.querySelector('.event');
-          first?.remove();
+          feed.querySelector('.event')?.remove();
         }
 
         updateStats(loadedEvents);
@@ -778,8 +641,8 @@
               <span class="chip ${typeClass}">${escapeHtml(call.callType)}</span>
             </div>
             <div class="preview">${escapeHtml(call.promptSummary)}</div>
-            ${call.inputPreview ? `<div class="preview" style="margin-top:4px">input: ${escapeHtml(call.inputPreview)}</div>` : ''}
-            <div class="meta-line" style="margin-top:6px">${call.durationMs ?? '—'}ms · ${call.model || '—'} · ${call.stopReason || '—'}</div>
+            ${call.inputPreview ? `<div class="preview">input: ${escapeHtml(call.inputPreview)}</div>` : ''}
+            <div class="meta">${call.durationMs ?? '—'}ms · ${call.model || '—'} · ${call.stopReason || '—'}</div>
           </div>
         `;
       }
@@ -791,7 +654,7 @@
         if (!turnId && !sessionId) {
           statApiCalls.textContent = '—';
           apiCallsPanel.innerHTML =
-            '<div class="empty" style="padding:8px 0">Enter a turn id or session id to inspect per-turn API usage.</div>';
+            '<div class="side-empty">Enter a turn id or session id to inspect per-turn API usage.</div>';
           return;
         }
 
@@ -815,8 +678,7 @@
         }
 
         if (calls.length === 0) {
-          apiCallsPanel.innerHTML =
-            '<div class="empty" style="padding:8px 0">No API calls recorded for this filter yet.</div>';
+          apiCallsPanel.innerHTML = '<div class="side-empty">No API calls recorded for this filter yet.</div>';
           return;
         }
 
@@ -828,7 +690,7 @@
           await Promise.all([fetchEvents(reset), fetchTurnCalls()]);
         } catch (error) {
           setStatus('off', 'Error');
-          feed.innerHTML = `<div class="empty"><strong>Could not load telemetry</strong><br>${escapeHtml(error.message)}</div>`;
+          feed.innerHTML = `<div class="empty"><strong>Could not load telemetry</strong>${escapeHtml(error.message)}</div>`;
         }
       }
 
