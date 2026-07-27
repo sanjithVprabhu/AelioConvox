@@ -29,5 +29,26 @@ Findings, not failures. Format: `{id, section(s), what I found, options, recomme
 **Options:** (a) `aelio-sol` computes structural imprints only over already-resolved, program-free bodies and returns a typed error (`ProgramBearing` / `UnresolvedVar`) otherwise, leaving `var` resolution to the kernel; (b) pull resolution into sol.
 **Recommendation → (a).** Keeps `aelio-sol` zero-dep and pure; the kernel resolves `var` before asking sol to hash. `PROVISIONAL`.
 
+### F-006 — Once across intentional Park — `§8.4`
+**What:** Intent-without-result is fail-loud for crash recovery, but an intentional `Park` *inside* `Once` would leave status=`intent` until resume completes. Resume must not treat that as unknown-outcome.
+**Options:** (a) park-aware Once status `parked`; (b) forbid Park inside Once at plan-time; (c) resume path skips re-claim (current) and only fails on *new* claim while intent open.
+**Recommendation → (c) for P0.** Login golden has no Park inside Once. Plan-time forbid (b) is a clean P1 tightening. `PROVISIONAL`.
+
+### F-007 — Annex location — handoff Phase 1
+**What:** Handoff writes annexes to `docs/annexes/`; mother doc lives under `docs/claude_context/` with a root symlink `AELIO_DSL_MOTHER.md`.
+**Recommendation → keep both.** Root symlink satisfies "repo root" references; annexes under `docs/annexes/`.
+
 ---
+## Triage (2026-07-26)
+
+| id | status |
+|----|--------|
+| F-001 workspace `aelio-os/` | **accepted** — built |
+| F-002 store trait + memory for P0 | **accepted** — `aelio-store` |
+| F-003 kernel→store trait | **accepted** |
+| F-004 float canonical via ryu | **accepted** — sol tests green |
+| F-005 structural imprint pre-resolved | **accepted** |
+| F-006 Once/Park interaction | **deferred** P1 — login OK |
+| F-007 annex/mother paths | **accepted** |
+
 *Open items above are all `PROVISIONAL` and non-blocking. None weakens a locked invariant. Amendments (if any arise) will be proposed here first with a Decision Log entry, per handoff Authority rule #3.*
