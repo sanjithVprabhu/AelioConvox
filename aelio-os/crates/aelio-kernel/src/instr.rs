@@ -76,6 +76,11 @@ pub fn parse_node(j: &J) -> Result<Node, ErrV1> {
         .and_then(J::as_str)
         .ok_or_else(|| shape(&nid, "instruction missing string `op`"))?;
 
+    // Closed-schema (App E, §3): unknown fields ⇒ reject. A hallucinated/misspelled field (e.g.
+    // `arg` for `args`) must fail loud, never silently default. Unknown ops fall through to the
+    // match's own rejection below.
+    check_known_fields(&nid, op, obj)?;
+
     let kind = match op {
         "Const" => Kind::Const(sol(&nid, obj.get("v"))?),
         "Identity" => Kind::Identity,
@@ -206,6 +211,39 @@ pub fn parse_node(j: &J) -> Result<Node, ErrV1> {
     };
 
     Ok(Node { nid, kind })
+}
+
+/// Allowed fields per op (App E), beyond the universal `nid`/`op`. Unknown op ⇒ empty allow-list
+/// here; the main match rejects it. Any object key outside the op's set is a closed-schema violation.
+fn check_known_fields(nid: &str, op: &str, obj: &serde_json::Map<String, J>) -> Result<(), ErrV1> {
+    let allowed: &[&str] = match op {
+        "Const" => &["v"],
+        "Identity" => &[],
+        "Seq" | "Fallback" => &["steps"],
+        "Let" => &["bindings", "body"],
+        "Branch" => &["pred", "then", "else"],
+        "Loop" => &["while", "body", "max_iter"],
+        "Try" => &["body", "catch", "err_into", "finally"],
+        "Guard" => &["invariant", "body", "on_violation", "check"],
+        "Budget" => &["body", "calls", "tokens", "ms"],
+        "Timeout" => &["body", "ms"],
+        "Once" => &["body", "idem_key"],
+        "Park" => &["until", "into"],
+        "Tee" => &["body", "side", "side_root"],
+        "Map" => &["over", "imports", "body", "into", "max_items"],
+        "Filter" => &["over", "pred", "into", "max_items"],
+        "Call" => &["id", "args", "into"],
+        _ => return Ok(()), // unknown op — let the main match reject it
+    };
+    for key in obj.keys() {
+        if key == "nid" || key == "op" {
+            continue;
+        }
+        if !allowed.contains(&key.as_str()) {
+            return Err(shape(nid, format!("unknown field `{key}` on op `{op}` (closed schema, App E)")));
+        }
+    }
+    Ok(())
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────────────────────

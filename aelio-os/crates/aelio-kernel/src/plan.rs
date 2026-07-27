@@ -21,6 +21,21 @@ use aelio_sol::{Path, Segment};
 pub fn plan(root: &Node) -> Result<(), ErrV1> {
     check_writes(root)?;
     check_tee_and_park(root, false)?;
+    check_const_limits(root)?;
+    Ok(())
+}
+
+/// §8.2 / §4.4: a `Const` literal is charged against the structural limits **at plan time** — an
+/// oversized literal is a broken flow, rejected at push, not discovered at runtime.
+fn check_const_limits(node: &Node) -> Result<(), ErrV1> {
+    if let Kind::Const(v) = &node.kind {
+        aelio_sol::Limits::default()
+            .check(v)
+            .map_err(|e| ErrV1::new(ReasonCode::BudgetSize, &node.nid, format!("§4.4 Const literal exceeds limits: {e}")))?;
+    }
+    for child in children(node) {
+        check_const_limits(child)?;
+    }
     Ok(())
 }
 
