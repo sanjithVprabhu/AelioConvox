@@ -16,6 +16,7 @@ pub mod ledger;
 pub mod plan;
 pub mod registry;
 pub mod sugar;
+pub mod trace;
 pub mod waves;
 
 pub use driver::{replay, Instance, Parked, TurnOutcome};
