@@ -116,6 +116,7 @@ impl<'b, B: Backend> Executor<'b, B> {
             Kind::Const(v) => {
                 // Sole whole-bag writer (§4.2.3): Const replaces the root bag.
                 self.bag = v.clone();
+                self.enforce_limits(nid)?;
                 Ok(Flow::Done)
             }
             Kind::Identity => Ok(Flow::Done),
@@ -480,7 +481,17 @@ impl<'b, B: Backend> Executor<'b, B> {
         &self.bag
     }
     fn write(&mut self, nid: &str, path: &Path, value: SolValue) -> Result<(), ErrV1> {
-        set_path(&mut self.bag, path, value).map_err(|e| ErrV1::new(ReasonCode::Shape, nid, e))
+        set_path(&mut self.bag, path, value).map_err(|e| ErrV1::new(ReasonCode::Shape, nid, e))?;
+        self.enforce_limits(nid)
+    }
+
+    /// §4.4: after every commit the bag must satisfy the structural caps (depth 32, 1024 keys/map,
+    /// 10k list len, 1 MiB canonical). Violations map to `Budget.Size` (§11). Enforced on every
+    /// write so the bag invariant holds at all boundaries (persistence/Call/Park, §4.1).
+    fn enforce_limits(&self, nid: &str) -> Result<(), ErrV1> {
+        aelio_sol::Limits::default()
+            .check(&self.bag)
+            .map_err(|e| ErrV1::new(ReasonCode::BudgetSize, nid, format!("§4.4 limit exceeded: {e}")))
     }
 }
 
