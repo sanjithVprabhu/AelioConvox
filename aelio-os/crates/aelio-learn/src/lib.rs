@@ -17,7 +17,7 @@ pub use metrics::{
     KillCriteria, ProcedureMetrics,
 };
 pub use pathways::{
-    normalized_entropy, select, validate_decision_point, DecisionPoint, FallbackReason, Hygiene,
-    PathwayScore, Selection, MAX_PATHWAYS,
+    explain, normalized_entropy, select, validate_decision_point, DecisionPoint, FallbackReason,
+    Hygiene, PathwayScore, Selection, MAX_PATHWAYS,
 };
 pub use procedures::{mine, FlowTrace, MiningParams, ProcedureCandidate, TraceStep};

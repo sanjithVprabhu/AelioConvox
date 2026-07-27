@@ -134,6 +134,44 @@ fn path_str(p: &aelio_sol::Path) -> String {
     s
 }
 
+/// Edge inspector (§26): "why did this Convert fire" + full evidence, straight from the edge record.
+pub fn inspect(edge: &ConversionEdge) -> String {
+    let fab = if crate::rules::any_fabricating(&edge.rules) { " (fabricating)" } else { "" };
+    let digest_keys: Vec<String> = edge
+        .to_digest
+        .required
+        .iter()
+        .map(|(k, t)| format!("{k}:{t}"))
+        .collect();
+    format!(
+        "edge {}\n  conversion {}@{}  status={:?}  sensitivity={:?}\n  rules={}{}  on_parse_fail={:?}\n  from_signature={}\n  to_digest={{{}}}\n  evidence: shadow {}/{}@{:.0}%  canary {}@{:.0}%  guard_violations={}",
+        edge.id.key(),
+        edge.conversion_id,
+        edge.version,
+        edge.status,
+        edge.sensitivity,
+        edge.rules.len(),
+        fab,
+        edge.on_parse_fail,
+        short_hash(&edge.from_signature),
+        digest_keys.join(", "),
+        edge.evidence.shadow_distinct,
+        edge.evidence.shadow_distinct,
+        edge.evidence.shadow_validation_rate * 100.0,
+        edge.evidence.canary_distinct,
+        edge.evidence.canary_success_rate * 100.0,
+        edge.evidence.attributed_guard_violations,
+    )
+}
+
+fn short_hash(s: &str) -> String {
+    if s.chars().count() > 14 {
+        format!("{}…", s.chars().take(14).collect::<String>())
+    } else {
+        s.to_string()
+    }
+}
+
 /// Anti-proposal-loop registry (§13.1, §15): a `rejected` rules_hash short-circuits repeat proposals
 /// to backoff; a *different* rules_hash starts fresh.
 #[derive(Default)]

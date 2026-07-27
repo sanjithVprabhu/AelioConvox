@@ -115,3 +115,35 @@ pub fn normalized_entropy(candidates: &[PathwayScore]) -> f64 {
     }
     h / (n as f64).ln()
 }
+
+/// Pathway explainer (§26): the score vector, the τ/δ/entropy checks, and the pick-or-fallback
+/// reason — the human-readable form of the `pathway_pick` ledger entry. Pure over the same inputs
+/// `select` saw, so a trace viewer can reproduce exactly why a decision point routed where it did.
+pub fn explain(candidates: &[PathwayScore], hygiene: &Hygiene) -> String {
+    let mut sorted: Vec<&PathwayScore> = candidates.iter().collect();
+    sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out = String::from("pathway decision (§18)\n");
+    for (i, c) in sorted.iter().enumerate() {
+        out.push_str(&format!("  {}. {:<20} score={:.3}\n", i + 1, c.pathway_id, c.score));
+    }
+    let entropy = normalized_entropy(candidates);
+    out.push_str(&format!(
+        "  hygiene: τ={:.2} δ={:.2} entropy_ceiling={:.2}  |  entropy={:.3}\n",
+        hygiene.tau, hygiene.delta, hygiene.entropy_ceiling, entropy
+    ));
+    match select(candidates, hygiene) {
+        Selection::Picked { pathway_id, top, margin, entropy } => out.push_str(&format!(
+            "  → PICKED {pathway_id} (top={top:.3}, margin={margin:.3}, entropy={entropy:.3})"
+        )),
+        Selection::Fallback { reason, entropy } => {
+            let why = match reason {
+                FallbackReason::Empty => "no candidates",
+                FallbackReason::LowConfidence => "top score below τ",
+                FallbackReason::ThinMargin => "margin below δ",
+                FallbackReason::HighEntropy => "distribution too flat (entropy above ceiling)",
+            };
+            out.push_str(&format!("  → FALLBACK ({why}; entropy={entropy:.3})"));
+        }
+    }
+    out
+}

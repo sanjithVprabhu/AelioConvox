@@ -14,7 +14,8 @@ pub mod mutation;
 pub mod rules;
 
 pub use edge::{
-    rules_hash, ConversionEdge, ConvertUseError, EdgeId, OnParseFail, RejectedRegistry, Sensitivity,
+    inspect, rules_hash, ConversionEdge, ConvertUseError, EdgeId, OnParseFail, RejectedRegistry,
+    Sensitivity,
 };
 pub use gate::{shadow_evidence, Digest, Evidence, Reach, Thresholds, Tier};
 pub use lifecycle::{transition, Status, Trigger};

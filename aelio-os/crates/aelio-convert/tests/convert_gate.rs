@@ -213,3 +213,30 @@ fn rejected_rules_hash_short_circuits_repeat_proposals() {
     let other = json_rules(r#"[{"op":"rename","from":"x","to":"z"}]"#);
     assert!(!reg.is_rejected(&aelio_convert::rules_hash(&other)));
 }
+
+// ── §26 edge inspector: "why did this Convert fire" + full evidence ────────────────────────────
+#[test]
+fn edge_inspector_renders_identity_status_and_evidence() {
+    use aelio_convert::{inspect, ConversionEdge, EdgeId, OnParseFail, Sensitivity};
+    let rules = json_rules(r#"[{"op":"rename","from":"active","to":"loggedin"}]"#);
+    let edge = ConversionEdge {
+        id: EdgeId { tenant: "t".into(), flow_id: "login.v1".into(), producer_nid: "n_read".into(), consumer_nid: "n_branch".into() },
+        conversion_id: "conv1".into(),
+        version: 3,
+        status: Status::Canary,
+        rules: rules.clone(),
+        rules_hash: aelio_convert::rules_hash(&rules),
+        from_signature: aelio_sol::structural_imprint(&SolValue::map([("active", SolValue::Bool(true))])),
+        to_digest: Digest::new([("loggedin", "bool")]),
+        on_parse_fail: OnParseFail::Error,
+        sensitivity: Sensitivity::Internal,
+        evidence: Evidence { shadow_distinct: 42, shadow_validation_rate: 0.98, canary_distinct: 12, canary_success_rate: 1.0, attributed_guard_violations: 0 },
+    };
+    let text = inspect(&edge);
+    assert!(text.contains("t|login.v1|n_read|n_branch"), "shows the nid-based edge id: {text}");
+    assert!(text.contains("conv1@3"));
+    assert!(text.contains("Canary"));
+    assert!(text.contains("loggedin:bool"), "shows the consumer digest requirement: {text}");
+    assert!(text.contains("shadow 42/42@98%"));
+    assert!(text.contains("canary 12@100%"));
+}
