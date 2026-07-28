@@ -1,0 +1,1 @@
+{"name":"seq_01","section":"§8.2 Seq happy","plan":{"nid":"seq","op":"Seq","steps":[{"nid":"const","op":"Const","v":{"x":1}},{"nid":"identity","op":"Identity"}]},"initial_bag":{},"expected":{"kind":"bag_hash","bag":{"x":1}},"replay_twice":true}

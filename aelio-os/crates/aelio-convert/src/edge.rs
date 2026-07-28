@@ -3,7 +3,7 @@
 //! engine (§14) and the gate (§16) into a lifecycle-bearing record, and adds the `rejected` state's
 //! anti-proposal-loop (§13.1, §15 backoff).
 
-use crate::gate::{Digest, Evidence};
+use crate::gate::{self, Digest, Evidence, Thresholds, Tier};
 use crate::lifecycle::{transition, Status, Trigger};
 use crate::rules::Rule;
 use aelio_sol::SolValue;
@@ -66,6 +66,35 @@ impl ConversionEdge {
     pub fn advance(&mut self, trigger: Trigger) -> Result<(), &'static str> {
         self.status = transition(self.status, trigger)?;
         Ok(())
+    }
+
+    /// Evidence-authoritative lifecycle transition. Production code should use this method rather
+    /// than manufacturing threshold triggers directly.
+    pub fn advance_checked(
+        &mut self,
+        trigger: Trigger,
+        tier: Tier,
+        deployer_approved: bool,
+        thresholds: &Thresholds,
+    ) -> Result<(), String> {
+        gate::validate_thresholds(thresholds)?;
+        match trigger {
+            Trigger::ShadowThresholdsMet { .. } => {
+                if !gate::shadow_to_canary(&self.evidence, thresholds) {
+                    return Err("shadow evidence does not meet promotion threshold".into());
+                }
+                let approved = tier == Tier::Auto || deployer_approved;
+                self.advance(Trigger::ShadowThresholdsMet { approved })
+                    .map_err(str::to_owned)
+            }
+            Trigger::CanaryThresholdsMet => {
+                if !gate::canary_to_promoted(&self.evidence, thresholds) {
+                    return Err("canary evidence does not meet promotion threshold".into());
+                }
+                self.advance(trigger).map_err(str::to_owned)
+            }
+            other => self.advance(other).map_err(str::to_owned),
+        }
     }
 
     /// Warm application at a use (§14 / §13.1): run the rules; on `RuleFail`, honor `on_parse_fail`.
@@ -154,22 +183,7 @@ fn tagged(op: &str, fields: &[(&str, String)]) -> SolValue {
 }
 
 fn path_str(p: &aelio_sol::Path) -> String {
-    // Reconstruct a stable path string from segments (identity, not the original text).
-    let mut s = String::new();
-    for (i, seg) in p.segments().iter().enumerate() {
-        match seg {
-            aelio_sol::Segment::Key(k) => {
-                if i > 0 {
-                    s.push('.');
-                }
-                s.push_str(k);
-            }
-            aelio_sol::Segment::Index(n) => {
-                s.push_str(&format!("[{n}]"));
-            }
-        }
-    }
-    s
+    p.to_string()
 }
 
 /// Edge inspector (§26): "why did this Convert fire" + full evidence, straight from the edge record.

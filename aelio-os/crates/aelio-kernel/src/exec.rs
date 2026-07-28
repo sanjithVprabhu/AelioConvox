@@ -21,6 +21,15 @@ pub struct Suspend {
     pub until: Until,
     pub into: Option<Path>,
     pub frames: VecDeque<Frame>,
+    /// Scope nids parallel to `frames`, retained for the durable App I representation.
+    pub frame_nids: VecDeque<String>,
+}
+
+impl Suspend {
+    fn push_frame(&mut self, nid: &str, frame: Frame) {
+        self.frames.push_front(frame);
+        self.frame_nids.push_front(nid.to_owned());
+    }
 }
 
 /// Per-scope resume position (App I.1, minimal set covering the login flow).
@@ -49,6 +58,7 @@ pub enum Frame {
     Timeout {
         used_ms: u64,
     },
+    GuardHandler,
     /// Parent state retained while a Map child is the active continuation bag.
     Map {
         element_index: usize,
@@ -65,12 +75,18 @@ pub enum Outcome {
 }
 
 /// Result of claiming an `Once` region (§8.4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum OnceClaim {
     /// Execute the body, then [`Backend::once_complete`].
     Run,
     /// Prior successful completion — skip body (bag already carries effects).
-    Skip,
+    Skip(SolValue),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallOutput {
+    pub value: SolValue,
+    pub usage_tokens: u64,
 }
 
 /// Effect + park behavior, differing live vs replay.
@@ -78,7 +94,7 @@ pub trait Backend {
     /// Invoke a Call target (live) or inject its recorded result (replay). `args` is the projected
     /// least-privilege input (§4.2.4). The backend owns the registry, so it classifies the effect
     /// (§10.1) and ledgers intent/result accordingly (§12.4).
-    fn call(&mut self, nid: &str, id: &str, args: SolValue) -> Result<SolValue, ErrV1>;
+    fn call(&mut self, nid: &str, id: &str, args: SolValue) -> Result<CallOutput, ErrV1>;
 
     /// At a park reached with an empty resume cursor: `Some(wake)` ⇒ inject + continue (replay, or
     /// the live-resume target); `None` ⇒ suspend the turn here (live, fresh park).
@@ -90,7 +106,12 @@ pub trait Backend {
     }
 
     /// Record successful completion of an Once body. Default: no-op.
-    fn once_complete(&mut self, _nid: &str, _idem_key: &str) -> Result<(), ErrV1> {
+    fn once_complete(
+        &mut self,
+        _nid: &str,
+        _idem_key: &str,
+        _result: SolValue,
+    ) -> Result<(), ErrV1> {
         Ok(())
     }
 
@@ -141,9 +162,16 @@ pub trait Backend {
 struct ActiveBudget {
     nid: String,
     calls: Option<u64>,
+    tokens: Option<u64>,
     used_calls: u64,
     used_tokens: u64,
     used_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveEachGuard {
+    nid: String,
+    invariant: Expr,
 }
 
 pub struct Executor<'b, B: Backend> {
@@ -151,6 +179,7 @@ pub struct Executor<'b, B: Backend> {
     /// Read-only projections visible in the current Map child but never collected into its output.
     scope: SolValue,
     active_budgets: Vec<ActiveBudget>,
+    active_each_guards: Vec<ActiveEachGuard>,
     backend: &'b mut B,
 }
 
@@ -160,6 +189,7 @@ impl<'b, B: Backend> Executor<'b, B> {
             bag: initial_bag,
             scope: SolValue::map::<_, &str>([]),
             active_budgets: Vec::new(),
+            active_each_guards: Vec::new(),
             backend,
         }
     }
@@ -193,6 +223,33 @@ impl<'b, B: Backend> Executor<'b, B> {
     }
 
     fn exec(&mut self, node: &Node, cursor: &mut VecDeque<Frame>) -> Result<Flow, ErrV1> {
+        let outcome = self.exec_inner(node, cursor)?;
+        if matches!(outcome, Flow::Done) {
+            let guards = self.active_each_guards.clone();
+            for guard in guards {
+                let ok = self.eval_bool(&guard.nid, &guard.invariant)?;
+                self.backend.report(
+                    &guard.nid,
+                    "guard_check",
+                    SolValue::map([
+                        ("guard_nid", SolValue::str(guard.nid.clone())),
+                        ("at_nid", SolValue::str(node.nid.clone())),
+                        ("ok", SolValue::Bool(ok)),
+                    ]),
+                )?;
+                if !ok {
+                    return Err(ErrV1::new(
+                        ReasonCode::GuardViolation,
+                        &guard.nid,
+                        format!("guard invariant false after {}", node.nid),
+                    ));
+                }
+            }
+        }
+        Ok(outcome)
+    }
+
+    fn exec_inner(&mut self, node: &Node, cursor: &mut VecDeque<Frame>) -> Result<Flow, ErrV1> {
         let nid = &node.nid;
         match &node.kind {
             Kind::Const(v) => {
@@ -211,7 +268,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                 };
                 for (i, step) in steps.iter().enumerate().skip(start) {
                     if let Flow::Suspend(mut s) = self.exec(step, cursor)? {
-                        s.frames.push_front(Frame::Seq(i));
+                        s.push_frame(nid, Frame::Seq(i));
                         return Ok(Flow::Suspend(s));
                     }
                 }
@@ -241,7 +298,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                 let out = self.exec(body, cursor)?;
                 // Unwind bindings on the *completion* path only (park keeps them in the snapshot).
                 if let Flow::Suspend(mut s) = out {
-                    s.frames.push_front(Frame::Let(saved));
+                    s.push_frame(nid, Frame::Let(saved));
                     return Ok(Flow::Suspend(s));
                 }
                 for (key, prior) in saved.into_iter().rev() {
@@ -270,7 +327,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                     None => Flow::Done, // absent else = Identity (§8.2)
                 };
                 if let Flow::Suspend(mut s) = out {
-                    s.frames.push_front(Frame::Branch(arm));
+                    s.push_frame(nid, Frame::Branch(arm));
                     return Ok(Flow::Suspend(s));
                 }
                 Ok(out)
@@ -282,23 +339,65 @@ impl<'b, B: Backend> Executor<'b, B> {
                 on_violation,
                 check,
             } => {
+                if matches!(cursor.front(), Some(Frame::GuardHandler)) {
+                    cursor.pop_front();
+                    return self.run_guard_handler(nid, on_violation.as_deref(), cursor);
+                }
                 let resuming = matches!(cursor.front(), Some(Frame::Body));
                 if resuming {
                     cursor.pop_front();
                     // §8.4: all enclosing Guards re-evaluate on resume regardless of `check`.
-                    self.check_guard(nid, invariant, on_violation.as_deref())?;
-                } else {
-                    if matches!(check, GuardCheck::Entry | GuardCheck::Both) {
-                        self.check_guard(nid, invariant, on_violation.as_deref())?;
+                    if !self.guard_is_ok(nid, invariant)? {
+                        return self.run_guard_handler(
+                            nid,
+                            on_violation.as_deref(),
+                            &mut VecDeque::new(),
+                        );
                     }
+                } else if matches!(check, GuardCheck::Entry | GuardCheck::Both)
+                    && !self.guard_is_ok(nid, invariant)?
+                {
+                    return self.run_guard_handler(
+                        nid,
+                        on_violation.as_deref(),
+                        &mut VecDeque::new(),
+                    );
                 }
-                let out = self.exec(body, cursor)?;
+                if matches!(check, GuardCheck::Each) {
+                    self.active_each_guards.push(ActiveEachGuard {
+                        nid: nid.clone(),
+                        invariant: invariant.clone(),
+                    });
+                }
+                let out = self.exec(body, cursor);
+                if matches!(check, GuardCheck::Each) {
+                    self.active_each_guards.pop();
+                }
+                let out = match out {
+                    Ok(out) => out,
+                    Err(error)
+                        if error.code == ReasonCode::GuardViolation && error.op_serial == *nid =>
+                    {
+                        return self.run_guard_handler(
+                            nid,
+                            on_violation.as_deref(),
+                            &mut VecDeque::new(),
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
                 if let Flow::Suspend(mut s) = out {
-                    s.frames.push_front(Frame::Body);
+                    s.push_frame(nid, Frame::Body);
                     return Ok(Flow::Suspend(s));
                 }
-                if matches!(check, GuardCheck::Exit | GuardCheck::Both) {
-                    self.check_guard(nid, invariant, on_violation.as_deref())?;
+                if matches!(check, GuardCheck::Exit | GuardCheck::Both)
+                    && !self.guard_is_ok(nid, invariant)?
+                {
+                    return self.run_guard_handler(
+                        nid,
+                        on_violation.as_deref(),
+                        &mut VecDeque::new(),
+                    );
                 }
                 Ok(out)
             }
@@ -324,6 +423,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                 self.active_budgets.push(ActiveBudget {
                     nid: nid.clone(),
                     calls: *calls,
+                    tokens: *tokens,
                     used_calls,
                     used_tokens,
                     used_ms,
@@ -350,19 +450,17 @@ impl<'b, B: Backend> Executor<'b, B> {
                 }
                 match out? {
                     Flow::Suspend(mut suspension) => {
-                        suspension.frames.push_front(Frame::Budget {
-                            used_calls: state.used_calls,
-                            used_tokens: state.used_tokens,
-                            used_ms: state.used_ms,
-                        });
+                        suspension.push_frame(
+                            nid,
+                            Frame::Budget {
+                                used_calls: state.used_calls,
+                                used_tokens: state.used_tokens,
+                                used_ms: state.used_ms,
+                            },
+                        );
                         Ok(Flow::Suspend(suspension))
                     }
-                    Flow::Done => {
-                        // Token accounting is supplied by Model-class adapters; until registry
-                        // metadata is attached, a nonzero observed token count remains zero.
-                        let _ = tokens;
-                        Ok(Flow::Done)
-                    }
+                    Flow::Done => Ok(Flow::Done),
                 }
             }
             Kind::Timeout { body, ms } => {
@@ -390,9 +488,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                 }
                 match out? {
                     Flow::Suspend(mut suspension) => {
-                        suspension
-                            .frames
-                            .push_front(Frame::Timeout { used_ms: observed });
+                        suspension.push_frame(nid, Frame::Timeout { used_ms: observed });
                         Ok(Flow::Suspend(suspension))
                     }
                     Flow::Done => Ok(Flow::Done),
@@ -405,21 +501,25 @@ impl<'b, B: Backend> Executor<'b, B> {
                 if resuming {
                     cursor.pop_front();
                 }
-                let key = self.once_key(nid, idem_key)?;
+                let key = self.once_key(nid, idem_key, body)?;
                 // Claim only on first entry; resume continues the same claim. Complete after body
                 // finishes (including post-park resume of a body that never completed).
                 if !resuming {
                     match self.backend.once_claim(nid, &key)? {
-                        OnceClaim::Skip => return Ok(Flow::Done),
+                        OnceClaim::Skip(result) => {
+                            self.apply_once_result(nid, result)?;
+                            return Ok(Flow::Done);
+                        }
                         OnceClaim::Run => {}
                     }
                 }
                 let out = self.exec(body, cursor)?;
                 if let Flow::Suspend(mut s) = out {
-                    s.frames.push_front(Frame::Body);
+                    s.push_frame(nid, Frame::Body);
                     return Ok(Flow::Suspend(s));
                 }
-                self.backend.once_complete(nid, &key)?;
+                let result = self.capture_once_result(body);
+                self.backend.once_complete(nid, &key, result)?;
                 Ok(out)
             }
 
@@ -438,6 +538,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                             until: until.clone(),
                             into: into.clone(),
                             frames: VecDeque::new(),
+                            frame_nids: VecDeque::new(),
                         })),
                     }
                 } else {
@@ -455,7 +556,8 @@ impl<'b, B: Backend> Executor<'b, B> {
                 self.charge_call()?;
                 let projected = self.project_args(nid, args)?;
                 let output = self.backend.call(nid, id, projected)?;
-                self.write(nid, into, output)?;
+                self.charge_tokens(output.usage_tokens)?;
+                self.write(nid, into, output.value)?;
                 Ok(Flow::Done)
             }
 
@@ -483,7 +585,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                     Some(Frame::TryFinally(error)) => pending_error = error,
                     Some(Frame::TryHandler(index)) => match self.exec(&catch[index].1, cursor) {
                         Ok(Flow::Suspend(mut suspension)) => {
-                            suspension.frames.push_front(Frame::TryHandler(index));
+                            suspension.push_frame(nid, Frame::TryHandler(index));
                             return Ok(Flow::Suspend(suspension));
                         }
                         Ok(Flow::Done) => {}
@@ -491,7 +593,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                     },
                     None | Some(Frame::TryBody) => match self.exec(body, cursor) {
                         Ok(Flow::Suspend(mut suspension)) => {
-                            suspension.frames.push_front(Frame::TryBody);
+                            suspension.push_frame(nid, Frame::TryBody);
                             return Ok(Flow::Suspend(suspension));
                         }
                         Ok(Flow::Done) => {}
@@ -500,7 +602,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                                 self.write(nid, err_into, error.to_sol())?;
                                 match self.exec(&catch[index].1, &mut VecDeque::new()) {
                                     Ok(Flow::Suspend(mut suspension)) => {
-                                        suspension.frames.push_front(Frame::TryHandler(index));
+                                        suspension.push_frame(nid, Frame::TryHandler(index));
                                         return Ok(Flow::Suspend(suspension));
                                     }
                                     Ok(Flow::Done) => {}
@@ -522,9 +624,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                     };
                     match self.exec(fin, final_cursor) {
                         Ok(Flow::Suspend(mut suspension)) => {
-                            suspension
-                                .frames
-                                .push_front(Frame::TryFinally(pending_error));
+                            suspension.push_frame(nid, Frame::TryFinally(pending_error));
                             return Ok(Flow::Suspend(suspension));
                         }
                         Ok(Flow::Done) => {}
@@ -567,10 +667,13 @@ impl<'b, B: Backend> Executor<'b, B> {
                     match self.exec(step, step_cursor) {
                         Ok(Flow::Done) => return Ok(Flow::Done),
                         Ok(Flow::Suspend(mut suspension)) => {
-                            suspension.frames.push_front(Frame::Fallback {
-                                step_index: index,
-                                prior_errors,
-                            });
+                            suspension.push_frame(
+                                nid,
+                                Frame::Fallback {
+                                    step_index: index,
+                                    prior_errors,
+                                },
+                            );
                             return Ok(Flow::Suspend(suspension));
                         }
                         Err(error) => prior_errors.push(error),
@@ -602,7 +705,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                 // suspended body first, then return to ordinary pre-test iteration.
                 if resuming && completed < *max_iter {
                     if let Flow::Suspend(mut s) = self.exec(body, cursor)? {
-                        s.frames.push_front(Frame::Loop(completed));
+                        s.push_frame(nid, Frame::Loop(completed));
                         return Ok(Flow::Suspend(s));
                     }
                     completed += 1;
@@ -613,7 +716,7 @@ impl<'b, B: Backend> Executor<'b, B> {
                         return Ok(Flow::Done);
                     }
                     if let Flow::Suspend(mut s) = self.exec(body, &mut VecDeque::new())? {
-                        s.frames.push_front(Frame::Loop(completed));
+                        s.push_frame(nid, Frame::Loop(completed));
                         return Ok(Flow::Suspend(s));
                     }
                     completed += 1;
@@ -683,12 +786,15 @@ impl<'b, B: Backend> Executor<'b, B> {
                             index += 1;
                         }
                         Flow::Suspend(mut suspension) => {
-                            suspension.frames.push_front(Frame::Map {
-                                element_index: index,
-                                collected,
-                                parent_bag,
-                                parent_scope,
-                            });
+                            suspension.push_frame(
+                                nid,
+                                Frame::Map {
+                                    element_index: index,
+                                    collected,
+                                    parent_bag,
+                                    parent_scope,
+                                },
+                            );
                             return Ok(Flow::Suspend(suspension));
                         }
                     }
@@ -714,12 +820,15 @@ impl<'b, B: Backend> Executor<'b, B> {
                             index += 1;
                         }
                         Flow::Suspend(mut suspension) => {
-                            suspension.frames.push_front(Frame::Map {
-                                element_index: index,
-                                collected,
-                                parent_bag,
-                                parent_scope,
-                            });
+                            suspension.push_frame(
+                                nid,
+                                Frame::Map {
+                                    element_index: index,
+                                    collected,
+                                    parent_bag,
+                                    parent_scope,
+                                },
+                            );
                             return Ok(Flow::Suspend(suspension));
                         }
                     }
@@ -770,7 +879,7 @@ impl<'b, B: Backend> Executor<'b, B> {
             } => {
                 let out = self.exec(body, cursor)?;
                 if let Flow::Suspend(mut s) = out {
-                    s.frames.push_front(Frame::Body);
+                    s.push_frame(nid, Frame::Body);
                     return Ok(Flow::Suspend(s));
                 }
                 // Fire-and-record: side runs; failure is a report, main continues (§8.2).
@@ -871,31 +980,60 @@ impl<'b, B: Backend> Executor<'b, B> {
         }
     }
 
-    fn check_guard(
+    fn guard_is_ok(&self, nid: &str, invariant: &Expr) -> Result<bool, ErrV1> {
+        self.eval_bool(nid, invariant)
+    }
+
+    fn run_guard_handler(
         &mut self,
         nid: &str,
-        invariant: &Expr,
-        _on_violation: Option<&Node>,
-    ) -> Result<(), ErrV1> {
-        if self.eval_bool(nid, invariant)? {
-            Ok(())
-        } else {
-            Err(ErrV1::new(
+        handler: Option<&Node>,
+        cursor: &mut VecDeque<Frame>,
+    ) -> Result<Flow, ErrV1> {
+        let Some(handler) = handler else {
+            return Err(ErrV1::new(
                 ReasonCode::GuardViolation,
                 nid,
                 "guard invariant false (§8.3)",
-            ))
+            ));
+        };
+        match self.exec(handler, cursor)? {
+            Flow::Done => Ok(Flow::Done),
+            Flow::Suspend(mut suspension) => {
+                suspension.push_frame(nid, Frame::GuardHandler);
+                Ok(Flow::Suspend(suspension))
+            }
         }
     }
 
     /// Default idem_key = blake3(nid ‖ canonical(bag projection of template or empty)).
     /// Override template: each Expr evaluates to a Sol fragment folded into the key material.
-    fn once_key(&self, nid: &str, template: &Option<Vec<Expr>>) -> Result<String, ErrV1> {
+    fn once_key(
+        &self,
+        nid: &str,
+        template: &Option<Vec<Expr>>,
+        body: &Node,
+    ) -> Result<String, ErrV1> {
         let mut parts = vec![SolValue::str(nid)];
         if let Some(exprs) = template {
             for e in exprs {
                 parts.push(self.eval(nid, e)?);
             }
+        } else {
+            // Default identity includes the body's statically-derived read-set projection. A
+            // corrected input therefore receives a distinct claim while a duplicate submit
+            // reuses the prior result (§8.4).
+            let projection = crate::waves::rw_set(body)
+                .reads
+                .into_iter()
+                .map(|path| {
+                    (
+                        path.to_string(),
+                        path.get(&self.bag).cloned().unwrap_or(SolValue::Null),
+                    )
+                })
+                .collect::<Vec<_>>();
+            parts.push(SolValue::map(projection));
         }
         Ok(aelio_sol::value_hash(&SolValue::List(parts)))
     }
@@ -960,6 +1098,77 @@ impl<'b, B: Backend> Executor<'b, B> {
         Ok(())
     }
 
+    fn charge_tokens(&mut self, tokens: u64) -> Result<(), ErrV1> {
+        let violation = self.active_budgets.iter().find_map(|budget| {
+            budget.tokens.and_then(|limit| {
+                let observed = budget.used_tokens.saturating_add(tokens);
+                (observed > limit).then(|| (budget.nid.clone(), limit, observed))
+            })
+        });
+        if let Some((scope_nid, limit, observed)) = violation {
+            self.backend.report(
+                &scope_nid,
+                "budget_trip",
+                SolValue::map([
+                    ("scope_nid", SolValue::str(scope_nid.clone())),
+                    ("meter", SolValue::str("tokens")),
+                    ("limit", SolValue::Int(limit as i64)),
+                    ("observed", SolValue::Int(observed as i64)),
+                ]),
+            )?;
+            return Err(ErrV1::new(
+                ReasonCode::BudgetTokens,
+                scope_nid,
+                "Budget.tokens exceeded",
+            ));
+        }
+        for budget in &mut self.active_budgets {
+            budget.used_tokens = budget.used_tokens.saturating_add(tokens);
+        }
+        Ok(())
+    }
+
+    fn capture_once_result(&self, body: &Node) -> SolValue {
+        let writes = crate::waves::rw_set(body).writes;
+        SolValue::map([
+            ("whole", SolValue::Bool(contains_const(body))),
+            ("bag", self.bag.clone()),
+            (
+                "writes",
+                SolValue::map(writes.into_iter().map(|path| {
+                    (
+                        path.to_string(),
+                        path.get(&self.bag).cloned().unwrap_or(SolValue::Null),
+                    )
+                })),
+            ),
+        ])
+    }
+
+    fn apply_once_result(&mut self, nid: &str, result: SolValue) -> Result<(), ErrV1> {
+        let map = result.as_map().ok_or_else(|| {
+            ErrV1::new(ReasonCode::Internal, nid, "stored Once result is malformed")
+        })?;
+        if map.get("whole") == Some(&SolValue::Bool(true)) {
+            self.bag = map.get("bag").cloned().ok_or_else(|| {
+                ErrV1::new(ReasonCode::Internal, nid, "stored Once bag is missing")
+            })?;
+            return self.enforce_limits(nid);
+        }
+        let writes = map
+            .get("writes")
+            .and_then(SolValue::as_map)
+            .ok_or_else(|| {
+                ErrV1::new(ReasonCode::Internal, nid, "stored Once writes are missing")
+            })?;
+        for (path, value) in writes {
+            let path = Path::parse(path)
+                .map_err(|error| ErrV1::new(ReasonCode::Internal, nid, error.to_string()))?;
+            self.write(nid, &path, value.clone())?;
+        }
+        Ok(())
+    }
+
     /// §4.4: after every commit the bag must satisfy the structural caps (depth 32, 1024 keys/map,
     /// 10k list len, 1 MiB canonical). Violations map to `Budget.Size` (§11). Enforced on every
     /// write so the bag invariant holds at all boundaries (persistence/Call/Park, §4.1).
@@ -999,6 +1208,35 @@ fn build_import_scope(
         set_path(&mut scope, &alias, value).map_err(|e| ErrV1::new(ReasonCode::Shape, nid, e))?;
     }
     Ok(scope)
+}
+
+fn contains_const(node: &Node) -> bool {
+    match &node.kind {
+        Kind::Const(_) => true,
+        Kind::Seq(children) | Kind::Fallback(children) => children.iter().any(contains_const),
+        Kind::Let { body, .. }
+        | Kind::Loop { body, .. }
+        | Kind::Guard { body, .. }
+        | Kind::Budget { body, .. }
+        | Kind::Timeout { body, .. }
+        | Kind::Once { body, .. }
+        | Kind::Map { body, .. } => contains_const(body),
+        Kind::Branch { then, els, .. } => {
+            contains_const(then) || els.as_deref().is_some_and(contains_const)
+        }
+        Kind::Try {
+            body,
+            catch,
+            finally,
+            ..
+        } => {
+            contains_const(body)
+                || catch.iter().any(|(_, child)| contains_const(child))
+                || finally.as_deref().is_some_and(contains_const)
+        }
+        Kind::Tee { body, side, .. } => contains_const(body) || contains_const(side),
+        _ => false,
+    }
 }
 
 fn best_catch_index(catch: &[(String, Node)], code: &ReasonCode) -> Option<usize> {

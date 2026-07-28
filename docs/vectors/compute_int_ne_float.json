@@ -1,0 +1,1 @@
+{"name":"compute_int_ne_float","section":"§9 type-strict comparison","plan":{"nid":"let","op":"Let","bindings":[{"key":"result","value":{"fn":"eq","args":[{"lit":2},{"lit":2.0}]}}],"body":{"nid":"identity","op":"Identity"}},"initial_bag":{},"expected":{"kind":"err","code":"Type"}}

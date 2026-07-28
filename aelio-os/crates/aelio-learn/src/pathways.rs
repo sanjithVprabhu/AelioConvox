@@ -48,6 +48,10 @@ pub enum FallbackReason {
     ThinMargin,
     /// Distribution too flat (entropy above ceiling).
     HighEntropy,
+    /// NaN/∞, duplicate ids, or an invalid threshold configuration.
+    InvalidInput,
+    /// The runtime received more candidates than the declared hard cap.
+    TooManyCandidates,
 }
 
 /// A decision point declaration. `fallback` is mandatory — a decision point without one is
@@ -70,6 +74,19 @@ pub fn validate_decision_point(dp: &DecisionPoint, candidate_count: usize) -> Re
             "decision point exceeds {MAX_PATHWAYS} pathways (§18)"
         ));
     }
+    validate_hygiene(&dp.hygiene)?;
+    Ok(())
+}
+
+pub fn validate_hygiene(hygiene: &Hygiene) -> Result<(), String> {
+    if !hygiene.tau.is_finite()
+        || !hygiene.delta.is_finite()
+        || !hygiene.entropy_ceiling.is_finite()
+        || hygiene.delta < 0.0
+        || !(0.0..=1.0).contains(&hygiene.entropy_ceiling)
+    {
+        return Err("pathway hygiene thresholds are invalid".into());
+    }
     Ok(())
 }
 
@@ -77,6 +94,23 @@ pub fn validate_decision_point(dp: &DecisionPoint, candidate_count: usize) -> Re
 /// fallback (never a best-guess). The returned metrics are what the pathway_pick ledger entry
 /// records (§12.2).
 pub fn select(candidates: &[PathwayScore], hygiene: &Hygiene) -> Selection {
+    if candidates.len() > MAX_PATHWAYS {
+        return Selection::Fallback {
+            reason: FallbackReason::TooManyCandidates,
+            entropy: 1.0,
+        };
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    if validate_hygiene(hygiene).is_err()
+        || candidates
+            .iter()
+            .any(|candidate| !candidate.score.is_finite() || !ids.insert(&candidate.pathway_id))
+    {
+        return Selection::Fallback {
+            reason: FallbackReason::InvalidInput,
+            entropy: 1.0,
+        };
+    }
     let entropy = normalized_entropy(candidates);
     if candidates.is_empty() {
         return Selection::Fallback {
@@ -128,6 +162,12 @@ pub fn normalized_entropy(candidates: &[PathwayScore]) -> f64 {
     let n = candidates.len();
     if n <= 1 {
         return 0.0;
+    }
+    if candidates
+        .iter()
+        .any(|candidate| !candidate.score.is_finite())
+    {
+        return 1.0;
     }
     // Shift so the minimum is 0, keeping weights non-negative even if a score is negative.
     let min = candidates
@@ -189,6 +229,8 @@ pub fn explain(candidates: &[PathwayScore], hygiene: &Hygiene) -> String {
                 FallbackReason::LowConfidence => "top score below τ",
                 FallbackReason::ThinMargin => "margin below δ",
                 FallbackReason::HighEntropy => "distribution too flat (entropy above ceiling)",
+                FallbackReason::InvalidInput => "invalid score or hygiene configuration",
+                FallbackReason::TooManyCandidates => "candidate cap exceeded",
             };
             out.push_str(&format!("  → FALLBACK ({why}; entropy={entropy:.3})"));
         }

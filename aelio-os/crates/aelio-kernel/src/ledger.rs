@@ -27,12 +27,102 @@ pub struct Entry {
     pub prev: String,
 }
 
+impl Entry {
+    pub fn to_sol(&self) -> SolValue {
+        SolValue::map([
+            ("seq", SolValue::Int(self.seq as i64)),
+            ("turn_id", SolValue::str(self.turn_id.clone())),
+            (
+                "nid",
+                self.nid
+                    .clone()
+                    .map(SolValue::Str)
+                    .unwrap_or(SolValue::Null),
+            ),
+            ("kind", SolValue::str(self.kind.clone())),
+            (
+                "category",
+                SolValue::str(match self.category {
+                    Category::Inject => "inject",
+                    Category::Verify => "verify",
+                    Category::Info => "info",
+                }),
+            ),
+            ("payload", self.payload.clone()),
+            ("payload_hash", SolValue::str(self.payload_hash.clone())),
+            ("prev", SolValue::str(self.prev.clone())),
+        ])
+    }
+
+    pub fn from_sol(value: &SolValue) -> Result<Self, String> {
+        let map = value.as_map().ok_or("ledger entry must be a map")?;
+        let allowed = [
+            "seq",
+            "turn_id",
+            "nid",
+            "kind",
+            "category",
+            "payload",
+            "payload_hash",
+            "prev",
+        ];
+        if map.len() != allowed.len() {
+            return Err("invalid durable ledger field count".into());
+        }
+        if let Some(key) = map.keys().find(|key| !allowed.contains(&key.as_str())) {
+            return Err(format!("unknown durable ledger field `{key}`"));
+        }
+        let seq = match map.get("seq") {
+            Some(SolValue::Int(value)) => {
+                u64::try_from(*value).map_err(|_| "ledger seq must be non-negative")?
+            }
+            _ => return Err("ledger seq missing".into()),
+        };
+        let text = |key: &str| match map.get(key) {
+            Some(SolValue::Str(value)) => Ok(value.clone()),
+            _ => Err(format!("ledger `{key}` missing")),
+        };
+        let category = match text("category")?.as_str() {
+            "inject" => Category::Inject,
+            "verify" => Category::Verify,
+            "info" => Category::Info,
+            _ => return Err("bad ledger category".into()),
+        };
+        let nid = match map.get("nid") {
+            Some(SolValue::Null) => None,
+            Some(SolValue::Str(value)) => Some(value.clone()),
+            _ => return Err("ledger nid must be string|null".into()),
+        };
+        Ok(Entry {
+            seq,
+            turn_id: text("turn_id")?,
+            nid,
+            kind: text("kind")?,
+            category,
+            payload: map
+                .get("payload")
+                .cloned()
+                .ok_or("ledger payload missing")?,
+            payload_hash: text("payload_hash")?,
+            prev: text("prev")?,
+        })
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Ledger {
     entries: Vec<Entry>,
 }
 
 impl Ledger {
+    pub fn from_entries(entries: Vec<Entry>) -> Result<Self, String> {
+        let ledger = Ledger { entries };
+        ledger
+            .verify_chain()
+            .map_err(|seq| format!("ledger integrity failure at seq {seq}"))?;
+        Ok(ledger)
+    }
+
     pub fn append(
         &mut self,
         turn_id: &str,

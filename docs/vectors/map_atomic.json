@@ -1,0 +1,1 @@
+{"name":"map_atomic","section":"§8.3 Map order + atomic landing","plan":{"nid":"map","op":"Map","over":"items","into":"mapped","max_items":3,"body":{"nid":"identity","op":"Identity"}},"initial_bag":{"items":[{"x":1},{"x":2}]},"expected":{"kind":"bag_hash","bag":{"items":[{"x":1},{"x":2}],"mapped":[{"x":1},{"x":2}]}},"replay_twice":true}

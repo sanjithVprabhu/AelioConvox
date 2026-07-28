@@ -46,6 +46,15 @@ pub trait Store: Send {
         expected_version: u64,
         value: SolValue,
     ) -> Result<u64, StoreError>;
+
+    /// Bounded, key-ordered scan used to hydrate append-only per-instance records.
+    fn scan_prefix(
+        &self,
+        tenant: &str,
+        table: &str,
+        key_prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, Versioned)>, StoreError>;
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +198,30 @@ impl Store for MemoryStore {
         row.version += 1;
         row.value = value;
         Ok(row.version)
+    }
+
+    fn scan_prefix(
+        &self,
+        tenant: &str,
+        table: &str,
+        key_prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, Versioned)>, StoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let g = self
+            .inner
+            .lock()
+            .map_err(|e| StoreError::Internal(e.to_string()))?;
+        Ok(g.rows
+            .iter()
+            .filter(|((row_tenant, row_table, key), _)| {
+                row_tenant == tenant && row_table == table && key.starts_with(key_prefix)
+            })
+            .take(limit)
+            .map(|((_, _, key), row)| (key.clone(), row.clone()))
+            .collect())
     }
 }
 

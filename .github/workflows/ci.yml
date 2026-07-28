@@ -6,6 +6,28 @@ on:
   pull_request:
 
 jobs:
+  aelio-os:
+    name: Aelio OS (Rust 1.75)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aelio-os
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.75
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aelio-os
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --all-features --locked
+      - run: cargo build --workspace --release --locked
+
   test:
     runs-on: ubuntu-latest
     steps:

@@ -65,4 +65,65 @@ Findings, not failures. Format: `{id, section(s), what I found, options, recomme
 | F-006 Once/Park interaction | **deferred** P1 — login OK |
 | F-007 annex/mother paths | **accepted** |
 
-*Open items above are all `PROVISIONAL` and non-blocking. None weakens a locked invariant. Amendments (if any arise) will be proposed here first with a Decision Log entry, per handoff Authority rule #3.*
+*This was the P0 triage snapshot. The later full-system findings below supersede its
+“non-blocking” conclusion for an open-source production release.*
+
+---
+
+### F-011 — Two runtime implementations are not connected — `§22`, `§29`, `§31–§35`
+**What:** The shipping TypeScript server under `server/` + `packages/core/` does not import, invoke,
+or communicate with `aelio-os`. The Rust workspace now proves kernel semantics, but no production
+request reaches it. Conversely, the existing TS turn pipeline predates the mother document and
+cannot inherit its Planner, ledger, continuation, gate, or replay guarantees merely because the
+Rust tests pass.
+
+**Options:** (a) make the Rust runtime a local service and keep TypeScript as control plane/channel
+adapters; (b) compile the kernel to a Node native/WASM module; (c) reimplement the locked semantics
+in TypeScript.
+
+**Recommendation → (a), BLOCKING open-source production claim.** A versioned local protocol keeps
+the trusted kernel single-sourced, contains crashes, and lets the existing server/adapters migrate
+incrementally. Native bindings have a smaller hop but a much larger build/distribution matrix;
+duplicating the interpreter destroys the “one executor” replay guarantee.
+
+### F-012 — `aelio-store` has no Sunjet production implementation — `§24`, `§29`, F10
+**What:** `aelio-store` contains the trait and `MemoryStore` only. The durable continuation/WAL
+logic is tested across reconstructed instances using the shared memory double, but not across an OS
+process or against Sunjet. The mother document explicitly commits Sunjet as the production store.
+
+**Recommendation → implement a concrete Sunjet store after F-011 fixes the process boundary, then
+run kill/restart, CAS-conflict, partial-WAL, and tenant-isolation integration tests. BLOCKING.**
+
+### F-013 — Synchronous target closures cannot enforce hanging-call deadlines — `§8.4`, `§10.1`
+**What:** registry declarations require `DeadlineCompliant`, and active elapsed time is checked after
+return, but a closure that never returns cannot be interrupted. This does not yet satisfy “Timeout
+reaches inside hanging external calls.”
+
+**Recommendation → async adapter contract with cancellation/deadline propagation in the Rust
+runtime service. BLOCKING for untrusted/live adapters.** Reverse SDK calls should use Appendix H’s
+authoritative server deadline rather than an in-process closure.
+
+### F-014 — Park inside Once remains an ambiguous crash state — `§8.4`
+**What:** the current resume cursor skips a second claim in-process, but after restart the Once row
+still says `intent`; continuation recovery can resume because it does not call `once_begin` again.
+An operator or competing start using the same key sees unknown outcome. The state is safe
+(fail-closed) but operationally indistinguishable from an actual crash during an effect.
+
+**Recommendation → add a durable `parked` Once state tied to continuation hash, or reject Park under
+Once in the Planner for v0. Prefer the Planner rejection until evidence requires the feature.**
+
+### F-015 — App I handler frame representation refinement — `App I`
+**What:** durable Try-handler frames store the pinned handler index, while App I’s prose shows the
+handler code-prefix. Because the envelope pins the exact flow revision, the index is deterministic
+and sufficient, but the byte format differs from the illustrated normative field.
+
+**Recommendation → store both `handler_index` and `handler_prefix` and cross-check them at decode;
+this preserves O(1) resume and makes the envelope self-explanatory.**
+
+### F-016 — Server topology is specified but not implemented in `aelio-os` — `§31–§35`, App H
+**What:** `aelio-wire` now implements closed/versioned frames and delivery crash semantics, but
+there is no Rust HTTP/WebSocket server, per-instance actor/debounce queue, control-plane artifact
+API, BYO-key provider registry, or channel ingress wired to the kernel.
+
+**Recommendation → build these as an `aelio-runtime` service after accepting F-011(a). BLOCKING for
+an end-to-end production claim.**

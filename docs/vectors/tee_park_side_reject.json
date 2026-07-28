@@ -1,0 +1,1 @@
+{"name":"tee_park_side_reject","section":"§8.4 Park forbidden in Tee.side","plan":{"nid":"tee","op":"Tee","side_root":"side","body":{"nid":"main","op":"Identity"},"side":{"nid":"park","op":"Park","until":{"kind":"event"}}},"initial_bag":{},"expected":{"kind":"err","code":"Shape"},"plan_time_only":true}

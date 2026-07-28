@@ -2,26 +2,79 @@
 //! walker (§12.3). This is where the ledger (§12.2, App G) is produced (live) and consumed
 //! (replay), and where park/resume across turns is orchestrated.
 
+use crate::continuation::{
+    mint_event_key, ContinuationIdentity, ContinuationPins, KERNEL_VERSION, SOL_VERSION,
+};
 use crate::error::{ErrV1, ReasonCode};
-use crate::exec::{Backend, Executor, Frame, OnceClaim, Outcome, Suspend};
-use crate::instr::Node;
-use crate::ledger::{Category, Ledger};
+use crate::exec::{Backend, CallOutput, Executor, Frame, OnceClaim, Outcome, Suspend};
+use crate::instr::{Node, Until};
+use crate::ledger::{Category, Entry, Ledger};
 use crate::registry::Registry;
 use aelio_sol::{value_hash, SolValue};
 use aelio_store::{once_begin, once_complete, MemoryStore, OnceState, Store, StoreError};
 use std::collections::VecDeque;
 
+const CONTINUATIONS_TABLE: &str = "continuations";
+const LEDGER_TABLE: &str = "ledger";
+const MAX_HYDRATED_LEDGER_ENTRIES: usize = 100_000;
+
+fn store_error(error: StoreError) -> ErrV1 {
+    let detail = match error {
+        StoreError::Conflict => "store CAS conflict".into(),
+        StoreError::UnknownOutcome => "store reports unknown outcome".into(),
+        StoreError::NotFound => "store row not found".into(),
+        StoreError::Internal(detail) => detail,
+    };
+    ErrV1::new(ReasonCode::Internal, "store", detail)
+}
+
+fn persist_entry(
+    store: &mut dyn Store,
+    tenant: &str,
+    instance_id: &str,
+    entry: &crate::ledger::Entry,
+) -> Result<(), ErrV1> {
+    let key = format!("{instance_id}:{:020}", entry.seq);
+    let value = entry.to_sol();
+    match store
+        .put_if_absent(tenant, LEDGER_TABLE, &key, value.clone())
+        .map_err(store_error)?
+    {
+        aelio_store::PutIfAbsent::Inserted { .. } => Ok(()),
+        aelio_store::PutIfAbsent::Existing(existing) if existing.value == value => Ok(()),
+        aelio_store::PutIfAbsent::Existing(_) => Err(ErrV1::new(
+            ReasonCode::Internal,
+            "ledger",
+            format!("durable ledger conflict at seq {}", entry.seq),
+        )),
+    }
+}
+
 /// A parked instance: what the driver holds between turns.
+#[derive(Debug)]
 pub struct Parked {
     pub bag: SolValue,
     pub frames: VecDeque<Frame>,
+    pub frame_nids: VecDeque<String>,
     pub park_nid: String,
+    pub until: Until,
+    pub event_key: Option<String>,
 }
 
 /// Result of driving one turn.
 pub enum TurnOutcome {
     Completed { bag: SolValue, bag_hash: String },
     Parked(Parked),
+}
+
+#[derive(Debug, Clone)]
+pub struct InstanceConfig {
+    pub tenant: String,
+    pub instance_id: String,
+    pub flow_id: String,
+    pub flow_rev: String,
+    /// Deployment secret used only to mint opaque external-wake callback tokens.
+    pub event_key_secret: [u8; 32],
 }
 
 /// Drives a single flow instance across turns, owning its ledger + registry + Once store.
@@ -33,6 +86,8 @@ pub struct Instance<'r> {
     store: Box<dyn Store>,
     tenant: String,
     instance_id: String,
+    pins: ContinuationPins,
+    event_key_secret: [u8; 32],
 }
 
 impl<'r> Instance<'r> {
@@ -45,6 +100,13 @@ impl<'r> Instance<'r> {
             store: Box::new(MemoryStore::new()),
             tenant: "default".into(),
             instance_id: "inst0".into(),
+            pins: ContinuationPins {
+                kernel_version: KERNEL_VERSION.into(),
+                sol_version: SOL_VERSION.into(),
+                flow_id: "inline-test".into(),
+                flow_rev: "0".into(),
+            },
+            event_key_secret: [0; 32],
         }
     }
 
@@ -54,26 +116,78 @@ impl<'r> Instance<'r> {
         program: Node,
         registry: &'r mut Registry,
         store: Box<dyn Store>,
-        tenant: impl Into<String>,
-        instance_id: impl Into<String>,
+        config: InstanceConfig,
     ) -> Result<Self, ErrV1> {
-        let tenant = tenant.into();
-        let instance_id = instance_id.into();
-        if tenant.is_empty() || instance_id.is_empty() {
+        if [
+            config.tenant.as_str(),
+            config.instance_id.as_str(),
+            config.flow_id.as_str(),
+            config.flow_rev.as_str(),
+        ]
+        .contains(&"")
+        {
             return Err(ErrV1::new(
                 ReasonCode::Shape,
                 "instance",
-                "tenant and flow_instance_id must be non-empty",
+                "instance identity and flow pins must be non-empty",
             ));
         }
+        crate::plan::plan_with_registry(&program, registry, &config.tenant)?;
+        let prefix = format!("{}:", config.instance_id);
+        let rows = store
+            .scan_prefix(
+                &config.tenant,
+                LEDGER_TABLE,
+                &prefix,
+                MAX_HYDRATED_LEDGER_ENTRIES + 1,
+            )
+            .map_err(store_error)?;
+        if rows.len() > MAX_HYDRATED_LEDGER_ENTRIES {
+            return Err(ErrV1::new(
+                ReasonCode::BudgetSize,
+                "instance",
+                "durable ledger exceeds hydration bound",
+            ));
+        }
+        let entries = rows
+            .into_iter()
+            .map(|(_, row)| Entry::from_sol(&row.value))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                ErrV1::new(
+                    ReasonCode::Internal,
+                    "instance",
+                    format!("durable ledger refused: {error}"),
+                )
+            })?;
+        let ledger = Ledger::from_entries(entries).map_err(|error| {
+            ErrV1::new(
+                ReasonCode::Internal,
+                "instance",
+                format!("durable ledger refused: {error}"),
+            )
+        })?;
+        let turn_id_seq = ledger
+            .entries()
+            .iter()
+            .filter_map(|entry| entry.turn_id.strip_prefix('t')?.parse::<u64>().ok())
+            .max()
+            .map_or(0, |last| last.saturating_add(1));
         Ok(Instance {
-            turn_id_seq: 0,
-            ledger: Ledger::default(),
+            turn_id_seq,
+            ledger,
             registry,
             program,
             store,
-            tenant,
-            instance_id,
+            tenant: config.tenant,
+            instance_id: config.instance_id,
+            pins: ContinuationPins {
+                kernel_version: KERNEL_VERSION.into(),
+                sol_version: SOL_VERSION.into(),
+                flow_id: config.flow_id,
+                flow_rev: config.flow_rev,
+            },
+            event_key_secret: config.event_key_secret,
         })
     }
 
@@ -87,16 +201,28 @@ impl<'r> Instance<'r> {
         id
     }
 
+    fn append(
+        &mut self,
+        turn_id: &str,
+        nid: Option<&str>,
+        kind: &str,
+        category: Category,
+        payload: SolValue,
+    ) -> Result<(), ErrV1> {
+        let entry = self.ledger.append(turn_id, nid, kind, category, payload);
+        persist_entry(self.store.as_mut(), &self.tenant, &self.instance_id, entry)
+    }
+
     /// First turn: run from the top until completion or the first park.
     pub fn start(&mut self, initial_bag: SolValue) -> Result<TurnOutcome, ErrV1> {
         let turn_id = self.next_turn_id();
-        self.ledger.append(
+        self.append(
             &turn_id,
             None,
             "turn_start",
             Category::Info,
             SolValue::map([("trigger", SolValue::str("message"))]),
-        );
+        )?;
         let (outcome, error_bag) = {
             let mut backend = LiveBackend {
                 registry: self.registry,
@@ -122,21 +248,21 @@ impl<'r> Instance<'r> {
     /// Resume a parked instance with a wake payload (§23 — routed here by the flow gate / event key).
     pub fn resume(&mut self, parked: Parked, wake: SolValue) -> Result<TurnOutcome, ErrV1> {
         let turn_id = self.next_turn_id();
-        self.ledger.append(
+        self.append(
             &turn_id,
             None,
             "turn_start",
             Category::Info,
             SolValue::map([("trigger", SolValue::str("wake"))]),
-        );
+        )?;
         // §8.4 resume sequence is enforced inside the Guard/park handling; the wake is INJECT-ledgered.
-        self.ledger.append(
+        self.append(
             &turn_id,
             Some(&parked.park_nid),
             "resume",
             Category::Inject,
             SolValue::map([("wake", wake.clone())]),
-        );
+        )?;
         let (outcome, error_bag) = {
             let mut backend = LiveBackend {
                 registry: self.registry,
@@ -159,11 +285,45 @@ impl<'r> Instance<'r> {
         }
     }
 
+    /// Recovers the active continuation from the durable store, verifies hash/version/identity,
+    /// and resumes it. No in-memory `Parked` handle is required across process restarts.
+    pub fn resume_stored(&mut self, wake: SolValue) -> Result<TurnOutcome, ErrV1> {
+        let row = self
+            .store
+            .get(&self.tenant, CONTINUATIONS_TABLE, &self.instance_id)
+            .map_err(store_error)?
+            .ok_or_else(|| {
+                ErrV1::new(
+                    ReasonCode::Missing,
+                    "resume",
+                    "no durable continuation for flow instance",
+                )
+            })?;
+        let decoded = Parked::from_continuation(&row.value, KERNEL_VERSION).map_err(|error| {
+            ErrV1::new(
+                ReasonCode::Internal,
+                "resume",
+                format!("continuation refused: {error}"),
+            )
+        })?;
+        if decoded.identity.tenant != self.tenant
+            || decoded.identity.flow_instance_id != self.instance_id
+            || decoded.pins != self.pins
+        {
+            return Err(ErrV1::new(
+                ReasonCode::Policy,
+                "resume",
+                "continuation identity or artifact pins do not match instance",
+            ));
+        }
+        self.resume(decoded.parked, wake)
+    }
+
     fn settle(&mut self, outcome: Outcome, turn_id: &str) -> Result<TurnOutcome, ErrV1> {
         match outcome {
             Outcome::Completed { bag } => {
                 let bag_hash = value_hash(&bag);
-                self.ledger.append(
+                self.append(
                     turn_id,
                     None,
                     "turn_end",
@@ -172,15 +332,63 @@ impl<'r> Instance<'r> {
                         ("outcome", SolValue::str("completed")),
                         ("bag_hash", SolValue::str(bag_hash.clone())),
                     ]),
-                );
+                )?;
+                self.retire_continuation()?;
                 Ok(TurnOutcome::Completed { bag, bag_hash })
             }
             Outcome::Parked { suspension, bag } => {
                 let Suspend {
-                    park_nid, frames, ..
+                    park_nid,
+                    until,
+                    frames,
+                    frame_nids,
+                    ..
                 } = suspension;
-                let cont_hash = value_hash(&bag);
-                self.ledger.append(
+                let event_key = matches!(until, Until::Event).then(|| {
+                    mint_event_key(
+                        &self.event_key_secret,
+                        &self.tenant,
+                        &self.instance_id,
+                        &park_nid,
+                    )
+                });
+                let parked = Parked {
+                    bag,
+                    frames,
+                    frame_nids,
+                    park_nid: park_nid.clone(),
+                    until: until.clone(),
+                    event_key,
+                };
+                let identity = ContinuationIdentity {
+                    tenant: self.tenant.clone(),
+                    flow_instance_id: self.instance_id.clone(),
+                };
+                let envelope = parked
+                    .to_continuation(&self.pins, &identity)
+                    .map_err(|error| {
+                        ErrV1::new(
+                            ReasonCode::Internal,
+                            &park_nid,
+                            format!("continuation serialization failed: {error}"),
+                        )
+                    })?;
+                let cont_hash = envelope
+                    .as_map()
+                    .and_then(|map| map.get("continuation_hash"))
+                    .and_then(|value| match value {
+                        SolValue::Str(value) => Some(value.clone()),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        ErrV1::new(
+                            ReasonCode::Internal,
+                            &park_nid,
+                            "continuation hash missing after serialization",
+                        )
+                    })?;
+                self.persist_continuation(envelope)?;
+                self.append(
                     turn_id,
                     Some(&park_nid),
                     "park",
@@ -189,21 +397,63 @@ impl<'r> Instance<'r> {
                         ("park_nid", SolValue::str(park_nid.clone())),
                         ("continuation_hash", SolValue::str(cont_hash)),
                     ]),
-                );
-                self.ledger.append(
+                )?;
+                self.append(
                     turn_id,
                     None,
                     "turn_end",
                     Category::Info,
                     SolValue::map([("outcome", SolValue::str("parked"))]),
-                );
-                Ok(TurnOutcome::Parked(Parked {
-                    bag,
-                    frames,
-                    park_nid,
-                }))
+                )?;
+                Ok(TurnOutcome::Parked(parked))
             }
         }
+    }
+
+    fn persist_continuation(&mut self, envelope: SolValue) -> Result<(), ErrV1> {
+        match self
+            .store
+            .put_if_absent(
+                &self.tenant,
+                CONTINUATIONS_TABLE,
+                &self.instance_id,
+                envelope.clone(),
+            )
+            .map_err(store_error)?
+        {
+            aelio_store::PutIfAbsent::Inserted { .. } => Ok(()),
+            aelio_store::PutIfAbsent::Existing(row) => self
+                .store
+                .cas(
+                    &self.tenant,
+                    CONTINUATIONS_TABLE,
+                    &self.instance_id,
+                    row.version,
+                    envelope,
+                )
+                .map(|_| ())
+                .map_err(store_error),
+        }
+    }
+
+    fn retire_continuation(&mut self) -> Result<(), ErrV1> {
+        let Some(row) = self
+            .store
+            .get(&self.tenant, CONTINUATIONS_TABLE, &self.instance_id)
+            .map_err(store_error)?
+        else {
+            return Ok(());
+        };
+        self.store
+            .cas(
+                &self.tenant,
+                CONTINUATIONS_TABLE,
+                &self.instance_id,
+                row.version,
+                SolValue::map([("status", SolValue::str("completed"))]),
+            )
+            .map(|_| ())
+            .map_err(store_error)
     }
 
     fn settle_error(
@@ -212,7 +462,7 @@ impl<'r> Instance<'r> {
         bag: SolValue,
         turn_id: &str,
     ) -> Result<TurnOutcome, ErrV1> {
-        self.ledger.append(
+        self.append(
             turn_id,
             None,
             "turn_end",
@@ -222,7 +472,7 @@ impl<'r> Instance<'r> {
                 ("final_err", error.to_sol()),
                 ("bag_hash", SolValue::str(value_hash(&bag))),
             ]),
-        );
+        )?;
         Err(error)
     }
 }
@@ -241,8 +491,23 @@ struct LiveBackend<'a> {
     nondet_seq: u64,
 }
 
+impl LiveBackend<'_> {
+    fn append(
+        &mut self,
+        nid: Option<&str>,
+        kind: &str,
+        category: Category,
+        payload: SolValue,
+    ) -> Result<(), ErrV1> {
+        let entry = self
+            .ledger
+            .append(&self.turn_id, nid, kind, category, payload);
+        persist_entry(self.store, &self.tenant, &self.instance_id, entry)
+    }
+}
+
 impl Backend for LiveBackend<'_> {
-    fn call(&mut self, nid: &str, id: &str, args: SolValue) -> Result<SolValue, ErrV1> {
+    fn call(&mut self, nid: &str, id: &str, args: SolValue) -> Result<CallOutput, ErrV1> {
         let effect = self.registry.effect_of(id).ok_or_else(|| {
             ErrV1::new(
                 ReasonCode::Shape,
@@ -250,10 +515,29 @@ impl Backend for LiveBackend<'_> {
                 format!("unregistered Call target `{id}`"),
             )
         })?;
+        let is_model = self.registry.class_of(id) == Some(crate::registry::TargetClass::Model);
+        let prompt_hash = if is_model {
+            Some(
+                args.as_map()
+                    .and_then(|map| map.get("prompt_hash"))
+                    .and_then(|value| match value {
+                        SolValue::Str(value) if !value.is_empty() => Some(value.clone()),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        ErrV1::new(
+                            ReasonCode::Shape,
+                            nid,
+                            "Model Call requires a composed prompt_hash argument (§10.3)",
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
         // §12.4: write/external Calls are intent-ledgered before dispatch.
         if effect.is_effectful() {
-            self.ledger.append(
-                &self.turn_id,
+            self.append(
                 Some(nid),
                 "call_intent",
                 Category::Verify,
@@ -269,53 +553,63 @@ impl Backend for LiveBackend<'_> {
                     ),
                     ("args_hash", SolValue::str(value_hash(&args))),
                 ]),
-            );
-            self.ledger.append(
-                &self.turn_id,
+            )?;
+            self.append(
                 Some(nid),
                 "call_dispatch",
                 Category::Verify,
                 SolValue::map([("corr", SolValue::str(format!("{}:{nid}", self.turn_id)))]),
-            );
+            )?;
         }
         let result = self
             .registry
-            .call(id, &args)
+            .invoke(id, &args)
             .ok_or_else(|| ErrV1::new(ReasonCode::Internal, nid, "target vanished"))?;
-        let kind = if effect == crate::registry::EffectClass::Read {
+        let kind = if is_model {
+            "model_call"
+        } else if effect == crate::registry::EffectClass::Read {
             "read_result"
         } else {
             "call_result"
         };
         match result {
-            Ok(output) => {
-                self.ledger.append(
-                    &self.turn_id,
-                    Some(nid),
-                    kind,
-                    Category::Inject,
-                    SolValue::map([
-                        ("target", SolValue::str(id)),
-                        ("args_hash", SolValue::str(value_hash(&args))),
-                        ("outcome", SolValue::str("ok")),
-                        ("output", output.clone()),
-                    ]),
-                );
-                Ok(output)
+            Ok(invocation) => {
+                let usage_tokens = i64::try_from(invocation.usage_tokens).map_err(|_| {
+                    ErrV1::new(
+                        ReasonCode::BudgetTokens,
+                        nid,
+                        "model token usage exceeds ledger integer range",
+                    )
+                })?;
+                let mut payload = vec![
+                    ("target", SolValue::str(id)),
+                    ("args_hash", SolValue::str(value_hash(&args))),
+                    ("outcome", SolValue::str("ok")),
+                    ("output", invocation.output.clone()),
+                    ("usage_tokens", SolValue::Int(usage_tokens)),
+                ];
+                if let Some(prompt_hash) = prompt_hash {
+                    payload.push(("prompt_hash", SolValue::str(prompt_hash)));
+                    payload.push(("parse_ok", SolValue::Bool(true)));
+                }
+                self.append(Some(nid), kind, Category::Inject, SolValue::map(payload))?;
+                Ok(CallOutput {
+                    value: invocation.output,
+                    usage_tokens: invocation.usage_tokens,
+                })
             }
             Err(error) => {
-                self.ledger.append(
-                    &self.turn_id,
-                    Some(nid),
-                    kind,
-                    Category::Inject,
-                    SolValue::map([
-                        ("target", SolValue::str(id)),
-                        ("args_hash", SolValue::str(value_hash(&args))),
-                        ("outcome", SolValue::str("err")),
-                        ("err", error.to_sol()),
-                    ]),
-                );
+                let mut payload = vec![
+                    ("target", SolValue::str(id)),
+                    ("args_hash", SolValue::str(value_hash(&args))),
+                    ("outcome", SolValue::str("err")),
+                    ("err", error.to_sol()),
+                ];
+                if let Some(prompt_hash) = prompt_hash {
+                    payload.push(("prompt_hash", SolValue::str(prompt_hash)));
+                    payload.push(("parse_ok", SolValue::Bool(false)));
+                }
+                self.append(Some(nid), kind, Category::Inject, SolValue::map(payload))?;
                 Err(error)
             }
         }
@@ -330,16 +624,15 @@ impl Backend for LiveBackend<'_> {
         let full = format!("{}|{}|{}", self.tenant, self.instance_id, idem_key);
         match once_begin(self.store, &self.tenant, &full) {
             Ok(OnceState::Execute) => {
-                self.ledger.append(
-                    &self.turn_id,
+                self.append(
                     Some(nid),
                     "once_intent",
                     Category::Verify,
                     SolValue::map([("idem_key", SolValue::str(full))]),
-                );
+                )?;
                 Ok(OnceClaim::Run)
             }
-            Ok(OnceState::Replay(_)) => Ok(OnceClaim::Skip),
+            Ok(OnceState::Replay(result)) => Ok(OnceClaim::Skip(result)),
             Err(StoreError::UnknownOutcome) => Err(ErrV1::new(
                 ReasonCode::Internal,
                 nid,
@@ -353,17 +646,11 @@ impl Backend for LiveBackend<'_> {
         }
     }
 
-    fn once_complete(&mut self, nid: &str, idem_key: &str) -> Result<(), ErrV1> {
+    fn once_complete(&mut self, nid: &str, idem_key: &str, result: SolValue) -> Result<(), ErrV1> {
         let full = format!("{}|{}|{}", self.tenant, self.instance_id, idem_key);
-        once_complete(
-            self.store,
-            &self.tenant,
-            &full,
-            SolValue::map([("ok", SolValue::Bool(true))]),
-        )
-        .map_err(|e| ErrV1::new(ReasonCode::Internal, nid, format!("once complete: {e:?}")))?;
-        self.ledger.append(
-            &self.turn_id,
+        once_complete(self.store, &self.tenant, &full, result)
+            .map_err(|e| ErrV1::new(ReasonCode::Internal, nid, format!("once complete: {e:?}")))?;
+        self.append(
             Some(nid),
             "once_result",
             Category::Inject,
@@ -371,7 +658,7 @@ impl Backend for LiveBackend<'_> {
                 ("idem_key", SolValue::str(full)),
                 ("ok", SolValue::Bool(true)),
             ]),
-        );
+        )?;
         Ok(())
     }
 
@@ -391,13 +678,12 @@ impl Backend for LiveBackend<'_> {
             }
         };
         self.nondet_seq += 1;
-        self.ledger.append(
-            &self.turn_id,
+        self.append(
             Some(nid),
             "nondet_value",
             Category::Inject,
             SolValue::map([("source", SolValue::str(source)), ("value", value.clone())]),
-        );
+        )?;
         Ok(value)
     }
 
@@ -424,8 +710,7 @@ impl Backend for LiveBackend<'_> {
                 ))
             }
         };
-        self.ledger.append(
-            &self.turn_id,
+        self.append(
             Some(nid),
             "validate_result",
             Category::Inject,
@@ -433,14 +718,12 @@ impl Backend for LiveBackend<'_> {
                 ("validator", SolValue::str(validator_id)),
                 ("result", SolValue::Bool(result)),
             ]),
-        );
+        )?;
         Ok(result)
     }
 
     fn report(&mut self, nid: &str, kind: &str, payload: SolValue) -> Result<(), ErrV1> {
-        self.ledger
-            .append(&self.turn_id, Some(nid), kind, Category::Inject, payload);
-        Ok(())
+        self.append(Some(nid), kind, Category::Inject, payload)
     }
 
     fn time_exceeded(
@@ -454,8 +737,7 @@ impl Backend for LiveBackend<'_> {
         if observed <= limit {
             return Ok(false);
         }
-        self.ledger.append(
-            &self.turn_id,
+        self.append(
             Some(nid),
             kind,
             Category::Inject,
@@ -465,7 +747,7 @@ impl Backend for LiveBackend<'_> {
                 ("limit", SolValue::Int(limit as i64)),
                 ("observed", SolValue::Int(observed as i64)),
             ]),
-        );
+        )?;
         Ok(true)
     }
 }
@@ -523,6 +805,7 @@ pub fn replay(program: &Node, ledger: &Ledger, initial_bag: SolValue) -> Result<
                 e.kind.as_str(),
                 "call_result"
                     | "read_result"
+                    | "model_call"
                     | "call_intent"
                     | "call_dispatch"
                     | "park"
@@ -533,6 +816,7 @@ pub fn replay(program: &Node, ledger: &Ledger, initial_bag: SolValue) -> Result<
                     | "finally_failed"
                     | "budget_trip"
                     | "timeout_trip"
+                    | "guard_check"
             )
         })
         .collect();
@@ -615,7 +899,7 @@ impl ReplayBackend<'_> {
 }
 
 impl Backend for ReplayBackend<'_> {
-    fn call(&mut self, nid: &str, id: &str, args: SolValue) -> Result<SolValue, ErrV1> {
+    fn call(&mut self, nid: &str, id: &str, args: SolValue) -> Result<CallOutput, ErrV1> {
         if self
             .entries
             .front()
@@ -625,7 +909,7 @@ impl Backend for ReplayBackend<'_> {
             verify_call_identity(intent, nid, id, &args)?;
             self.pop(&["call_dispatch"], nid)?;
         }
-        let e = self.pop(&["call_result", "read_result"], nid)?;
+        let e = self.pop(&["call_result", "read_result", "model_call"], nid)?;
         verify_call_identity(e, nid, id, &args)?;
         let payload = e
             .payload
@@ -633,12 +917,33 @@ impl Backend for ReplayBackend<'_> {
             .ok_or_else(|| ErrV1::new(ReasonCode::Internal, nid, "replay: bad result payload"))?;
         match payload.get("outcome") {
             Some(SolValue::Str(outcome)) if outcome == "ok" => {
-                payload.get("output").cloned().ok_or_else(|| {
+                let value = payload.get("output").cloned().ok_or_else(|| {
                     ErrV1::new(
                         ReasonCode::Internal,
                         nid,
                         "replay: result entry missing output",
                     )
+                })?;
+                let usage_tokens = match payload.get("usage_tokens") {
+                    None => 0,
+                    Some(SolValue::Int(value)) => u64::try_from(*value).map_err(|_| {
+                        ErrV1::new(
+                            ReasonCode::Internal,
+                            nid,
+                            "replay: usage_tokens must be non-negative",
+                        )
+                    })?,
+                    Some(_) => {
+                        return Err(ErrV1::new(
+                            ReasonCode::Internal,
+                            nid,
+                            "replay: usage_tokens must be int",
+                        ))
+                    }
+                };
+                Ok(CallOutput {
+                    value,
+                    usage_tokens,
                 })
             }
             Some(SolValue::Str(outcome)) if outcome == "err" => {

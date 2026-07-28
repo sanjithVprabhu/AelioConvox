@@ -10,11 +10,11 @@
 //!   Expr grammar has no Park, so only `Tee.side` needs a walk).
 //! - **Tee dataflow isolation** (§8.2) — side writes ⊆ `side_root`.
 //!
-//! (Boundedness DAG acyclicity over registered flows, §8.4, is a multi-flow check deferred until the
-//! registry holds flow targets — noted in FLAGS as P0.7 scope.)
+//! Registered flow call graphs are checked for acyclicity by the deployment-grade pass.
 
 use crate::error::{ErrV1, ReasonCode};
 use crate::instr::{Kind, Node};
+use crate::registry::{Origin, Registry};
 use crate::waves;
 use aelio_sol::{Path, Segment};
 use std::collections::HashSet;
@@ -28,6 +28,49 @@ pub fn plan(root: &Node) -> Result<(), ErrV1> {
     check_tee_dataflow(root)?;
     check_map_imports(root)?;
     check_const_limits(root)?;
+    Ok(())
+}
+
+/// Deployment-grade planning adds registry/policy/tenant checks that cannot be performed by the
+/// syntax-only [`plan`] pass.
+pub fn plan_with_registry(root: &Node, registry: &Registry, tenant: &str) -> Result<(), ErrV1> {
+    plan(root)?;
+    if tenant.trim().is_empty() {
+        return Err(ErrV1::new(
+            ReasonCode::Policy,
+            &root.nid,
+            "deployment tenant must be non-empty",
+        ));
+    }
+    registry
+        .validate_call_graph(tenant)
+        .map_err(|error| ErrV1::new(ReasonCode::Shape, &root.nid, error))?;
+    check_registered_calls(root, registry, tenant)
+}
+
+fn check_registered_calls(node: &Node, registry: &Registry, tenant: &str) -> Result<(), ErrV1> {
+    if let Kind::Call { id, .. } = &node.kind {
+        let declaration = registry.declaration(id).ok_or_else(|| {
+            ErrV1::new(
+                ReasonCode::Policy,
+                &node.nid,
+                format!("Call target `{id}` lacks a production registry declaration"),
+            )
+        })?;
+        declaration
+            .validate()
+            .map_err(|error| ErrV1::new(ReasonCode::Policy, &node.nid, error))?;
+        if declaration.origin == Origin::Tenant && declaration.tenant != tenant {
+            return Err(ErrV1::new(
+                ReasonCode::Policy,
+                &node.nid,
+                format!("Call target `{id}` belongs to a different tenant (§17.2)"),
+            ));
+        }
+    }
+    for child in children(node) {
+        check_registered_calls(child, registry, tenant)?;
+    }
     Ok(())
 }
 

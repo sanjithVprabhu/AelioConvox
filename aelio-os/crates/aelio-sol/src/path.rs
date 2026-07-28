@@ -109,14 +109,11 @@ impl fmt::Display for Path {
         for (index, segment) in self.segments.iter().enumerate() {
             match segment {
                 Segment::Key(key)
-                    if key
-                        .bytes()
-                        .enumerate()
-                        .all(|(i, byte)| {
-                            byte == b'_'
-                                || byte.is_ascii_alphabetic()
-                                || (i > 0 && byte.is_ascii_digit())
-                        }) =>
+                    if key.bytes().enumerate().all(|(i, byte)| {
+                        byte == b'_'
+                            || byte.is_ascii_alphabetic()
+                            || (i > 0 && byte.is_ascii_digit())
+                    }) =>
                 {
                     if index > 0 {
                         f.write_str(".")?;
@@ -127,8 +124,7 @@ impl fmt::Display for Path {
                     if index > 0 {
                         f.write_str(".")?;
                     }
-                    let quoted =
-                        serde_json::to_string(key).map_err(|_| fmt::Error)?;
+                    let quoted = crate::canonical::to_string(&SolValue::Str(key.clone()));
                     write!(f, "[{quoted}]")?;
                 }
                 Segment::Index(value) => write!(f, "[{value}]")?,

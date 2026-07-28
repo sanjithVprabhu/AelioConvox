@@ -1,0 +1,1 @@
+{"name":"branch_false","section":"§8.2 Branch false","plan":{"nid":"branch","op":"Branch","pred":{"lit":false},"then":{"nid":"then","op":"Const","v":{"arm":"then"}},"else":{"nid":"else","op":"Const","v":{"arm":"else"}}},"initial_bag":{},"expected":{"kind":"bag_hash","bag":{"arm":"else"}},"replay_twice":true}

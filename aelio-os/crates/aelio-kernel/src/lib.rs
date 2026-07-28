@@ -7,6 +7,7 @@
 
 pub mod bag;
 pub mod compute;
+pub mod continuation;
 pub mod driver;
 pub mod error;
 pub mod exec;
@@ -19,7 +20,7 @@ pub mod sugar;
 pub mod trace;
 pub mod waves;
 
-pub use driver::{replay, Instance, Parked, TurnOutcome};
+pub use driver::{replay, Instance, InstanceConfig, Parked, TurnOutcome};
 pub use error::{ErrV1, ExecResult, ReasonCode};
 pub use instr::{parse_node, Node};
 pub use ledger::{Category, Ledger};

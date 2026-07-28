@@ -9,6 +9,7 @@ description = "Planner + Executor + ledger + replay + Control/Compute op catalog
 [dependencies]
 aelio-sol.workspace = true
 aelio-store.workspace = true
+blake3.workspace = true
 serde_json.workspace = true
 
 [lints.rust]

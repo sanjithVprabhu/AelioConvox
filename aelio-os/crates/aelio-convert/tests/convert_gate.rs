@@ -320,6 +320,77 @@ fn rejected_rules_hash_short_circuits_repeat_proposals() {
     assert!(!reg.is_rejected(&aelio_convert::rules_hash(&other)));
 }
 
+#[test]
+fn rule_schema_is_closed_and_nested_keep_preserves_only_named_paths() {
+    assert!(parse_rules(&serde_json::json!([
+        {"op":"trim","path":"name","surprise":"ignored-before-fix"}
+    ]))
+    .is_err());
+    let rules = parse_rules(&serde_json::json!([
+        {"op":"keep","paths":["user.id","meta"]}
+    ]))
+    .unwrap();
+    let input = SolValue::map([
+        (
+            "user",
+            SolValue::map([
+                ("id", SolValue::Int(7)),
+                ("secret", SolValue::str("remove")),
+            ]),
+        ),
+        ("meta", SolValue::Bool(true)),
+        ("other", SolValue::Int(9)),
+    ]);
+    let output = apply_rules(&rules, &input).unwrap();
+    let map = output.as_map().unwrap();
+    assert!(!map.contains_key("other"));
+    assert_eq!(map.get("meta"), Some(&SolValue::Bool(true)));
+    let user = map.get("user").and_then(SolValue::as_map).unwrap();
+    assert_eq!(user.get("id"), Some(&SolValue::Int(7)));
+    assert!(!user.contains_key("secret"));
+}
+
+#[test]
+fn rule_hash_distinguishes_quoted_key_from_nested_path() {
+    let quoted = parse_rules(&serde_json::json!([
+        {"op":"trim","path":"[\"a.b\"]"}
+    ]))
+    .unwrap();
+    let nested = parse_rules(&serde_json::json!([
+        {"op":"trim","path":"a.b"}
+    ]))
+    .unwrap();
+    assert_ne!(
+        aelio_convert::edge::rules_hash(&quoted),
+        aelio_convert::edge::rules_hash(&nested)
+    );
+}
+
+#[test]
+fn malformed_evidence_and_weakened_thresholds_fail_closed() {
+    let weak = Thresholds {
+        shadow_min_distinct: 1,
+        shadow_min_rate: 0.0,
+        ..Thresholds::default()
+    };
+    let apparently_good = Evidence {
+        shadow_distinct: 1_000,
+        shadow_validation_rate: 1.0,
+        canary_distinct: 1_000,
+        canary_success_rate: 1.0,
+        attributed_guard_violations: 0,
+    };
+    assert!(!gate::shadow_to_canary(&apparently_good, &weak));
+    assert!(!gate::canary_to_promoted(
+        &Evidence {
+            canary_success_rate: f64::NAN,
+            ..apparently_good
+        },
+        &Thresholds::default()
+    ));
+    assert!(gate::should_demote(f64::NAN, false, &Thresholds::default()));
+}
+
 // ── §26 edge inspector: "why did this Convert fire" + full evidence ────────────────────────────
 #[test]
 fn edge_inspector_renders_identity_status_and_evidence() {

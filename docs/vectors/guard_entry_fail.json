@@ -1,0 +1,1 @@
+{"name":"guard_entry_fail","section":"§8.3 Guard entry violation","plan":{"nid":"guard","op":"Guard","check":"entry","invariant":{"lit":false},"body":{"nid":"identity","op":"Identity"}},"initial_bag":{},"expected":{"kind":"err","code":"Guard.Violation"}}

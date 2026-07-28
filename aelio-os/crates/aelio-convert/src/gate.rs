@@ -115,6 +115,21 @@ impl Default for Thresholds {
     }
 }
 
+pub fn validate_thresholds(th: &Thresholds) -> Result<(), String> {
+    if th.shadow_min_distinct < 20
+        || th.canary_min_distinct < 20
+        || !th.shadow_min_rate.is_finite()
+        || !(0.95..=1.0).contains(&th.shadow_min_rate)
+        || !th.canary_min_success.is_finite()
+        || !(0.98..=1.0).contains(&th.canary_min_success)
+        || !th.demote_failure_rate.is_finite()
+        || !(0.0..=0.02).contains(&th.demote_failure_rate)
+    {
+        return Err("gate thresholds weaken or exceed the locked §16.4 bounds".into());
+    }
+    Ok(())
+}
+
 /// Evidence (§13.2) — all counts over **distinct input hashes** (never raw runs, so evidence can't
 /// be inflated by repetition).
 #[derive(Debug, Clone, Copy, Default)]
@@ -158,15 +173,28 @@ where
 }
 
 pub fn shadow_to_canary(ev: &Evidence, th: &Thresholds) -> bool {
+    if validate_thresholds(th).is_err() || !valid_rate(ev.shadow_validation_rate) {
+        return false;
+    }
     ev.shadow_distinct >= th.shadow_min_distinct && ev.shadow_validation_rate >= th.shadow_min_rate
 }
 
 pub fn canary_to_promoted(ev: &Evidence, th: &Thresholds) -> bool {
+    if validate_thresholds(th).is_err() || !valid_rate(ev.canary_success_rate) {
+        return false;
+    }
     ev.canary_distinct >= th.canary_min_distinct
         && ev.canary_success_rate >= th.canary_min_success
         && ev.attributed_guard_violations == 0
 }
 
 pub fn should_demote(canary_failure_rate: f64, guard_violation: bool, th: &Thresholds) -> bool {
-    guard_violation || canary_failure_rate > th.demote_failure_rate
+    guard_violation
+        || validate_thresholds(th).is_err()
+        || !valid_rate(canary_failure_rate)
+        || canary_failure_rate > th.demote_failure_rate
+}
+
+fn valid_rate(rate: f64) -> bool {
+    rate.is_finite() && (0.0..=1.0).contains(&rate)
 }

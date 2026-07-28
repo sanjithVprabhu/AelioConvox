@@ -42,17 +42,20 @@ pub fn run_harness(
             report.caught_structural += 1;
             continue;
         }
-        let passes = inputs
-            .iter()
-            .filter(|inp| gate::shadow_validate(rules, inp, digest))
-            .count();
-        let rate = if inputs.is_empty() {
+        let mut distinct = std::collections::BTreeMap::new();
+        for input in inputs {
+            let agreed = gate::shadow_validate(rules, input, digest);
+            let entry = distinct.entry(aelio_sol::value_hash(input)).or_insert(true);
+            *entry = *entry && agreed;
+        }
+        let passes = distinct.values().filter(|agreed| **agreed).count();
+        let rate = if distinct.is_empty() {
             1.0
         } else {
-            passes as f64 / inputs.len() as f64
+            passes as f64 / distinct.len() as f64
         };
         let ev = Evidence {
-            shadow_distinct: inputs.len() as u64,
+            shadow_distinct: distinct.len() as u64,
             shadow_validation_rate: rate,
             ..Default::default()
         };

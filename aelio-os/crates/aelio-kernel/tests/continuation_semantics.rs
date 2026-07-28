@@ -231,3 +231,48 @@ fn try_handler_may_park_and_finally_waits_for_handler_completion() {
         Some(&SolValue::Bool(true))
     );
 }
+
+#[test]
+fn map_imports_are_visible_read_only_and_do_not_leak_into_outputs() {
+    let program = compile(
+        r#"{"nid":"map","op":"Map","over":"items","into":"mapped","max_items":2,
+          "imports":{"context.factor":"tenant.factor"},
+          "body":{"nid":"sum","op":"Call","id":"sum@1",
+            "args":{"left":{"pull":"value"},"right":{"pull":"context.factor"}},"into":"sum"}
+        }"#,
+    )
+    .unwrap();
+    let mut registry = Registry::default();
+    registry.register("sum@1", EffectClass::Pure, |args| {
+        let map = args.as_map().unwrap();
+        let number = |key| match map.get(key).unwrap() {
+            SolValue::Int(value) => *value,
+            _ => panic!("expected int"),
+        };
+        Ok(SolValue::Int(number("left") + number("right")))
+    });
+    let mut instance = Instance::new(program, &mut registry);
+    let initial = SolValue::map([
+        (
+            "items",
+            SolValue::list([SolValue::map([("value", SolValue::Int(3))])]),
+        ),
+        ("tenant", SolValue::map([("factor", SolValue::Int(4))])),
+    ]);
+    let bag = match instance.start(initial).unwrap() {
+        TurnOutcome::Completed { bag, .. } => bag,
+        TurnOutcome::Parked(_) => panic!("Map does not park"),
+    };
+    let item = bag
+        .as_map()
+        .and_then(|map| map.get("mapped"))
+        .and_then(SolValue::as_list)
+        .and_then(|items| items.first())
+        .and_then(SolValue::as_map)
+        .unwrap();
+    assert_eq!(item.get("sum"), Some(&SolValue::Int(7)));
+    assert!(
+        !item.contains_key("context"),
+        "read-only import projections are not part of the collected child"
+    );
+}

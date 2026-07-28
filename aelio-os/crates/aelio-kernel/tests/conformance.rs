@@ -1,7 +1,9 @@
 //! Conformance vector runner (F11 / handoff Phase 2).
 //! Reads `docs/vectors/*.json` and asserts expected bag_hash / err / plan-time reject.
 
-use aelio_kernel::{compile, replay, Instance, Registry, TurnOutcome};
+use aelio_kernel::{
+    compile, replay, EffectClass, ErrV1, Instance, ReasonCode, Registry, TurnOutcome,
+};
 use aelio_sol::{value_hash, SolValue};
 use serde_json::Value as J;
 use std::fs;
@@ -17,6 +19,44 @@ fn vectors_dir() -> PathBuf {
 
 fn load_bag(j: &J) -> SolValue {
     aelio_kernel::json_from(j).expect("initial_bag")
+}
+
+fn load_registry(vector: &J) -> Registry {
+    let mut registry = Registry::default();
+    for entry in vector
+        .get("registry")
+        .and_then(J::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let id = entry["id"].as_str().expect("registry.id").to_string();
+        let effect = match entry["effect"].as_str().expect("registry.effect") {
+            "pure" => EffectClass::Pure,
+            "read" => EffectClass::Read,
+            "write" => EffectClass::Write,
+            "external" => EffectClass::External,
+            other => panic!("bad registry effect {other}"),
+        };
+        if let Some(result) = entry.get("result") {
+            let result = load_bag(result);
+            registry.register(id, effect, move |_| Ok(result.clone()));
+        } else {
+            let code = ReasonCode::from_code(
+                entry["error"]["code"]
+                    .as_str()
+                    .expect("registry.error.code"),
+            )
+            .expect("known ReasonCode");
+            registry.register(id, effect, move |_| {
+                Err(ErrV1::new(
+                    code.clone(),
+                    "vector_target",
+                    "injected failure",
+                ))
+            });
+        }
+    }
+    registry
 }
 
 fn run_vector(path: &std::path::Path) {
@@ -47,7 +87,7 @@ fn run_vector(path: &std::path::Path) {
                         v.get("initial_bag")
                             .unwrap_or(&J::Object(Default::default())),
                     );
-                    let mut reg = Registry::default();
+                    let mut reg = load_registry(&v);
                     let mut inst = Instance::new(program, &mut reg);
                     match inst.start(bag) {
                         Err(e) => {
@@ -70,7 +110,7 @@ fn run_vector(path: &std::path::Path) {
                 v.get("initial_bag")
                     .unwrap_or(&J::Object(Default::default())),
             );
-            let mut reg = Registry::default();
+            let mut reg = load_registry(&v);
             let mut inst = Instance::new(program, &mut reg);
             match inst.start(bag) {
                 Err(e) => assert_eq!(e.code.code(), expected["code"].as_str().unwrap(), "{name}"),
@@ -86,7 +126,7 @@ fn run_vector(path: &std::path::Path) {
             );
             let expected_bag = load_bag(&expected["bag"]);
             let want = value_hash(&expected_bag);
-            let mut reg = Registry::default();
+            let mut reg = load_registry(&v);
             let mut inst = Instance::new(program.clone(), &mut reg);
             let (got, ledger) = match inst.start(bag.clone()).unwrap() {
                 TurnOutcome::Completed { bag_hash, .. } => (bag_hash, inst.ledger().clone()),
@@ -99,6 +139,41 @@ fn run_vector(path: &std::path::Path) {
             {
                 let again = replay(&program, &ledger, bag).unwrap();
                 assert_eq!(again, want, "{name}: replay");
+            }
+        }
+        "park" => {
+            let program = compile(&plan_text).expect("park vector compiles");
+            let initial = load_bag(
+                v.get("initial_bag")
+                    .unwrap_or(&J::Object(Default::default())),
+            );
+            let mut registry = load_registry(&v);
+            let mut instance = Instance::new(program, &mut registry);
+            let parked = match instance.start(initial).expect("park vector starts") {
+                TurnOutcome::Parked(parked) => parked,
+                TurnOutcome::Completed { .. } => panic!("{name}: expected park"),
+            };
+            assert_eq!(
+                parked.park_nid,
+                expected["park_nid"].as_str().expect("park_nid"),
+                "{name}"
+            );
+            if let Some(expected_bag) = expected.get("bag") {
+                assert_eq!(
+                    value_hash(&parked.bag),
+                    value_hash(&load_bag(expected_bag)),
+                    "{name}: parked bag"
+                );
+            }
+            if let Some(resume) = expected.get("resume") {
+                let wake = load_bag(resume.get("wake").unwrap_or(&J::Null));
+                let expected_bag = load_bag(&resume["bag"]);
+                match instance.resume(parked, wake).expect("park vector resumes") {
+                    TurnOutcome::Completed { bag_hash, .. } => {
+                        assert_eq!(bag_hash, value_hash(&expected_bag), "{name}: resume bag")
+                    }
+                    TurnOutcome::Parked(_) => panic!("{name}: expected completion after resume"),
+                }
             }
         }
         other => panic!("{name}: unknown expected.kind {other}"),

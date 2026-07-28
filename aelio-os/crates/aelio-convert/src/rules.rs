@@ -85,16 +85,37 @@ pub fn any_fabricating(rules: &[Rule]) -> bool {
 /// Parse a closed-JSON rule list (the cold-path proposer's only output surface). Unknown ops ⇒
 /// reject (containment).
 pub fn parse_rules(j: &J) -> Result<Vec<Rule>, String> {
-    j.as_array()
+    let rules = j
+        .as_array()
         .ok_or("rules must be an array")?
         .iter()
         .map(parse_rule)
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    if rules.is_empty() {
+        return Err("rules must not be empty".into());
+    }
+    if rules.len() > 128 {
+        return Err("rules exceed the bounded proposal cap (128)".into());
+    }
+    Ok(rules)
 }
 
 fn parse_rule(j: &J) -> Result<Rule, String> {
     let o = j.as_object().ok_or("rule must be an object")?;
     let op = o.get("op").and_then(J::as_str).ok_or("rule missing `op`")?;
+    let allowed: &[&str] = match op {
+        "rename" | "path_copy" => &["op", "from", "to"],
+        "drop" | "unwrap" | "trim" => &["op", "path"],
+        "keep" => &["op", "paths"],
+        "default" | "const_set" => &["op", "path", "v"],
+        "cast" => &["op", "path", "to", "mode"],
+        "wrap" => &["op", "path", "key"],
+        "map_enum" => &["op", "path", "table"],
+        other => return Err(format!("unknown rule op `{other}` — closed set (§14)")),
+    };
+    if let Some(unknown) = o.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(format!("unknown field `{unknown}` on rule `{op}`"));
+    }
     let path = |k: &str| -> Result<Path, String> {
         Path::parse(
             o.get(k)
@@ -138,7 +159,13 @@ fn parse_rule(j: &J) -> Result<Rule, String> {
         },
         "wrap" => Rule::Wrap {
             path: path("path")?,
-            key: o.get("key").and_then(J::as_str).ok_or("wrap.key")?.into(),
+            key: {
+                let key = o.get("key").and_then(J::as_str).ok_or("wrap.key")?;
+                if key.is_empty() {
+                    return Err("wrap.key must not be empty".into());
+                }
+                key.into()
+            },
         },
         "unwrap" => Rule::Unwrap {
             path: path("path")?,
@@ -164,7 +191,7 @@ fn parse_rule(j: &J) -> Result<Rule, String> {
         "trim" => Rule::Trim {
             path: path("path")?,
         },
-        other => return Err(format!("unknown rule op `{other}` — closed set (§14)")),
+        _ => unreachable!(),
     })
 }
 
@@ -182,6 +209,13 @@ pub fn apply_rules(rules: &[Rule], input: &SolValue) -> Result<SolValue, RuleFai
             code: ReasonCode::ConvertRuleFail,
             detail,
         })?;
+        aelio_sol::Limits::default()
+            .check(&work)
+            .map_err(|error| RuleFail {
+                rule_index: i,
+                code: ReasonCode::ConvertRuleFail,
+                detail: format!("conversion output exceeds Sol limits: {error}"),
+            })?;
     }
     Ok(work)
 }
@@ -198,17 +232,14 @@ fn apply_one(rule: &Rule, work: &mut SolValue) -> Result<(), String> {
             Ok(())
         }
         Rule::Keep { paths } => {
-            // v0: keep operates over top-level keys — drop all not named.
-            let keep_keys: Vec<String> = paths
-                .iter()
-                .filter_map(|p| match p.segments() {
-                    [Segment::Key(k)] => Some(k.clone()),
-                    _ => None,
-                })
-                .collect();
-            if let SolValue::Map(m) = work {
-                m.retain(|k, _| keep_keys.contains(k));
+            let original = work.clone();
+            let mut kept = SolValue::map::<_, &str>([]);
+            for path in paths {
+                if let Some(value) = path.get(&original).cloned() {
+                    set(&mut kept, path, value)?;
+                }
             }
+            *work = kept;
             Ok(())
         }
         Rule::Default { path, v } => {

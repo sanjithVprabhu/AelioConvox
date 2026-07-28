@@ -1,4 +1,10 @@
-use aelio_kernel::compile;
+use aelio_kernel::{compile, InstanceConfig};
+use aelio_kernel::{
+    driver::Instance,
+    registry::{Boundedness, Declaration, EffectClass, Origin, Registry, TargetClass},
+};
+use aelio_sol::SolValue;
+use aelio_store::MemoryStore;
 
 #[test]
 fn nested_instruction_shapes_are_closed() {
@@ -43,4 +49,88 @@ fn map_import_aliases_are_read_only() {
     }"#;
     let error = compile(unsafe_plan).expect_err("Map body must not write projected imports");
     assert_eq!(error.code.code(), "Policy");
+}
+
+#[test]
+fn production_registry_requires_policy_bounds_imprints_and_tenant_scope() {
+    let mut registry = Registry::default();
+    let unsafe_effect = Declaration {
+        id: "tool.send@1".into(),
+        class: TargetClass::Tool,
+        input_imprint: "send.in@1".into(),
+        output_imprint: "send.out@1".into(),
+        boundedness: Boundedness::DeadlineCompliant { max_ms: 1_000 },
+        effect_class: EffectClass::External,
+        policy_tags: vec![],
+        tenant: "tenant-a".into(),
+        origin: Origin::Tenant,
+    };
+    assert!(registry
+        .register_declared(unsafe_effect, |_| Ok(SolValue::Null))
+        .is_err());
+
+    registry
+        .register_declared(
+            Declaration {
+                id: "io.read@1".into(),
+                class: TargetClass::Io,
+                input_imprint: "read.in@1".into(),
+                output_imprint: "read.out@1".into(),
+                boundedness: Boundedness::DeadlineCompliant { max_ms: 1_000 },
+                effect_class: EffectClass::Read,
+                policy_tags: vec![],
+                tenant: "tenant-a".into(),
+                origin: Origin::Tenant,
+            },
+            |_| Ok(SolValue::Null),
+        )
+        .unwrap();
+    let program =
+        compile(r#"{"nid":"call","op":"Call","id":"io.read@1","args":{},"into":"out"}"#).unwrap();
+    assert!(Instance::with_store(
+        program,
+        &mut registry,
+        Box::new(MemoryStore::new()),
+        InstanceConfig {
+            tenant: "tenant-b".into(),
+            instance_id: "instance-1".into(),
+            flow_id: "flow".into(),
+            flow_rev: "1".into(),
+            event_key_secret: [1; 32],
+        }
+    )
+    .is_err());
+}
+
+#[test]
+fn registered_flow_call_graph_is_acyclic_and_tenant_scoped() {
+    let mut registry = Registry::default();
+    for id in ["flow.a@1", "flow.b@1"] {
+        registry
+            .register_declared(
+                Declaration {
+                    id: id.into(),
+                    class: TargetClass::Flow,
+                    input_imprint: "flow.in@1".into(),
+                    output_imprint: "flow.out@1".into(),
+                    boundedness: Boundedness::RegisteredFlow,
+                    effect_class: EffectClass::Pure,
+                    policy_tags: vec![],
+                    tenant: "tenant-a".into(),
+                    origin: Origin::Tenant,
+                },
+                |_| Ok(SolValue::Null),
+            )
+            .unwrap();
+    }
+    registry
+        .set_flow_calls("flow.a@1", vec!["flow.b@1".into()])
+        .unwrap();
+    registry
+        .set_flow_calls("flow.b@1", vec!["flow.a@1".into()])
+        .unwrap();
+    assert!(registry.validate_call_graph("tenant-a").is_err());
+
+    registry.set_flow_calls("flow.b@1", vec![]).unwrap();
+    assert!(registry.validate_call_graph("tenant-a").is_ok());
 }

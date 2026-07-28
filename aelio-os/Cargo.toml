@@ -11,6 +11,7 @@ members = [
     "crates/aelio-query",
     "crates/aelio-prompt",
     "crates/aelio-cli",
+    "crates/aelio-wire",
 ]
 
 [workspace.package]
@@ -29,6 +30,7 @@ aelio-convert = { path = "crates/aelio-convert" }
 aelio-learn = { path = "crates/aelio-learn" }
 aelio-query = { path = "crates/aelio-query" }
 aelio-prompt = { path = "crates/aelio-prompt" }
+aelio-wire = { path = "crates/aelio-wire" }
 
 [profile.dev]
 # Deny warnings is enforced in CI (handoff Working rules); locally kept as warnings.

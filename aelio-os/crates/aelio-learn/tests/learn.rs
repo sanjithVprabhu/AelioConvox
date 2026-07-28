@@ -96,6 +96,42 @@ fn empty_candidates_route_to_fallback() {
 }
 
 #[test]
+fn non_finite_duplicate_and_over_cap_scores_fail_closed() {
+    let hygiene = Hygiene {
+        tau: 0.5,
+        delta: 0.1,
+        entropy_ceiling: 0.8,
+    };
+    for candidates in [
+        vec![PathwayScore {
+            pathway_id: "bad".into(),
+            score: f64::NAN,
+        }],
+        vec![
+            PathwayScore {
+                pathway_id: "same".into(),
+                score: 0.9,
+            },
+            PathwayScore {
+                pathway_id: "same".into(),
+                score: 0.1,
+            },
+        ],
+        (0..9)
+            .map(|index| PathwayScore {
+                pathway_id: format!("p{index}"),
+                score: 1.0 - index as f64 / 10.0,
+            })
+            .collect(),
+    ] {
+        assert!(matches!(
+            select(&candidates, &hygiene),
+            Selection::Fallback { .. }
+        ));
+    }
+}
+
+#[test]
 fn decision_point_requires_fallback_and_caps_at_eight() {
     let good = DecisionPoint {
         id: "unauth.v1".into(),
