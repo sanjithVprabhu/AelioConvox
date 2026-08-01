@@ -1,0 +1,15 @@
+{
+  "system": "ll",
+  "dataset": "50000x32",
+  "k": 10,
+  "build_seconds": 25.28,
+  "results": [
+    {"selectivity": 0.005, "matched": 242, "strategy": "PreFilter", "recall": 1.0000, "latency_ms": 0.1798},
+    {"selectivity": 0.02, "matched": 918, "strategy": "PreFilter", "recall": 1.0000, "latency_ms": 0.4210},
+    {"selectivity": 0.05, "matched": 2479, "strategy": "PreFilter", "recall": 1.0000, "latency_ms": 1.0884},
+    {"selectivity": 0.1, "matched": 4907, "strategy": "PreFilter", "recall": 1.0000, "latency_ms": 2.2158},
+    {"selectivity": 0.25, "matched": 12525, "strategy": "PostFilter", "recall": 1.0000, "latency_ms": 3.6725},
+    {"selectivity": 0.5, "matched": 24944, "strategy": "PostFilter", "recall": 1.0000, "latency_ms": 2.4279},
+    {"selectivity": 1, "matched": 50000, "strategy": "PostFilter", "recall": 1.0000, "latency_ms": 2.3978}
+  ]
+}

@@ -1,6 +1,6 @@
 # Harness Atomic Operations Vocabulary
 
-This is the first vocabulary pass for the self-learning Sunjet harness.
+This is the first vocabulary pass for the self-learning Aelio DB harness.
 
 An **atomic operation** is one independent capability that can be called, tested,
 traced, budgeted, and composed. It should not secretly run an entire plan. A
@@ -361,7 +361,7 @@ families**.
 | --- | ---: | --- |
 | Sense | 11 | Observe incoming user, time, session, identity, and active state |
 | Transform | 12 | Convert raw data into normalized text, spans, embeddings, prompts, or args |
-| Query | 13 | Build and execute Sunjet/database queries |
+| Query | 13 | Build and execute Aelio DB/database queries |
 | Retrieve | 9 | Pull relevant context, memories, tools, policies, and prior replies |
 | Evaluate | 10 | Score, fuse, validate, gate, and choose |
 | Reason | 7 | Ask an LLM for bounded classification, planning, critique, or synthesis |
@@ -419,22 +419,22 @@ live in the Reason family, not here.
 
 | Operation | Role | Input | Output | Status |
 | --- | --- | --- | --- | --- |
-| `sunjet.health` | Check Sunjet availability | none | health result | implemented |
-| `sunjet.schema.get` | Inspect existing table schema | table name | schema | implemented |
-| `sunjet.table.ensure` | Create or verify a collection/table | table schema | table status | implemented |
-| `sunjet.row.get` | Fetch one row/document by id | table, id | row | implemented |
-| `sunjet.rows.scan` | Scan rows with filters | table, filters, limit | rows | implemented |
-| `sunjet.row.insert` | Insert one atomic record | table, row | inserted row | implemented |
-| `sunjet.row.update` | Update one atomic record | table, id, patch | updated row | implemented |
-| `sunjet.row.delete` | Delete one atomic record | table, id | delete status | implemented |
-| `sunjet.query.vector` | Run vector nearest-neighbor search | vector, filters, k | scored rows | implemented |
-| `sunjet.query.text` | Run lexical/BM25-like search | text, filters, k | scored rows | partial |
-| `sunjet.query.semantic` | Run semantic query plan against vectors/text | semantic query | scored rows | partial |
-| `sunjet.query.graph` | Traverse graph edges or relations | node/edge constraints | graph result | planned |
-| `sunjet.query.hybrid` | Combine vector, lexical, filters, and graph | query request | fused result set | partial |
+| `aelio-db.health` | Check Aelio DB availability | none | health result | implemented |
+| `aelio-db.schema.get` | Inspect existing table schema | table name | schema | implemented |
+| `aelio-db.table.ensure` | Create or verify a collection/table | table schema | table status | implemented |
+| `aelio-db.row.get` | Fetch one row/document by id | table, id | row | implemented |
+| `aelio-db.rows.scan` | Scan rows with filters | table, filters, limit | rows | implemented |
+| `aelio-db.row.insert` | Insert one atomic record | table, row | inserted row | implemented |
+| `aelio-db.row.update` | Update one atomic record | table, id, patch | updated row | implemented |
+| `aelio-db.row.delete` | Delete one atomic record | table, id | delete status | implemented |
+| `aelio-db.query.vector` | Run vector nearest-neighbor search | vector, filters, k | scored rows | implemented |
+| `aelio-db.query.text` | Run lexical/BM25-like search | text, filters, k | scored rows | partial |
+| `aelio-db.query.semantic` | Run semantic query plan against vectors/text | semantic query | scored rows | partial |
+| `aelio-db.query.graph` | Traverse graph edges or relations | node/edge constraints | graph result | planned |
+| `aelio-db.query.hybrid` | Combine vector, lexical, filters, and graph | query request | fused result set | partial |
 
-Sunjet should become the fast substrate for most read/write atomic operations.
-The TypeScript harness should decide when and why to call Sunjet; Sunjet should
+Aelio DB should become the fast substrate for most read/write atomic operations.
+The TypeScript harness should decide when and why to call Aelio DB; Aelio DB should
 make the query fast and structured.
 
 ## 4. Retrieve Operations
@@ -662,12 +662,12 @@ const operations = {
     traceKind: "embedding",
     implementation: embedText
   },
-  "sunjet.query.hybrid": {
+  "aelio-db.query.hybrid": {
     family: "Query",
     deterministic: true,
     sideEffects: "read",
-    traceKind: "sunjet_query",
-    implementation: sunjet.query
+    traceKind: "aelio-db_query",
+    implementation: aelio-db.query
   }
 };
 ```

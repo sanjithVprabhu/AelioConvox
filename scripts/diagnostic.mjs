@@ -22,7 +22,7 @@ function run(command, args, options = {}) {
     const child = spawn(command, args, {
       cwd: options.cwd ?? root,
       stdio: options.inherit ? 'inherit' : 'pipe',
-      env: { ...process.env, ...options.env },
+      env: { ...process.env, AELIO_ALLOW_INSECURE_OPEN: '1', ...options.env },
     });
     let stdout = '';
     let stderr = '';
@@ -93,7 +93,7 @@ function spawnServer(stdio = 'pipe') {
   return spawn('node', ['dist/main.js'], {
     cwd: join(root, 'server'),
     stdio,
-    env: { ...process.env, ...serverEnv },
+    env: { ...process.env, AELIO_ALLOW_INSECURE_OPEN: '1', ...serverEnv },
   });
 }
 
@@ -103,6 +103,7 @@ function spawnSdk(stdio = 'pipe') {
     stdio,
     env: {
       ...process.env,
+      AELIO_ALLOW_INSECURE_OPEN: '1',
       AELIO_SDK_SECRET: serverEnv.AELIO_SDK_SECRET,
       AELIO_SERVER_URL: aelioWsUrl(),
     },
@@ -152,7 +153,7 @@ try {
     'packages/protocol/dist/index.js',
     'packages/llm/dist/index.js',
     'packages/channels/dist/index.js',
-    'packages/sunjet-client/dist/index.js',
+    'packages/aelioDb-client/dist/index.js',
     'sdk/node/dist/index.js',
   ];
   for (const artifact of artifacts) {

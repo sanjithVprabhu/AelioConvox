@@ -56,7 +56,7 @@ bounded by hard budgets.
   the plan proposed.
 - **suspension.ts / resume.ts** — the unified suspend/resume store, for BOTH
   recoil (`awaiting_info`) and write-confirmation (`awaiting_confirmation`). On
-  suspend the plan + ledger are persisted (SQLite authoritative, Sunjet mirror);
+  suspend the plan + ledger are persisted (SQLite authoritative, Aelio DB mirror);
   the next message rehydrates it (rebind tools, replay ledger so finished steps
   never re-run) and resumes — so a mid-plan confirmation continues the WHOLE
   plan, not just the one confirmed write. Recoil pins the validated answer;
@@ -71,7 +71,7 @@ bounded by hard budgets.
 - **budgets.ts** — deterministic loop protection: max instructions/replans/tool
   calls, wall clock, token meter, and progress detection (identical
   (tool, args) three times = a loop). The LLM never controls loop exit.
-- **traces.ts** — append-only Sunjet firehose (plan/bind/wave/gate/…); never fed
+- **traces.ts** — append-only Aelio DB firehose (plan/bind/wave/gate/…); never fed
   back into prompts; rolls up the existing L0–L3 compaction ladder.
 
 ## Lighthouse (`packages/core/src/lighthouse/`)
@@ -79,16 +79,16 @@ bounded by hard budgets.
 The read model over the SDK registry. A content **hash** of the merged registry
 is the invalidation key for tool embeddings, the capability taxonomy, and every
 binding-cache entry — so reconnects that don't change the registry recompute
-nothing. The in-memory bridge is authoritative for liveness; the Sunjet mirror
+nothing. The in-memory bridge is authoritative for liveness; the Aelio DB mirror
 (`harness_tools` with prerequisite-graph edges, `harness_capabilities`) serves
 semantic search and the feasibility probe, degrading to in-process embedding
-rank when Sunjet is off.
+rank when Aelio DB is off.
 
-## Storage — Sunjet/Astrolobe only, zero external deps
+## Storage — aelio-os only, zero external deps
 
-- **Registry mirror + capability index** → Sunjet (vector + graph + FTS).
-- **Hot state** (suspended plans, ledger) → SQLite authoritative + Sunjet mirror.
-- **Traces** → append-only Sunjet, tiered by the compaction daemon.
+- **Registry mirror + capability index** → Aelio DB (vector + graph + FTS).
+- **Hot state** (suspended plans, ledger) → SQLite authoritative + Aelio DB mirror.
+- **Traces** → append-only Aelio DB, tiered by the compaction daemon.
 
 No Redis, no external services — the single-container promise holds.
 

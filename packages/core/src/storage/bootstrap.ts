@@ -1,5 +1,5 @@
-import type { ColumnSpec, SunjetClient } from '@aelio/sunjet-client';
-import type { SunjetTableNames } from './types.js';
+import type { ColumnSpec, AelioDbClient } from '@aelio/db-client';
+import type { AelioDbTableNames } from './types.js';
 
 function vectorColumn(name: string, dim: number): ColumnSpec {
   return { name, kind: 'vector', dim };
@@ -376,7 +376,7 @@ function aspectsTableSchema(embedDim: number): ColumnSpec[] {
 
 /**
  * Harness Axis graph: roots + occurrences in one table so `previous`/`head`
- * edges stay intra-table (Sunjet graph queries are per-table).
+ * edges stay intra-table (AelioDb graph queries are per-table).
  */
 function axisNodesTableSchema(embedDim: number): ColumnSpec[] {
   return [
@@ -416,9 +416,9 @@ function sdkConnectionsTableSchema(): ColumnSpec[] {
   ];
 }
 
-export async function bootstrapSunjetTables(
-  client: SunjetClient,
-  tables: SunjetTableNames,
+export async function bootstrapAelioDbTables(
+  client: AelioDbClient,
+  tables: AelioDbTableNames,
   embedDim: number,
 ): Promise<void> {
   await client.ensureTable(tables.messages, messagesTableSchema(embedDim));

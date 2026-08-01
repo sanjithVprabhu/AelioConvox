@@ -72,7 +72,7 @@ delivery, or multi-node ownership—can be chosen generically by the engine.
 
 ## Verification
 
-Executed from `Sunjet/Astrolobe`:
+Executed from `aelio-os`:
 
 ```bash
 cargo test --workspace

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Live smoke: ll-server local segment backend + optional cloud-config validation.
+ * Live smoke: aelio-server local segment backend + optional cloud-config validation.
  * Verifies health.segment_backend, flush/publish on disk, reopen after local eviction
  * is not applicable for local-only — instead verifies flush creates seg-*.vss and
  * compact leaves a single segment.
@@ -13,10 +13,10 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { SunjetClient } from '@aelio/sunjet-client';
+import { AelioDbClient } from '@aelio/db-client';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const LL_BIN = join(ROOT, 'Sunjet/Astrolobe/target/release/ll-server');
+const LL_BIN = join(ROOT, 'aelio-os/target/release/aelio-server');
 
 let child = null;
 let tmp = null;
@@ -67,7 +67,7 @@ async function waitHealth(url) {
     }
     await sleep(250);
   }
-  throw new Error('ll-server not healthy');
+  throw new Error('aelio-server not healthy');
 }
 
 async function main() {
@@ -80,9 +80,10 @@ async function main() {
   child = spawn(LL_BIN, [], {
     env: {
       ...process.env,
-      LL_DATA_DIR: tmp,
-      LL_BIND: `127.0.0.1:${port}`,
-      LL_SEGMENT_BACKEND: 'local',
+      AELIO_ALLOW_INSECURE_OPEN: '1',
+      AELIO_DATA_DIR: tmp,
+      AELIO_RUNTIME_BIND: `127.0.0.1:${port}`,
+      AELIO_DB_SEGMENT_BACKEND: 'local',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -105,7 +106,7 @@ async function main() {
   }
   ok('startup logs announce local segment store');
 
-  const client = new SunjetClient({ baseUrl: url });
+  const client = new AelioDbClient({ baseUrl: url });
   await client.createTable('smoke', [
     { name: 'msg', kind: 'utf8' },
     { name: 'n', kind: 'i64' },
@@ -158,9 +159,10 @@ async function main() {
   const bad = spawn(LL_BIN, [], {
     env: {
       ...process.env,
-      LL_DATA_DIR: join(tmp, 'bad'),
-      LL_BIND: `127.0.0.1:${await freePort()}`,
-      LL_SEGMENT_BACKEND: 's3',
+      AELIO_ALLOW_INSECURE_OPEN: '1',
+      AELIO_DATA_DIR: join(tmp, 'bad'),
+      AELIO_RUNTIME_BIND: `127.0.0.1:${await freePort()}`,
+      AELIO_DB_SEGMENT_BACKEND: 's3',
       // deliberately no bucket
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -183,7 +185,7 @@ async function main() {
   if (badCode === 0) fail('s3 without bucket should fail to start');
   ok(`s3 without bucket refused to start (exit ${badCode})`);
 
-  console.log(`\n✓ All ${passed} ll-server segment-storage smoke checks passed.`);
+  console.log(`\n✓ All ${passed} aelio-server segment-storage smoke checks passed.`);
   cleanup(0);
 }
 

@@ -1,58 +1,31 @@
 import type {
   ConvoxMessageStore,
-  ConvoxMemoryStore,
-  ConvoxSessionStore,
   ConvoxCustomerStore,
   ConvoxJobStore,
-  ConvoxResponseCacheStore,
-  ConvoxFunctionCallStore,
-  ConvoxReflectionStore,
-  ConvoxProactiveStore,
   ConvoxInboundDedupStore,
   ConvoxMagicLinkStore,
   ConvoxSdkConnectionStore,
-  ImmediateContextEngine,
-  SemanticPathwayEngine,
-  ArchetypeEngine,
-  ConvoxAxisStore,
-  HarnessTracer,
-  LighthouseService,
-  SuspensionStore,
 } from '@aelio/core';
 import type { LLMProvider } from '@aelio/llm';
 import type { WhatsAppSender } from '@aelio/channels';
-import type { SunjetClient } from '@aelio/sunjet-client';
+import type { AelioDbClient } from '@aelio/db-client';
 import type { AelioConfig } from './config.js';
 import type { ServerSdkBridge } from './sdk-bridge.js';
+import type { AelioRuntimeClient } from './aelio-runtime-client.js';
 
-/** Sunjet-only runtime: every store is backed by Astrolobe — there is no SQLite fallback. */
+/** All persistent stores are backed by the Rust Aelio database; there is no SQLite fallback. */
 export type RuntimeDeps = {
   config: AelioConfig;
   llm: LLMProvider;
   sdkBridge: ServerSdkBridge;
-  lighthouse: LighthouseService;
-  tracer: HarnessTracer | null;
-  suspensionStore: SuspensionStore;
+  /** Authoritative Rust execution service; TypeScript has no turn-execution fallback. */
+  aelioRuntime: AelioRuntimeClient;
   whatsappSender: WhatsAppSender | null;
-  sunjetClient: SunjetClient;
+  aelioDbClient: AelioDbClient;
   messageStore: ConvoxMessageStore;
-  memoryStore: ConvoxMemoryStore;
-  sessionStore: ConvoxSessionStore;
   customerStore: ConvoxCustomerStore;
   jobStore: ConvoxJobStore;
-  responseCacheStore: ConvoxResponseCacheStore;
-  functionCallStore: ConvoxFunctionCallStore;
-  reflectionStore: ConvoxReflectionStore;
-  proactiveStore: ConvoxProactiveStore;
   inboundDedupStore: ConvoxInboundDedupStore;
   magicLinkStore: ConvoxMagicLinkStore;
   sdkConnectionStore: ConvoxSdkConnectionStore;
-  /** Immediate Context Engine — time-bucketed short-term context per customer. */
-  contextEngine: ImmediateContextEngine;
-  /** One-vector semantic decision engine for every incoming message. */
-  pathwayEngine: SemanticPathwayEngine;
-  /** Archetype valence engine — infers conversational stance for prompt tone shaping. */
-  archetypeEngine: ArchetypeEngine;
-  /** Harness Axis store — user-specific occurrence chains per aspect. */
-  axisStore: ConvoxAxisStore;
 };

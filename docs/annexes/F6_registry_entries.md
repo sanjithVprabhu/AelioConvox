@@ -40,12 +40,12 @@
  "policy_tags":["state.read"],"tenant_scope":"tenant","origin":"tenant"}
 ```
 
-### io `sunjet.query`
+### io `aelio-db.query`
 ```json
-{"id":"sunjet.query","version":"1","class":"io","effect_class":"read",
+{"id":"aelio-db.query","version":"1","class":"io","effect_class":"read",
  "input_imprint":"query_ast@1","output_imprint":"query_result@1",
  "boundedness":{"kind":"deadline_compliant","max_ms":10000},
- "policy_tags":["sunjet.read"],"tenant_scope":"tenant","origin":"vendor"}
+ "policy_tags":["aelio-db.read"],"tenant_scope":"tenant","origin":"vendor"}
 ```
 
 ### tool

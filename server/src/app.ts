@@ -2,15 +2,7 @@ import { MetaWhatsAppSender, MockWhatsAppSender } from '@aelio/channels';
 import { createLLMProviderChain, createEmbeddingProvider, type LLMProviderConfig } from '@aelio/llm';
 import {
   configureEmbedder,
-  createImmediateContextEngine,
-  createSemanticPathwayEngine,
-  createArchetypeEngine,
-  seedBuiltinArchetypes,
-  DEFAULT_ARCHETYPES,
   createInstrumentedLlm,
-  HarnessTracer,
-  LighthouseService,
-  SuspensionStore,
 } from '@aelio/core';
 import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
@@ -26,13 +18,17 @@ import { registerWidgetRoutes } from './routes/widget.js';
 import { registerProactiveRoutes } from './routes/proactive.js';
 import { registerTelemetryRoutes } from './routes/telemetry.js';
 import { registerAdminDbRoutes } from './routes/admin-db.js';
+import { registerAelioHostRoutes } from './routes/aelio-host.js';
+import { registerAelioGatewayRoutes } from './routes/aelio-gateway.js';
 import type { RuntimeDeps } from './runtime-deps.js';
 import { ServerSdkBridge } from './sdk-bridge.js';
-import { initSunjet } from './sunjet.js';
+import { initAelioDb } from './aelio-db.js';
 import { startBackupWorker } from './workers/backup.js';
-import { startDaemonWorker } from './workers/daemon.js';
+import { startAelioJobWorker } from './workers/aelio-jobs.js';
 import { startInboundWorker } from './workers/inbound.js';
 import { startOutboundWorker } from './workers/outbound.js';
+import { AelioRuntimeClient } from './aelio-runtime-client.js';
+import { buildAgentCatalog } from './aelio-agent-catalog.js';
 
 /** Providers that don't need an API key (they run locally / are test doubles). */
 const KEYLESS_PROVIDERS = new Set(['mock', 'ollama']);
@@ -96,18 +92,42 @@ export async function createApp(config: AelioConfig) {
       model: config.embeddings.model,
       apiKey: config.embeddings.api_key,
       baseUrl: config.embeddings.base_url,
-      outputDimension: config.embeddings.output_dimension ?? config.sunjet.embed_dim,
+      outputDimension: config.embeddings.output_dimension ?? config.aelioDb.embed_dim,
+      timeoutMs: config.embeddings.timeout_ms,
     });
     configureEmbedder((text) => embeddingProvider.embed(text));
+  } else {
+    // createApp is also used repeatedly in tests. Do not retain a provider from
+    // an earlier app instance through the process-global embedder hook.
+    configureEmbedder(null);
   }
 
-  // Aelio is Sunjet-only: every Convox store (messages, memories, sessions,
-  // customers, jobs, ledger, etc.) lives on Sunjet/Astrolobe. There is no
-  // SQLite fallback — a Sunjet outage at boot is fatal, not degraded service.
-  config.sunjet.enabled = true;
-  const sunjet = await initSunjet(config);
+  // Every Convox store lives in the Rust Aelio database. There is no SQLite
+  // fallback: database unavailability at boot is fatal.
+  config.aelioDb.enabled = true;
+  const aelioDb = await initAelioDb(config);
 
-  const sdkBridge = new ServerSdkBridge(sunjet.sdkConnectionStore);
+  const sdkBridge = new ServerSdkBridge(aelioDb.sdkConnectionStore);
+  const runtimeUrl = process.env.AELIO_RUST_RUNTIME_URL;
+  const runtimeToken = process.env.AELIO_RUNTIME_TOKEN;
+  if (!runtimeUrl || !runtimeToken) {
+    throw new Error(
+      'AELIO_RUST_RUNTIME_URL and AELIO_RUNTIME_TOKEN are required; TypeScript is not an execution authority',
+    );
+  }
+  const aelioRuntime = new AelioRuntimeClient(runtimeUrl, runtimeToken);
+  await aelioRuntime.ready();
+  await aelioRuntime.pushAgentCatalog(buildAgentCatalog(config.name, {
+    type: 'register',
+    sdkVersion: 'server-bootstrap',
+    language: 'node',
+    functions: [],
+    states: [],
+    policies: [],
+    flows: [],
+    persona: config.llm.system_prompt,
+    productBrief: `Aelio tenant ${config.name}`,
+  }, { memoryEnabled: config.memory.enabled }));
 
   const whatsapp = config.channels.whatsapp;
   // provider: 'sdk' means the dev delivers outbound themselves via onSend, so we
@@ -124,91 +144,19 @@ export async function createApp(config: AelioConfig) {
             })
           : new MockWhatsAppSender();
 
-  // Lighthouse: the harness's read model over the SDK registry. Registry
-  // changes re-hash immediately; the Sunjet mirror resyncs in the background,
-  // keyed by that hash.
-  const lighthouse = new LighthouseService({
-    bridge: sdkBridge,
-    tenant: config.name,
-    sunjet: {
-      client: sunjet.client,
-      toolsTable: sunjet.tables.harnessTools,
-      capabilitiesTable: sunjet.tables.harnessCapabilities,
-      embedDim: sunjet.embedDim,
-    },
-  });
-  sdkBridge.onRegistryChange(() => lighthouse.refresh());
-
-  // Harness trace firehose — Sunjet-only, lossy-tolerant.
-  const tracer = new HarnessTracer({
-    client: sunjet.client,
-    table: sunjet.tables.harnessTraces,
-    tenant: config.name,
-    embedDim: sunjet.embedDim,
-  });
-
-  // Suspended-plan store: Sunjet is the sole source of truth (see SuspensionStore docs).
-  const suspensionStore = new SuspensionStore({
-    sunjet: { client: sunjet.client, table: sunjet.tables.harnessSuspensions, tenant: config.name },
-  });
-
-  // Immediate Context Engine: time-bucketed short-term context per customer
-  // (hot 5-min window cached in-process, older windows compacted into Sunjet).
-  const contextEngine = createImmediateContextEngine({
-    storage: sunjet.storageConfig,
-    llm,
-    model: config.llm.model,
-  });
-  const pathwayEngine = createSemanticPathwayEngine({
-    memoryStore: sunjet.memoryStore,
-  });
-
-  // Archetype valence engine + self-learning aspect taxonomy. The mother
-  // collection (aspectStore) registers the "things" we track; each owns a
-  // pos/neu/neg bucket set. Seed the builtin aspects once (a tenant can add its
-  // own); seeding is best-effort so a slow/unavailable embedder never blocks
-  // startup. Discovery of new aspects happens post-turn via engine.learn().
-  const archetypeEngine = createArchetypeEngine({
-    store: sunjet.archetypeStore,
-    aspectStore: sunjet.aspectStore,
-  });
-  void seedBuiltinArchetypes(sunjet.aspectStore, sunjet.archetypeStore, DEFAULT_ARCHETYPES)
-    .then((count) => {
-      if (count > 0) {
-        console.log(`[aelio] seeded ${count} builtin aspects with valence buckets`);
-      }
-    })
-    .catch((error) => {
-      console.warn(
-        `[aelio] archetype seeding skipped: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
-
   const deps: RuntimeDeps = {
     config,
     llm,
     sdkBridge,
-    lighthouse,
-    tracer,
-    suspensionStore,
+    aelioRuntime,
     whatsappSender,
-    sunjetClient: sunjet.client,
-    messageStore: sunjet.messageStore,
-    memoryStore: sunjet.memoryStore,
-    sessionStore: sunjet.sessionStore,
-    customerStore: sunjet.customerStore,
-    jobStore: sunjet.jobStore,
-    responseCacheStore: sunjet.responseCacheStore,
-    functionCallStore: sunjet.functionCallStore,
-    reflectionStore: sunjet.reflectionStore,
-    proactiveStore: sunjet.proactiveStore,
-    inboundDedupStore: sunjet.inboundDedupStore,
-    magicLinkStore: sunjet.magicLinkStore,
-    sdkConnectionStore: sunjet.sdkConnectionStore,
-    contextEngine,
-    pathwayEngine,
-    archetypeEngine,
-    axisStore: sunjet.axisStore,
+    aelioDbClient: aelioDb.client,
+    messageStore: aelioDb.messageStore,
+    customerStore: aelioDb.customerStore,
+    jobStore: aelioDb.jobStore,
+    inboundDedupStore: aelioDb.inboundDedupStore,
+    magicLinkStore: aelioDb.magicLinkStore,
+    sdkConnectionStore: aelioDb.sdkConnectionStore,
   };
 
   const app = Fastify({
@@ -241,6 +189,8 @@ export async function createApp(config: AelioConfig) {
 
   await app.register(websocket);
   await registerHealthRoutes(app, deps);
+  await registerAelioHostRoutes(app, deps);
+  await registerAelioGatewayRoutes(app, deps);
   await registerSdkRoutes(app, deps);
   await registerAuthRoutes(app, deps);
   await registerWidgetRoutes(app, deps);
@@ -255,16 +205,16 @@ export async function createApp(config: AelioConfig) {
     decorateReply: false,
   });
 
-  const stopInbound = startInboundWorker(deps);
-  const stopOutbound = startOutboundWorker(deps);
+  const stopInbound = startInboundWorker(deps, app.log);
+  const stopOutbound = startOutboundWorker(deps, app.log);
   const stopBackup = startBackupWorker(deps);
-  const stopDaemon = startDaemonWorker(deps);
+  const stopAelioJobs = startAelioJobWorker(deps, app.log);
 
   app.addHook('onClose', async () => {
     stopInbound();
     stopOutbound();
     stopBackup();
-    stopDaemon();
+    stopAelioJobs();
     sdkBridge.shutdown();
   });
 

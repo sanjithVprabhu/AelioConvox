@@ -1,6 +1,6 @@
 # Aelio-Convox — Bug List & Fix Tracker
 
-> **Last updated:** 2026-07-10  
+> **Last updated:** 2026-07-10
 > **Purpose:** Track open bugs, security issues, and improvement items for end-to-end system fixes.
 
 Use this file alongside [fix-log.md](./fix-log.md) (already-fixed bugs) and [project-documentation.md](./project-documentation.md) (architecture reference).
@@ -136,7 +136,7 @@ Full details: [fix-log.md](./fix-log.md#pass-2-audit-fixes-2026-07-09).
 | BUG-017 | Widget exponential-backoff reconnect | P2 |
 | BUG-018 | Widget Confirm/Cancel buttons for write actions | P2 |
 | BUG-019 | SDK README uses `AELIO_SDK_SECRET` | P3 |
-| BUG-020 | README monorepo layout includes channels + sunjet-client | P3 |
+| BUG-020 | README monorepo layout includes channels + aelio-db-client | P3 |
 | BUG-021 | MANUAL.md endpoint table complete | P3 |
 | BUG-022 | Phase 6 in `test:all` + diagnostic | P3 |
 | BUG-023 | Removed duplicate `e2e-widget-test.mjs` | P3 |
@@ -163,7 +163,7 @@ Full details: [fix-log.md](./fix-log.md#pass-2-audit-fixes-2026-07-09).
 | `destructive` safety mode blocked from chat | By design — requires admin channel in future version |
 | Proactive messaging off by default | Opt-in feature, not core path |
 | Reflection daemon off by default | Opt-in feature, not core path |
-| Sunjet off by default | Optional archival layer |
+| Aelio DB off by default | Optional archival layer |
 | Response cache off by default | Opt-in optimization |
 | Python SDK minimal (no lifecycle, no onSend) | V1 scope — Node SDK is primary |
 | SDK secret in URL query param (deprecated) | Backward compat — will remove in V2 |

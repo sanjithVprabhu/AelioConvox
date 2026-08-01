@@ -10,7 +10,7 @@ llm:
   api_key: ${OPENAI_API_KEY}
   max_tokens: 4096
 
-# Real vectors for Sunjet semantic search (must match sunjet.embed_dim).
+# Real vectors for AelioDb semantic search (must match aelioDb.embed_dim).
 # Override: AELIO_EMBEDDINGS_PROVIDER=openai|hash|gemini|anthropic|ollama
 embeddings:
   provider: openai
@@ -53,12 +53,11 @@ memory:
   enabled: true
   recall_limit: 5
 
-# Astrolobe is the sole message/state store (see docker entrypoint) — Aelio is
-# Sunjet-only and has no SQLite fallback.
-sunjet:
+# The authoritative Rust Aelio server owns all message/state storage.
+aelioDb:
   enabled: true
-  url: http://127.0.0.1:8080
-  api_key: ${SUNJET_API_KEY}
+  url: http://127.0.0.1:8090
+  api_key: ${DB_API_KEY}
   embed_dim: 1536
   segment_storage:
     backend: local

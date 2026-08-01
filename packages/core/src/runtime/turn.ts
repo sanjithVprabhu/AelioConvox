@@ -82,11 +82,11 @@ import { runToolLoop } from './tool-loop.js';
 import { runHarness } from '../harness/index.js';
 import type { HarnessBindingConfig, HarnessBudgets } from '../harness/schema.js';
 import type { HarnessTracer } from '../harness/traces.js';
-import type { LedgerSunjetConfig } from '../harness/ledger.js';
+import type { LedgerAelioDbConfig } from '../harness/ledger.js';
 import type { BindingCacheConfig } from '../harness/binder.js';
 import type { SuspensionStore } from '../harness/suspension.js';
 import type { LighthouseService } from '../lighthouse/index.js';
-import { runWithTurnContext, type TurnApiCallsSunjetConfig } from '../telemetry/turn-calls.js';
+import { runWithTurnContext, type TurnApiCallsAelioDbConfig } from '../telemetry/turn-calls.js';
 
 export type ProcessTurnResult = {
   reply: string;
@@ -113,17 +113,17 @@ export type ProcessTurnInput = {
   memoryEnabled?: boolean;
   cache?: ResponseCacheConfig;
   intent?: IntentStackConfig;
-  /** Sunjet message store — required. */
+  /** AelioDb message store — required. */
   messageStore: ConvoxMessageStore;
-  /** Long-term semantic memory (Sunjet/Astrolobe VSS). Required when `memoryEnabled` is true. */
+  /** Long-term semantic memory (Aelio DB VSS). Required when `memoryEnabled` is true. */
   memoryStore?: ConvoxMemoryStore;
-  /** Sunjet session store — required. */
+  /** AelioDb session store — required. */
   sessionStore: ConvoxSessionStore;
-  /** Sunjet customer store — required. */
+  /** AelioDb customer store — required. */
   customerStore: ConvoxCustomerStore;
-  /** Sunjet response cache store — required when `cache.enabled` is true. */
+  /** AelioDb response cache store — required when `cache.enabled` is true. */
   responseCacheStore?: ConvoxResponseCacheStore;
-  /** Sunjet function-call audit store — required for tool-call logging. */
+  /** AelioDb function-call audit store — required for tool-call logging. */
   functionCallStore: ConvoxFunctionCallStore;
   /** Config-level persona override (SDK-registered persona wins when present). */
   persona?: string | null;
@@ -136,12 +136,12 @@ export type ProcessTurnInput = {
   lighthouse?: LighthouseService;
   tracer?: HarnessTracer;
   suspensionStore?: SuspensionStore;
-  /** The harness idempotency ledger reads/writes Sunjet exclusively. Required when the harness is enabled. */
-  ledgerSunjet?: LedgerSunjetConfig;
-  /** When present, instruction→tool bindings are cached in Sunjet. */
+  /** The harness idempotency ledger reads/writes AelioDb exclusively. Required when the harness is enabled. */
+  ledgerAelioDb?: LedgerAelioDbConfig;
+  /** When present, instruction→tool bindings are cached in AelioDb. */
   bindingCache?: BindingCacheConfig;
-  /** When present, per-turn API call telemetry writes to Sunjet exclusively. */
-  turnApiCallsSunjet?: TurnApiCallsSunjetConfig;
+  /** When present, per-turn API call telemetry writes to AelioDb exclusively. */
+  turnApiCallsAelioDb?: TurnApiCallsAelioDbConfig;
   /** Immediate Context Engine — time-bucketed short-term context fed into the system prompt. */
   contextEngine?: ImmediateContextEngine;
   /** One-embedding semantic router for intent, memory, flow, policy and tool selection. */
@@ -209,7 +209,7 @@ async function loadTurnSnapshot(
   return { intentStack, lifecycle, presentFields };
 }
 
-/** Persist a turn message. `messageStore` (Sunjet) is the sole store for conversation content. */
+/** Persist a turn message. `messageStore` (AelioDb) is the sole store for conversation content. */
 async function persistMessage(input: ProcessTurnInput, message: PersistMessageInput): Promise<void> {
   await input.messageStore.appendMessage({
     ...message,
@@ -239,25 +239,25 @@ before any write executes, so a second confirmation question from you is redunda
 
 function assertRequiredStores(input: ProcessTurnInput): void {
   if (!input.messageStore) {
-    throw new Error('Sunjet messageStore is required');
+    throw new Error('AelioDb messageStore is required');
   }
   if (!input.sessionStore) {
-    throw new Error('Sunjet sessionStore is required');
+    throw new Error('AelioDb sessionStore is required');
   }
   if (!input.customerStore) {
-    throw new Error('Sunjet customerStore is required');
+    throw new Error('AelioDb customerStore is required');
   }
   if (!input.functionCallStore) {
-    throw new Error('Sunjet functionCallStore is required');
+    throw new Error('AelioDb functionCallStore is required');
   }
   if (input.memoryEnabled !== false && !input.memoryStore) {
-    throw new Error('Sunjet memoryStore is required when memoryEnabled is true');
+    throw new Error('AelioDb memoryStore is required when memoryEnabled is true');
   }
   if (input.cache?.enabled && !input.responseCacheStore) {
-    throw new Error('Sunjet responseCacheStore is required when cache.enabled is true');
+    throw new Error('AelioDb responseCacheStore is required when cache.enabled is true');
   }
-  if (input.harness?.enabled && !input.ledgerSunjet) {
-    throw new Error('Sunjet ledgerSunjet config is required when harness.enabled is true');
+  if (input.harness?.enabled && !input.ledgerAelioDb) {
+    throw new Error('AelioDb ledgerAelioDb config is required when harness.enabled is true');
   }
 }
 
@@ -309,7 +309,7 @@ async function processTurnLocked(
       turnId,
       sessionId: session.id,
       customerId,
-      sunjet: input.turnApiCallsSunjet,
+      aelioDb: input.turnApiCallsAelioDb,
     },
     async () => executeTurn(input, {
       externalId,
@@ -429,7 +429,7 @@ async function executeTurn(
 
   // A plan parked awaiting this customer's input (or a recoil intent collecting
   // a value) means even a contentless-looking message is an answer — both the
-  // generic gate and the response cache must stand aside for it. The Sunjet
+  // generic gate and the response cache must stand aside for it. The AelioDb
   // probe is lazy and shared, so the default path (no gate match, cache off)
   // pays no extra read.
   let parkedPlanProbe: Promise<boolean> | undefined;
@@ -812,7 +812,7 @@ async function executeTurn(
         budgets: input.harness.budgets,
         binding: input.harness.binding,
         turnId,
-        ledgerSunjet: input.ledgerSunjet!,
+        ledgerAelioDb: input.ledgerAelioDb!,
         bindingCache: input.bindingCache,
         customerStore: input.customerStore,
       })

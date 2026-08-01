@@ -29,6 +29,8 @@ class FunctionSchema:
     params: Dict[str, Any]
     safety: str
     intent: Optional[str] = None
+    output: Optional[Dict[str, Dict[str, Any]]] = None
+    output_role: Optional[str] = None
 
 
 @dataclass
@@ -44,6 +46,7 @@ class StateSchema:
 class PolicySchema:
     description: str
     severity: str = "soft"
+    aelio: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -102,8 +105,16 @@ class Aelio:
             transitions=transitions,
         )
 
-    def policy(self, policy_id: str, description: str, severity: str = "soft") -> None:
-        self.policies[policy_id] = PolicySchema(description=description, severity=severity)
+    def policy(
+        self,
+        policy_id: str,
+        description: str,
+        severity: str = "soft",
+        aelio: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.policies[policy_id] = PolicySchema(
+            description=description, severity=severity, aelio=aelio
+        )
 
     def flow(self, flow_id: str, state: str, description: str, steps: Dict[str, Dict[str, Any]]) -> None:
         self.flows[flow_id] = FlowSchema(state=state, description=description, steps=steps)
@@ -120,23 +131,6 @@ class Aelio:
             payload["reason"] = reason
         await self._send(payload)
 
-    async def set_flow_progress(
-        self,
-        customer_id: str,
-        flow_id: str,
-        step_index: int,
-        completed_steps: Optional[List[str]] = None,
-    ) -> None:
-        payload: Dict[str, Any] = {
-            "type": "set_flow_progress",
-            "customerId": customer_id,
-            "flowId": flow_id,
-            "stepIndex": step_index,
-        }
-        if completed_steps is not None:
-            payload["completedSteps"] = completed_steps
-        await self._send(payload)
-
     def expose(
         self,
         name: str,
@@ -144,12 +138,19 @@ class Aelio:
         params: Dict[str, Any],
         safety: str,
         intent: Optional[str] = None,
+        output: Optional[Dict[str, Dict[str, Any]]] = None,
+        output_role: Optional[str] = None,
     ):
         def decorator(func: Handler):
             self.handlers[name] = (
                 func,
                 FunctionSchema(
-                    description=description, params=params, safety=safety, intent=intent
+                    description=description,
+                    params=params,
+                    safety=safety,
+                    intent=intent,
+                    output=output,
+                    output_role=output_role,
                 ),
             )
             return func
@@ -201,6 +202,8 @@ class Aelio:
                 "params": schema.params,
                 "safety": schema.safety,
                 **({"intent": schema.intent} if schema.intent else {}),
+                **({"output": schema.output} if schema.output else {}),
+                **({"outputRole": schema.output_role} if schema.output_role else {}),
             }
             for name, (_, schema) in self.handlers.items()
         ]
@@ -221,6 +224,7 @@ class Aelio:
                 "id": policy_id,
                 "description": schema.description,
                 "severity": schema.severity,
+                **({"aelio": schema.aelio} if schema.aelio is not None else {}),
             }
             for policy_id, schema in self.policies.items()
         ]

@@ -1,10 +1,10 @@
 # Aelio L1 — Normative Abilities Glossary
 
-**Status:** normative living contract (v0.1)  
-**OS role:** system services ([`AELIO_AGENT_OS.md`](./AELIO_AGENT_OS.md))  
-**Built on:** L0 only via Op trees + `Call{id}` ([`AELIO_L0_GLOSSARY.md`](./AELIO_L0_GLOSSARY.md))  
-**Supersedes for L1 decisions:** `aelio_dsl_dictionary.md` §4 where this doc conflicts  
-**Rust:** `Sunjet/Astrolobe/crates/aelio/src/abilities/`
+**Status:** normative living contract (v0.1)
+**OS role:** system services ([`AELIO_AGENT_OS.md`](./AELIO_AGENT_OS.md))
+**Built on:** L0 only via Op trees + `Call{id}` ([`AELIO_L0_GLOSSARY.md`](./AELIO_L0_GLOSSARY.md))
+**Supersedes for L1 decisions:** `aelio_dsl_dictionary.md` §4 where this doc conflicts
+**Rust:** `aelio-os/crates/aelio/src/abilities/`
 
 ---
 
@@ -73,7 +73,7 @@
 
 ## 3. Recall — filesystem read API
 
-**OS role:** Retrieve evidence from Sunjet spaces. Does not choose the turn path (Learn does).
+**OS role:** Retrieve evidence from Aelio DB spaces. Does not choose the turn path (Learn does).
 
 | Ability | Contract | Sub | Decision | Status |
 |---|---|---|---|---|
@@ -304,7 +304,7 @@ All families above are expressible as **L0 trees + Calls** under the frozen L0 g
 
 ## 17. Change control
 
-1. New L1 ability: OS role + contract + substrate + status row in this file.  
-2. Effectful abilities must declare Policy interaction.  
-3. Learning abilities must declare promote/demote asymmetry.  
+1. New L1 ability: OS role + contract + substrate + status row in this file.
+2. Effectful abilities must declare Policy interaction.
+3. Learning abilities must declare promote/demote asymmetry.
 4. Code cites ids like `L1.Recall.Semantic`, `L1.Learn.Promote`.

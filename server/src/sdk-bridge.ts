@@ -41,11 +41,13 @@ export class ServerSdkBridge implements SdkBridge {
   private readonly connections = new Map<string, ActiveConnection>();
   private readonly pendingInvokes = new Map<string, PendingInvoke>();
   private readonly registryListeners = new Set<() => void>();
+  private readonly correlatedInvokes = new Map<string, Promise<SdkInvokeResult>>();
+  private readonly completedInvokes = new Map<string, { at: number; result: SdkInvokeResult }>();
 
   constructor(private readonly sdkConnectionStore: ConvoxSdkConnectionStore) {
     // Prune stale rows from prior boots instead of wiping the whole table.
     void this.sdkConnectionStore.pruneStale(Date.now() - 2 * 60_000).catch((error) => {
-      console.error('[aelio] Sunjet sdk_connections prune failed:', error);
+      console.error('[aelio] AelioDb sdk_connections prune failed:', error);
     });
   }
 
@@ -99,7 +101,7 @@ export class ServerSdkBridge implements SdkBridge {
   unregister(connectionId: string): void {
     this.connections.delete(connectionId);
     void this.sdkConnectionStore.remove(connectionId).catch((error) => {
-      console.error('[aelio] Sunjet sdk_connections remove failed:', error);
+      console.error('[aelio] AelioDb sdk_connections remove failed:', error);
     });
     this.notifyRegistryChange();
   }
@@ -162,7 +164,7 @@ export class ServerSdkBridge implements SdkBridge {
         functions: connection.functions as unknown as Array<Record<string, unknown>>,
       })
       .catch((error) => {
-        console.error('[aelio] Sunjet sdk_connections upsert failed:', error);
+        console.error('[aelio] AelioDb sdk_connections upsert failed:', error);
       });
   }
 
@@ -304,6 +306,49 @@ export class ServerSdkBridge implements SdkBridge {
     args: Record<string, unknown>,
     context: InvocationContext,
   ): Promise<SdkInvokeResult> {
+    return this.invokeCorrelated(functionName, args, context, randomUUID());
+  }
+
+  /**
+   * Invoke with the kernel-issued logical call identity. Concurrent/retried deliveries join the
+   * same promise and completed results are replayed from a bounded cache.
+   */
+  async invokeCorrelated(
+    functionName: string,
+    args: Record<string, unknown>,
+    context: InvocationContext,
+    correlationId: string,
+  ): Promise<SdkInvokeResult> {
+    const now = Date.now();
+    for (const [id, entry] of this.completedInvokes) {
+      if (now - entry.at > 10 * 60_000) this.completedInvokes.delete(id);
+    }
+    const completed = this.completedInvokes.get(correlationId);
+    if (completed) return completed.result;
+    const active = this.correlatedInvokes.get(correlationId);
+    if (active) return active;
+
+    const invocation = this.invokeOnce(functionName, args, context, correlationId);
+    this.correlatedInvokes.set(correlationId, invocation);
+    try {
+      const result = await invocation;
+      if (this.completedInvokes.size >= 10_000) {
+        const oldest = this.completedInvokes.keys().next().value;
+        if (oldest) this.completedInvokes.delete(oldest);
+      }
+      this.completedInvokes.set(correlationId, { at: Date.now(), result });
+      return result;
+    } finally {
+      this.correlatedInvokes.delete(correlationId);
+    }
+  }
+
+  private async invokeOnce(
+    functionName: string,
+    args: Record<string, unknown>,
+    context: InvocationContext,
+    id: string,
+  ): Promise<SdkInvokeResult> {
     const connection = [...this.registeredConnections()]
       .filter((entry) => entry.functions.some((fn) => fn.name === functionName))
       .sort((a, b) => b.lastHeartbeatAt - a.lastHeartbeatAt)[0];
@@ -316,7 +361,6 @@ export class ServerSdkBridge implements SdkBridge {
       };
     }
 
-    const id = randomUUID();
     const invokeMessage: InvokeMessage = {
       type: 'invoke',
       id,

@@ -1,19 +1,19 @@
 # Sol Conversion Theory — Worked Test
 
-**Status:** theory test (v0.1)  
-**Claim:** KV Sol bag + pointed ops + Sunjet conversion graph + LLM only to install new edges.
+**Status:** theory test (v0.1)
+**Claim:** KV Sol bag + pointed ops + Aelio DB conversion graph + LLM only to install new edges.
 
 ---
 
 ## Setup
 
-**Working memory:** Sol Contract (KV bag).  
-**Ops:** FixedEmit (`Const`) vs Transform (`Add` via Call / L0-B).  
-**Bridge:** converter Sol_A → Sol_B, stored as a **graph edge** in Sunjet when promoted.
+**Working memory:** Sol Contract (KV bag).
+**Ops:** FixedEmit (`Const`) vs Transform (`Add` via Call / L0-B).
+**Bridge:** converter Sol_A → Sol_B, stored as a **graph edge** in Aelio DB when promoted.
 
 ---
 
-## Run 1 — cold path (no converter in Sunjet yet)
+## Run 1 — cold path (no converter in Aelio DB yet)
 
 ### Step 1 — Fixed emit
 
@@ -42,7 +42,7 @@ Interpreter: Sol_A has `age`, not `years_lived` → **shape mismatch**.
 ### Step 3 — Lookup conversion graph
 
 ```text
-Sunjet query: edge?
+Aelio DB query: edge?
   from_imprint: person.raw.v1
   to_imprint:   person.norm.v1
   OR field map: age → years_lived
@@ -63,7 +63,7 @@ Proposed mapping (closed JSON):
 }
 ```
 
-**Typecheck:** Int→Int OK → **Promote** to Sunjet as graph edge (not re-ask next boot).
+**Typecheck:** Int→Int OK → **Promote** to Aelio DB as graph edge (not re-ask next boot).
 
 ### Step 5 — Apply converter
 
@@ -89,8 +89,8 @@ Sol_A  --convert-->  Sol_B
 Add(2, years_lived, scope=this)
 ```
 
-Digest: read `body.years_lived` → 34  
-Execute: 34 + 2 → 36  
+Digest: read `body.years_lived` → 34
+Execute: 34 + 2 → 36
 Emit:
 
 ```json
@@ -107,7 +107,7 @@ Emit:
 
 ---
 
-## Run 2 — warm path (edge already in Sunjet)
+## Run 2 — warm path (edge already in Aelio DB)
 
 Same DSL. Step 3 **HIT** on graph → skip LLM → convert → Add → `{ years_lived: 36 }`.
 
@@ -115,7 +115,7 @@ That is the theory: **LLM installs; graph reuses.**
 
 ---
 
-## What is stored in Sunjet (conversion edge)
+## What is stored in Aelio DB (conversion edge)
 
 Conceptual row / graph record:
 
@@ -173,4 +173,4 @@ Seq [
 ]
 ```
 
-`Sol.Convert` = registry Call that **loads promoted rules from Sunjet** (LLM only inside Propose when miss).
+`Sol.Convert` = registry Call that **loads promoted rules from Aelio DB** (LLM only inside Propose when miss).

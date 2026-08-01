@@ -1,4 +1,4 @@
-export { bootstrapSunjetTables } from './bootstrap.js';
+export { bootstrapAelioDbTables } from './bootstrap.js';
 export {
   buildConversationContext,
   resolveActiveFlowContext,
@@ -90,7 +90,7 @@ export {
 export type {
   MessageStoreAppendInput,
   MessageStoreHistoryRow,
-  SunjetStorageConfig,
-  SunjetTableNames,
+  AelioDbStorageConfig,
+  AelioDbTableNames,
 } from './types.js';
 export type { MemoryStoreWriteInput, MemoryRecallHit } from './memories.js';

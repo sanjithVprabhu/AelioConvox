@@ -13,7 +13,4 @@ lldata
 *.db-shm
 *.db-wal
 target
-Sunjet/Astrolobe/target
-Sunjet/Astrolobe/frontend
-Sunjet/Astrolobe/llcloud
 *.tgz

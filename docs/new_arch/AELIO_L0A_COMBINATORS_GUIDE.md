@@ -5,7 +5,7 @@ A learning wrap-up of the S0-A combinator layer: what each Op does, when to use 
 Companion sources:
 
 - Design dictionary: `docs/new_arch/aelio_dsl_dictionary.md` §1
-- Rust evaluator: `Sunjet/Astrolobe/crates/aelio/src/ops/combinators.rs`
+- Rust evaluator: `aelio-os/crates/aelio/src/ops/combinators.rs`
 - Wrong-OTP fix proposal (related to `Try`): `docs/new_arch/FIX_WRONG_OTP_SIGMISMATCH.md`
 
 ---
@@ -217,7 +217,7 @@ Order is cost-ascending. Budget stops A+B+C from blowing the turn envelope.
 6. Escalate    Fallback
 ```
 
-L0-A does **not** know phones, CRM, or embeddings.  
+L0-A does **not** know phones, CRM, or embeddings.
 Those arrive as **named Calls** into L0-B pure ops and L1 abilities.
 
 ---
@@ -226,16 +226,16 @@ Those arrive as **named Calls** into L0-B pure ops and L1 abilities.
 
 You are solid on L0-A if you can explain:
 
-1. Op vs Value vs eval  
-2. Why Const exists (uniform Op slots)  
-3. Seq threads; Branch arms see original input  
-4. Try vs Fallback vs Branch  
-5. Guard vs Branch  
-6. Once key design matters as much as Once itself  
-7. Park ≠ Sleep  
-8. Budget nests by min  
-9. Loop requires max_iter  
-10. Map/Filter require max_items and list input  
+1. Op vs Value vs eval
+2. Why Const exists (uniform Op slots)
+3. Seq threads; Branch arms see original input
+4. Try vs Fallback vs Branch
+5. Guard vs Branch
+6. Once key design matters as much as Once itself
+7. Park ≠ Sleep
+8. Budget nests by min
+9. Loop requires max_iter
+10. Map/Filter require max_items and list input
 
 ---
 

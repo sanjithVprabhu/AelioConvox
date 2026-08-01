@@ -8,8 +8,8 @@ and can be run with:
 pnpm test:scenarios
 ```
 
-The script starts a temporary Sunjet ll-server, uses the real `processTurn`
-runtime path, persists messages and traces into Sunjet, and validates both:
+The script starts a temporary Aelio DB ll-server, uses the real `processTurn`
+runtime path, persists messages and traces into Aelio DB, and validates both:
 
 - the assistant reply shape, and
 - the decision journal (`pathway`, `stance`, `prompt`, `reply`, `generic`,

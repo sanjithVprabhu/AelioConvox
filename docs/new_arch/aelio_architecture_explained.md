@@ -5,7 +5,7 @@ A narrative walkthrough of what we are building, why each piece exists, and exac
 Companion artifacts:
 - `aelio_dsl_dictionary.md` — the complete instruction set
 - `aelio_decision_ledger.md` — every decision with its rationale
-- `HARNESS_SUNJET_DATA_MODEL.md` — the storage spine
+- `HARNESS_AELIO_DB_DATA_MODEL.md` — the storage spine
 
 ---
 
@@ -962,7 +962,7 @@ Four, and they drive different executor behavior:
 ## 13.1 The storage principle
 
 ```
-Sunjet stores the durable truth, the fast search surfaces,
+Aelio DB stores the durable truth, the fast search surfaces,
 the graph continuity, and the audit trail.
 
 The harness decides what to write, what to retrieve,
@@ -973,13 +973,13 @@ The LLM only reasons over the already-selected contract.
 
 ## 13.2 Isolation
 
-**Per-tenant table names.** Sunjet's isolation unit is the table, so the tenant boundary becomes *structural* — you cannot leak by forgetting a filter, because the table name **is** the filter.
+**Per-tenant table names.** Aelio DB's isolation unit is the table, so the tenant boundary becomes *structural* — you cannot leak by forgetting a filter, because the table name **is** the filter.
 
 The cost: schema migration is now an N×26 operation, which is why a migration runner is required from day one. System-owned tables (the operation registry, prompt specs, system docs) stay shared and read-only to avoid N-way duplication. All of it resolves through one function, `resolveTable(tenant, logical_name)`, so the decision stays reversible.
 
 ## 13.3 The write path is a saga, not a transaction
 
-Sunjet exposes row-level mutations, no multi-row transaction. So a turn's writes are ordered, idempotent, and replayable:
+Aelio DB exposes row-level mutations, no multi-row transaction. So a turn's writes are ordered, idempotent, and replayable:
 
 ```
 1. deterministic turn_id and message_id
@@ -999,7 +999,7 @@ Every write is idempotent by logical key or content hash, linked to `turn_id`, s
 
 ## 13.4 Conditional write unblocks four races at once
 
-The one Sunjet feature that matters most is not transactions — it's compare-and-set:
+The one Aelio DB feature that matters most is not transactions — it's compare-and-set:
 
 ```
 insertRowIf(table, row, predicate)             // insert-if-absent
@@ -1182,8 +1182,8 @@ Carried forward. Not blocking, but each needs an answer during implementation.
 5. **Calibration harness** — every `⇄` pair needs empirical thresholds, per ability, per tenant.
 6. **Multi-clause conflict** — resolution order when split clauses contradict each other.
 7. **Exploration rate ε** — value, decay schedule, per-flow opt-out.
-8. **Deployment topology** — SDK push vs pull, scheduler placement, horizontal scale given a single-node Sunjet.
-9. **Whole-system failure** — the full degradation ladder when Sunjet, the model provider, or the tenant's API is down.
+8. **Deployment topology** — SDK push vs pull, scheduler placement, horizontal scale given a single-node Aelio DB.
+9. **Whole-system failure** — the full degradation ladder when Aelio DB, the model provider, or the tenant's API is down.
 10. **Deletion** — a user's turns, facts, entities, and embeddings are deletable; what about a procedure learned partly from their behavior?
 
 ---

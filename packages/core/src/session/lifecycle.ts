@@ -14,7 +14,7 @@ export type HistoryMessage = {
   content: string;
 };
 
-/** Resolve (or create) the customer behind a channel address. Sunjet `customerStore` is required. */
+/** Resolve (or create) the customer behind a channel address. AelioDb `customerStore` is required. */
 export async function ensureCustomer(
   externalId: string,
   channel: Channel,
@@ -22,7 +22,7 @@ export async function ensureCustomer(
   customerStore: ConvoxCustomerStore,
 ): Promise<string> {
   if (!customerStore) {
-    throw new Error('ensureCustomer requires a Sunjet customerStore');
+    throw new Error('ensureCustomer requires a AelioDb customerStore');
   }
   return customerStore.ensureCustomer(externalId, channel, channelAddress);
 }
@@ -34,7 +34,7 @@ export async function findOrCreateSession(
   sessionStore: ConvoxSessionStore,
 ): Promise<SessionRecord> {
   if (!sessionStore) {
-    throw new Error('findOrCreateSession requires a Sunjet sessionStore');
+    throw new Error('findOrCreateSession requires a AelioDb sessionStore');
   }
   const record = await sessionStore.findOrCreate(customerId, channel, idleTimeoutMinutes);
   return { id: record.id, customerId: record.customerId, channel: record.channel as Channel };
@@ -54,7 +54,7 @@ export async function appendMessage(
   sessionStore: ConvoxSessionStore,
 ): Promise<void> {
   if (!messageStore) {
-    throw new Error('appendMessage requires a Sunjet messageStore');
+    throw new Error('appendMessage requires a AelioDb messageStore');
   }
   await messageStore.appendMessage(input);
   await touchSessionActivity(input.sessionId, new Date(), sessionStore);
@@ -66,7 +66,7 @@ export async function touchSessionActivity(
   sessionStore: ConvoxSessionStore,
 ): Promise<void> {
   if (!sessionStore) {
-    throw new Error('touchSessionActivity requires a Sunjet sessionStore');
+    throw new Error('touchSessionActivity requires a AelioDb sessionStore');
   }
   await sessionStore.touchActivity(sessionId, at.getTime());
 }
@@ -77,7 +77,7 @@ export async function loadHistory(
   messageStore: ConvoxMessageStore,
 ): Promise<HistoryMessage[]> {
   if (!messageStore) {
-    throw new Error('loadHistory requires a Sunjet messageStore');
+    throw new Error('loadHistory requires a AelioDb messageStore');
   }
   return messageStore.loadHistory(sessionId, limit);
 }

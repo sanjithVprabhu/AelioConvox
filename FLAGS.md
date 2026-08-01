@@ -5,19 +5,19 @@ Findings, not failures. Format: `{id, section(s), what I found, options, recomme
 ---
 
 ### F-001 — Workspace location (repo layout) — `§29`
-**What:** The handoff says "use as repo `CLAUDE.md`" and names a fresh 8-crate Cargo workspace (`aelio-sol` … `aelio-cli`), but this monorepo already contains unrelated Rust (`Sunjet/Astrolobe/…`) and TS (`packages/`, `server/`). The mother doc does not pin a directory.
+**What:** The handoff says "use as repo `CLAUDE.md`" and names a fresh 8-crate Cargo workspace (`aelio-sol` … `aelio-cli`), but this monorepo already contains unrelated Rust (`Aelio DB/…`) and TS (`packages/`, `server/`). The mother doc does not pin a directory.
 **Options:** (a) new top-level dir `aelio-os/` with its own workspace `Cargo.toml`; (b) place crates under repo-root `crates/`; (c) separate repo.
-**Recommendation → (a) `aelio-os/`.** Clean separation from the legacy Astrolobe kernel, no workspace collision, easy to lift into its own repo later. `PROVISIONAL` — non-correctness; move is mechanical.
+**Recommendation → (a) `aelio-os/`.** Clean separation from the legacy Aelio DB kernel, no workspace collision, easy to lift into its own repo later. `PROVISIONAL` — non-correctness; move is mechanical.
 
 ### F-002 — Store backend for P0 — `§24`, `§29`, Decision Log (Part VIII)
-**What:** The doc commits Sunjet as *the* store and says `aelio-store` "keeps a trait boundary for test doubles only." P0's §30 list needs Once/CAS and persistence, but P0's definition of done (login golden flow, replay bit-identity) is expressible against an in-memory double.
-**Options:** (a) implement the `aelio-store` trait + in-memory double for all of P0, defer the Sunjet binding to when P1 storage lands; (b) bind Sunjet now.
-**Recommendation → (a).** P0 exit criteria (§30) are all in-memory-satisfiable; the trait keeps Sunjet a drop-in. `PROVISIONAL`.
+**What:** The doc commits Aelio DB as *the* store and says `aelio-store` "keeps a trait boundary for test doubles only." P0's §30 list needs Once/CAS and persistence, but P0's definition of done (login golden flow, replay bit-identity) is expressible against an in-memory double.
+**Options:** (a) implement the `aelio-store` trait + in-memory double for all of P0, defer the Aelio DB binding to when P1 storage lands; (b) bind Aelio DB now.
+**Recommendation → (a).** P0 exit criteria (§30) are all in-memory-satisfiable; the trait keeps Aelio DB a drop-in. `PROVISIONAL`.
 
 ### F-003 — `aelio-store` in the P0 dependency graph — `§29`
 **What:** §29 lists `aelio-store` among the crates but the P0 build order (§30) touches storage only via Once/CAS and persistence. Dependency direction is "strictly downward"; the exact edges aren't drawn.
-**Options:** (a) `aelio-kernel` depends on an `aelio-store` *trait* crate (store trait + in-memory double), inverting the concrete Sunjet dep out of the kernel; (b) kernel owns persistence directly.
-**Recommendation → (a) trait in `aelio-store`, kernel depends on the trait.** Matches "trait boundary for test doubles" and keeps the kernel Sunjet-agnostic. `PROVISIONAL`.
+**Options:** (a) `aelio-kernel` depends on an `aelio-store` *trait* crate (store trait + in-memory double), inverting the concrete Aelio DB dep out of the kernel; (b) kernel owns persistence directly.
+**Recommendation → (a) trait in `aelio-store`, kernel depends on the trait.** Matches "trait boundary for test doubles" and keeps the kernel Aelio DB-agnostic. `PROVISIONAL`.
 
 ### F-004 — Canonical float "shortest round-trip" formatting — `§4.3`
 **What:** §4.3 mandates floats as "IEEE-754 f64, shortest round-trip form, always carrying a decimal point," `-0.0 → 0.0`, and cross-platform stability is a §27 property test. Rust's `{}`/`ryu` give shortest round-trip but not automatically "always a decimal point" (e.g. `2.0` prints `2`), and `-0.0` prints `-0`.
@@ -86,13 +86,24 @@ the trusted kernel single-sourced, contains crashes, and lets the existing serve
 incrementally. Native bindings have a smaller hop but a much larger build/distribution matrix;
 duplicating the interpreter destroys the “one executor” replay guarantee.
 
-### F-012 — `aelio-store` has no Sunjet production implementation — `§24`, `§29`, F10
+**Status 2026-08-01 → PARTIALLY RESOLVED.** `aelio-server` is now the authoritative Rust process;
+`aelio-runtime`, `aelio-agent-api`, and `aelio-db-api` are mounted together, and the host boundary is
+versioned/authenticated. The remaining blocking half is Phase 6/8 of the unified master plan:
+adaptive agent choices must become pinned runtime artifact invocations, and legacy TypeScript
+decision modules must leave the production dependency graph.
+
+### F-012 — `aelio-store` has no Aelio DB production implementation — `§24`, `§29`, F10
 **What:** `aelio-store` contains the trait and `MemoryStore` only. The durable continuation/WAL
 logic is tested across reconstructed instances using the shared memory double, but not across an OS
-process or against Sunjet. The mother document explicitly commits Sunjet as the production store.
+process or against Aelio DB. The mother document explicitly commits Aelio DB as the production store.
 
-**Recommendation → implement a concrete Sunjet store after F-011 fixes the process boundary, then
+**Recommendation → implement a concrete Aelio DB store after F-011 fixes the process boundary, then
 run kill/restart, CAS-conflict, partial-WAL, and tenant-isolation integration tests. BLOCKING.**
+
+**Status 2026-08-01 → RESOLVED.** `aelio-store::EmbeddedStore` is the production implementation over
+the embedded Aelio database; runtime startup uses it and keeps `MemoryStore` as the test double.
+Restart/CAS/recovery tests exist. Broader artifact repositories and crash-window matrices are Phase
+1/9 work, not a missing store binding.
 
 ### F-013 — Synchronous target closures cannot enforce hanging-call deadlines — `§8.4`, `§10.1`
 **What:** registry declarations require `DeadlineCompliant`, and active elapsed time is checked after
@@ -120,10 +131,32 @@ and sufficient, but the byte format differs from the illustrated normative field
 **Recommendation → store both `handler_index` and `handler_prefix` and cross-check them at decode;
 this preserves O(1) resume and makes the envelope self-explanatory.**
 
-### F-016 — Server topology is specified but not implemented in `aelio-os` — `§31–§35`, App H
-**What:** `aelio-wire` now implements closed/versioned frames and delivery crash semantics, but
-there is no Rust HTTP/WebSocket server, per-instance actor/debounce queue, control-plane artifact
-API, BYO-key provider registry, or channel ingress wired to the kernel.
+### F-017 — Flow Forge v0 (prompt → draft → plan → store) — `§15/§18/§31`, cold path
+**What:** Product need: enter a natural-language prompt, draft a closed App E flow, Planner-validate, optionally store. Mother doc allows LLM as author under a gate; full §16 artifact gate + pathway prototypes are P1. No end-to-end “forge” unit existed (ProposePath emits ability paths, not kernel trees).
+**Options:** (a) minimal forge over a vendor Call catalog (`forge.say@1`) with mock + OpenAI drafters, HTTP `/v1/flows/forge` + CLI `aelio forge`; (b) wait for full gate.
+**Recommendation → (a) PROVISIONAL.** Catalog starts tiny; expand Call ids + promotion wiring next. Does not weaken locked ISA — Planner still rejects illegal trees.
 
-**Recommendation → build these as an `aelio-runtime` service after accepting F-011(a). BLOCKING for
-an end-to-end production claim.**
+---
+
+### F-018 — Prism query language vs §10.4 single-op AST — `§10.4`
+**What:** Product needs one multimodal recall language (`from/match/where/select/limit/into`, RRF fusion, mandatory select+limit, no joins). Engine already runs `HybridQuery`+RRF. Mother §10.4 / `QueryAst` is one op per query. Prism is the natural façade; single-op becomes sugar.
+**Options:** (a) ship Prism envelope in `aelio-query` + lowerer in `aelio-db-query`, keep `QueryAst` for simple Calls, amend §10.4 via Decision Log so flexible reads are Prism; (b) keep two languages forever.
+**Resolution 2026-08-01 → (a), RATIFIED.** Mother Amendment #4 makes the implemented closed
+multimodal Prism envelope canonical; `QueryAst` is compile-time sugar. Parser, physical-schema,
+projection, vector-dimension, graph-budget, adversarial, database API, and server embedding paths
+are implemented and tested. Ordering/cursors/general scans remain deliberately absent in v1.
+
+---
+
+### F-019 — Mint prompt factory (root axiom + Aelio DB shelf) — `§10.3`, App J
+**What:** Product needs a command-shaped factory that mints versioned system-prompt artifacts (body + slots + output contract + description) from a human **root** axiom, stores them in Aelio DB, and recalls them via Prism. Mother App J already defines the coin shape; `aelio-prompt` was compose-only.
+**Options:** (a) Mint inside Aelio (`aelio-prompt` artifact + root lock + `aelio-runtime` MintShelf over Aelio DB + CLI `aelio mint` / HTTP `/v1/mint`); (b) keep free-text prompts in the TS harness.
+**Recommendation → (a) PROVISIONAL.** Root (`aelio.mint.root@1`) is never mintable. Sufficiency refusal is required (mock refuses blood-type-from-demographics). OpenAI drafter optional. Forge wiring to pin Mint coins is next.
+
+**Status 2026-08-01 → PARTIALLY RESOLVED.** `aelio-prompt::mint`, `MintShelf`, tenant-filtered Prism
+recall, CLI/HTTP Mint, root immutability, mock/OpenAI drafters, and sufficiency refusal exist. Root
+and minted prompts now lower into the schema-versioned unified artifact registry; proposed prompts
+cannot be recalled. This flag remains open only for the prompt-class shadow/canary predicate and
+Forge pinning of admitted Mint artifacts.
+
+---

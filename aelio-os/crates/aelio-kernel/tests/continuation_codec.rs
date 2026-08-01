@@ -3,7 +3,7 @@ use aelio_kernel::continuation::{
 };
 use aelio_kernel::{compile, Instance, InstanceConfig, Parked, Registry, TurnOutcome};
 use aelio_sol::SolValue;
-use aelio_store::MemoryStore;
+use aelio_store::{EmbeddedStore, MemoryStore};
 
 fn pins() -> ContinuationPins {
     ContinuationPins {
@@ -156,4 +156,55 @@ fn durable_instance_hydrates_ledger_and_continuation_after_restart() {
     );
     assert!(recovered.resume_stored(SolValue::Null).is_err());
     assert_eq!(recovered.ledger().entries().last().unwrap().turn_id, "t1");
+}
+
+#[test]
+fn embedded_database_recovers_a_parked_instance_after_real_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = compile(
+        r#"{"nid":"root","op":"Seq","steps":[
+          {"nid":"wait","op":"Park","until":{"kind":"event"},"into":"wake"},
+          {"nid":"finish","op":"Identity"}
+        ]}"#,
+    )
+    .unwrap();
+    let config = InstanceConfig {
+        tenant: "tenant-db".into(),
+        instance_id: "restart-db-1".into(),
+        flow_id: "restart-flow".into(),
+        flow_rev: "4".into(),
+        event_key_secret: [11; 32],
+    };
+
+    {
+        let mut registry = Registry::default();
+        let store = EmbeddedStore::open(directory.path()).unwrap();
+        let mut instance = Instance::with_store(
+            program.clone(),
+            &mut registry,
+            Box::new(store),
+            config.clone(),
+        )
+        .unwrap();
+        assert!(matches!(
+            instance.start(SolValue::Map(Default::default())).unwrap(),
+            TurnOutcome::Parked(_)
+        ));
+    }
+
+    let mut registry = Registry::default();
+    let store = EmbeddedStore::open(directory.path()).unwrap();
+    let mut recovered =
+        Instance::with_store(program, &mut registry, Box::new(store), config).unwrap();
+    let TurnOutcome::Completed { bag, .. } = recovered
+        .resume_stored(SolValue::str("durable-wake"))
+        .unwrap()
+    else {
+        panic!("reopened embedded database must resume the parked flow");
+    };
+    assert_eq!(
+        bag.as_map().and_then(|map| map.get("wake")),
+        Some(&SolValue::str("durable-wake"))
+    );
+    assert!(recovered.resume_stored(SolValue::Null).is_err());
 }

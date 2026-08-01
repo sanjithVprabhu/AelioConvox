@@ -294,7 +294,9 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
       return;
     }
     setMessages((prev) => [...prev, { role: 'user', content }]);
-    socketRef.current.send(JSON.stringify({ type: 'message', content }));
+    socketRef.current.send(
+      JSON.stringify({ type: 'message', id: crypto.randomUUID(), content }),
+    );
     if (!contentOverride) {
       setInput('');
     }

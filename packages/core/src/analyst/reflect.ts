@@ -28,7 +28,7 @@ Respond with ONLY a JSON object, no prose, in this exact shape:
 
 /**
  * Closed sessions that have at least `minMessages` messages and have not yet
- * been reflected on. Sunjet-only: `sessionStore` is required; `reflectionStore`
+ * been reflected on. AelioDb-only: `sessionStore` is required; `reflectionStore`
  * and `messageStore` refine the candidate set (session/message counts) when
  * supplied.
  */
@@ -40,10 +40,10 @@ export async function findUnreflectedSessions(
   messageStore?: ConvoxMessageStore,
 ): Promise<Array<{ sessionId: string; customerId: string }>> {
   if (!sessionStore) {
-    throw new Error('Sunjet sessionStore is required');
+    throw new Error('AelioDb sessionStore is required');
   }
   // Overfetch, then filter by reflection state / message count in-process —
-  // Sunjet has no NOT EXISTS / correlated-subquery equivalent over HTTP.
+  // AelioDb has no NOT EXISTS / correlated-subquery equivalent over HTTP.
   const closed = await sessionStore.listClosed(Math.max(limit * 4, limit));
   const out: Array<{ sessionId: string; customerId: string }> = [];
   for (const session of closed) {
@@ -111,17 +111,17 @@ export async function reflectOnSession(input: {
   maxTokens: number;
   sessionId: string;
   customerId: string;
-  /** Long-term insights go to Sunjet/VSS. */
+  /** Long-term insights go to AelioDb/VSS. */
   memoryStore?: ConvoxMemoryStore;
   messageStore: ConvoxMessageStore;
   functionCallStore?: ConvoxFunctionCallStore;
   reflectionStore: ConvoxReflectionStore;
 }): Promise<Reflection | null> {
   if (!input.messageStore) {
-    throw new Error('Sunjet messageStore is required');
+    throw new Error('AelioDb messageStore is required');
   }
   if (!input.reflectionStore) {
-    throw new Error('Sunjet reflectionStore is required');
+    throw new Error('AelioDb reflectionStore is required');
   }
 
   const rows = await input.messageStore.loadTranscript(input.sessionId);
@@ -169,7 +169,7 @@ export async function reflectOnSession(input: {
     followup: verdict.followup || undefined,
   });
 
-  // Feed a durable insight into Sunjet/VSS so future turns can recall it.
+  // Feed a durable insight into AelioDb/VSS so future turns can recall it.
   if (input.memoryStore && verdict.insight && verdict.insight.trim().length > 0) {
     const insight = verdict.insight.trim();
     const embedding = await embed(insight, { purpose: 'reflection_insight' });

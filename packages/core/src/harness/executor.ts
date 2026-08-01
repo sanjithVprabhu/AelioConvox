@@ -6,7 +6,7 @@ import type { SafetyConfig } from '../safety/policy.js';
 import type { SdkBridge } from '../sdk-bridge/types.js';
 import { coerceArgs } from '../runtime/tool-schema.js';
 import { evaluateGate, type GateContext } from './gates.js';
-import { loadLedgerForTurn, persistLedgerEntry, type LedgerSunjetConfig } from './ledger.js';
+import { loadLedgerForTurn, persistLedgerEntry, type LedgerAelioDbConfig } from './ledger.js';
 import { nextWave } from './resolver.js';
 import type { BudgetMeter } from './budgets.js';
 import type { ConvoxFunctionCallStore } from '../storage/audit.js';
@@ -101,13 +101,13 @@ export function newExecutorState(existingLedger: LedgerEntry[] = []): ExecutorSt
   };
 }
 
-/** Hydrate executor state from the Sunjet ledger for a turn (HAR-005). */
+/** Hydrate executor state from the AelioDb ledger for a turn (HAR-005). */
 export async function hydrateExecutorState(
   sessionId: string,
   turnId: string,
-  ledgerSunjet: LedgerSunjetConfig,
+  ledgerAelioDb: LedgerAelioDbConfig,
 ): Promise<ExecutorState> {
-  const existing = await loadLedgerForTurn(sessionId, turnId, ledgerSunjet);
+  const existing = await loadLedgerForTurn(sessionId, turnId, ledgerAelioDb);
   return newExecutorState(existing);
 }
 
@@ -121,7 +121,7 @@ export type ExecutorDeps = {
   internalCustomerId?: string;
   turnId?: string;
   functionCallStore: ConvoxFunctionCallStore;
-  ledgerSunjet: LedgerSunjetConfig;
+  ledgerAelioDb: LedgerAelioDbConfig;
   /**
    * Instruction ids the user has already confirmed (a resumed
    * awaiting_confirmation plan). Their needs_approval gate is treated as
@@ -378,7 +378,7 @@ async function runInstruction(
   });
   const ledgerEntry = state.ledger[state.ledger.length - 1]!;
   if (deps.turnId) {
-    void persistLedgerEntry(deps.context.sessionId, deps.turnId, ledgerEntry, deps.ledgerSunjet);
+    void persistLedgerEntry(deps.context.sessionId, deps.turnId, ledgerEntry, deps.ledgerAelioDb);
   }
   if (invokeResult.ok) {
     state.outputs.set(instruction.id, invokeResult.data);

@@ -23,7 +23,7 @@ function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: options.inherit ? 'inherit' : 'pipe',
-      env: { ...process.env, ...options.env },
+      env: { ...process.env, AELIO_ALLOW_INSECURE_OPEN: '1', ...options.env },
     });
     let stdout = '';
     let stderr = '';
@@ -159,6 +159,7 @@ try {
     stdio: 'inherit',
     env: {
       ...process.env,
+      AELIO_ALLOW_INSECURE_OPEN: '1',
       AELIO_SDK_SECRET: secret,
       AELIO_SERVER_URL: 'ws://127.0.0.1:3000',
     },

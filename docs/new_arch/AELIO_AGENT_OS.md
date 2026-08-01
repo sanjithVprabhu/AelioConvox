@@ -1,14 +1,14 @@
 # Aelio Agent OS — Design Note
 
-**Status:** normative metaphor (v0.1)  
-**Companions:** [`AELIO_L0_GLOSSARY.md`](./AELIO_L0_GLOSSARY.md), [`AELIO_L1_GLOSSARY.md`](./AELIO_L1_GLOSSARY.md)  
+**Status:** normative metaphor (v0.1)
+**Companions:** [`AELIO_L0_GLOSSARY.md`](./AELIO_L0_GLOSSARY.md), [`AELIO_L1_GLOSSARY.md`](./AELIO_L1_GLOSSARY.md)
 **Audience:** designers and implementers building a production open-source agent runtime
 
 ---
 
 ## 1. One-sentence definition
 
-**Aelio is a typed agent operating system:** a domain-blind kernel (L0), system services (L1), durable userland routines (flows/procedures), a multimodal filesystem (Sunjet), and an LLM used only as a **constrained routine author** — never as the unsupervised kernel.
+**Aelio is a typed agent operating system:** a domain-blind kernel (L0), system services (L1), durable userland routines (flows/procedures), a multimodal filesystem (Aelio DB), and an LLM used only as a **constrained routine author** — never as the unsupervised kernel.
 
 ---
 
@@ -19,7 +19,7 @@
 | ISA / syscalls | **L0** combinators, pure ops, effects | Closed; tenants cannot extend |
 | libc / daemons | **L1** abilities via `Call{id}` | Sense, Understand, Recall, Invoke, … |
 | Processes / programs | **Flows & procedures** (Op trees) | Authored or learned; stored & retrieved |
-| Filesystem | **Sunjet** logical spaces | Messages, memories, procedures, docs, … |
+| Filesystem | **Aelio DB** logical spaces | Messages, memories, procedures, docs, … |
 | Scheduler | **Turn loop** + `Park` / `Schedule` | No `Sleep`; workers must free |
 | Package install | **Learn.Propose → TypeCheck → Promote** | Slow to install, fast to uninstall (`Demote`) |
 | Root / MAC | **Policy** + decision ledger | Executor invariant around effects |
@@ -28,13 +28,13 @@
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
-│  Userland     Flows / Procedures (Op trees in Sunjet)   │
+│  Userland     Flows / Procedures (Op trees in Aelio DB)   │
 ├─────────────────────────────────────────────────────────┤
 │  Services     L1 abilities (Call targets)               │
 ├─────────────────────────────────────────────────────────┤
 │  Kernel       L0-A combinators · L0-B pure · L0-C fx    │
 ├─────────────────────────────────────────────────────────┤
-│  Filesystem   Sunjet (rows, text, vector, graph)        │
+│  Filesystem   Aelio DB (rows, text, vector, graph)        │
 ├─────────────────────────────────────────────────────────┤
 │  LLM          ProposePath / cold Understand / Express   │
 │               (privileged author — not the kernel)      │
@@ -105,7 +105,7 @@ The LLM may run **inside** specific Calls (Understand, ProposePath, Synthesize).
 
 ---
 
-## 7. Filesystem roles (Sunjet)
+## 7. Filesystem roles (Aelio DB)
 
 | Space (illustrative) | OS role |
 |---|---|
@@ -122,8 +122,8 @@ Sense does **not** store; it **reads** a snapshot assembled from these + the clo
 
 ## 8. Design participation rule
 
-1. Discuss → decide → glossary row → then code.  
-2. PRs cite glossary ids (`L0.Park`, `L1.Sense.Session`, …).  
+1. Discuss → decide → glossary row → then code.
+2. PRs cite glossary ids (`L0.Park`, `L1.Sense.Session`, …).
 3. No silent new kernel or service concepts.
 
 ---

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { SunjetClient } from '@aelio/sunjet-client';
+import type { AelioDbClient } from '@aelio/db-client';
 import { i64, readI64, readUtf8, utf8 } from '../storage/helpers.js';
 import {
   SuspendedPlanPayloadSchema,
@@ -8,8 +8,8 @@ import {
 } from './schema.js';
 
 export type SuspensionStoreConfig = {
-  sunjet: {
-    client: SunjetClient;
+  aelioDb: {
+    client: AelioDbClient;
     table: string;
     tenant: string;
   };
@@ -29,17 +29,17 @@ const SCAN_CAP = 100;
 
 /**
  * The suspended-plan store: one parked plan per session, awaiting user input
- * (recoil) or a write confirmation. Sunjet is the sole source of truth
- * (Astrolobe stays fully authoritative for runtime state).
+ * (recoil) or a write confirmation. AelioDb is the sole source of truth
+ * (Aelio database stays fully authoritative for runtime state).
  */
 export class SuspensionStore {
-  private readonly sunjet: SuspensionStoreConfig['sunjet'];
+  private readonly aelioDb: SuspensionStoreConfig['aelioDb'];
 
   constructor(private readonly config: SuspensionStoreConfig) {
-    if (!config.sunjet) {
-      throw new Error('SuspensionStore requires sunjet configuration');
+    if (!config.aelioDb) {
+      throw new Error('SuspensionStore requires aelioDb configuration');
     }
-    this.sunjet = config.sunjet;
+    this.aelioDb = config.aelioDb;
   }
 
   async suspend(
@@ -57,33 +57,33 @@ export class SuspensionStore {
       expiresAt: now + ttl,
     };
 
-    await this.replaceSunjet(record, now);
+    await this.replaceAelioDb(record, now);
     return record;
   }
 
   async get(sessionId: string): Promise<SuspendedPlanRecord | null> {
-    return this.getSunjet(sessionId);
+    return this.getAelioDb(sessionId);
   }
 
   async clear(sessionId: string): Promise<void> {
-    await this.clearSunjet(sessionId);
+    await this.clearAelioDb(sessionId);
   }
 
-  private async findSunjetRows(sessionId: string) {
-    const sunjet = this.sunjet;
-    const scan = await sunjet.client.scanRows(sunjet.table, {
+  private async findAelioDbRows(sessionId: string) {
+    const aelioDb = this.aelioDb;
+    const scan = await aelioDb.client.scanRows(aelioDb.table, {
       k: SCAN_CAP,
       filters: [{ col: 'session_id', op: 'eq', value: utf8(sessionId) }],
     });
     return scan.rows;
   }
 
-  private async getSunjet(sessionId: string): Promise<SuspendedPlanRecord | null> {
-    const rows = await this.findSunjetRows(sessionId);
+  private async getAelioDb(sessionId: string): Promise<SuspendedPlanRecord | null> {
+    const rows = await this.findAelioDbRows(sessionId);
     if (rows.length === 0) {
       return null;
     }
-    // Most recent row wins if duplicates ever slip through (Sunjet has no
+    // Most recent row wins if duplicates ever slip through (AelioDb has no
     // unique-constraint enforcement over HTTP).
     const row = rows.reduce((a, b) =>
       readI64(a.values, 'created_at') >= readI64(b.values, 'created_at') ? a : b,
@@ -116,14 +116,14 @@ export class SuspensionStore {
     };
   }
 
-  private async replaceSunjet(record: SuspendedPlanRecord, now: number): Promise<void> {
-    const sunjet = this.sunjet;
+  private async replaceAelioDb(record: SuspendedPlanRecord, now: number): Promise<void> {
+    const aelioDb = this.aelioDb;
     // One suspension per session: clear any existing rows first (best effort;
-    // Sunjet has no transactional delete+insert over HTTP).
-    await this.clearSunjet(record.sessionId);
-    await sunjet.client.insertRow(sunjet.table, {
+    // AelioDb has no transactional delete+insert over HTTP).
+    await this.clearAelioDb(record.sessionId);
+    await aelioDb.client.insertRow(aelioDb.table, {
       session_id: utf8(record.sessionId),
-      tenant: utf8(sunjet.tenant),
+      tenant: utf8(aelioDb.tenant),
       reason: utf8(record.reason),
       payload: utf8(JSON.stringify(record.payload)),
       created_at: i64(now),
@@ -131,11 +131,11 @@ export class SuspensionStore {
     });
   }
 
-  private async clearSunjet(sessionId: string): Promise<void> {
-    const sunjet = this.sunjet;
-    const rows = await this.findSunjetRows(sessionId);
+  private async clearAelioDb(sessionId: string): Promise<void> {
+    const aelioDb = this.aelioDb;
+    const rows = await this.findAelioDbRows(sessionId);
     for (const row of rows) {
-      await sunjet.client.deleteRow(sunjet.table, row.row_id);
+      await aelioDb.client.deleteRow(aelioDb.table, row.row_id);
     }
   }
 }

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { cosineSimilarity, embed } from '../analyst/embeddings.js';
 import { f64, i64, readI64, readUtf8, readVector, utf8 } from './helpers.js';
 import { normalizeEmbedding } from './messages.js';
-import type { SunjetStorageConfig } from './types.js';
+import type { AelioDbStorageConfig } from './types.js';
 
 const DEDUP_SCAN_CAP = 2_000;
 
@@ -26,11 +26,11 @@ export type MemoryStoreWriteInput = {
 };
 
 export class ConvoxMemoryStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
   readonly embedDim: number;
 
-  constructor(config: SunjetStorageConfig) {
+  constructor(config: AelioDbStorageConfig) {
     this.client = config.client;
     this.table = config.tables.memories;
     this.embedDim = config.embedDim;
@@ -74,7 +74,7 @@ export class ConvoxMemoryStore {
   }
 
   /**
-   * Semantic recall via Astrolobe vector search (VSS). Scores are cosine
+   * Semantic recall via Aelio database vector search (VSS). Scores are cosine
    * similarity against the query embedding so callers keep a stable threshold.
    */
   async recall(
@@ -151,6 +151,6 @@ export class ConvoxMemoryStore {
   }
 }
 
-export function createConvoxMemoryStore(config: SunjetStorageConfig): ConvoxMemoryStore {
+export function createConvoxMemoryStore(config: AelioDbStorageConfig): ConvoxMemoryStore {
   return new ConvoxMemoryStore(config);
 }

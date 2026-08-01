@@ -1,4 +1,4 @@
-import type { ApiValue, SunjetClient } from '@aelio/sunjet-client';
+import type { ApiValue, AelioDbClient } from '@aelio/db-client';
 
 export type ConversationTelemetryEvent = {
   rowId: number;
@@ -99,7 +99,7 @@ function mapRow(rowId: number, values: Record<string, ApiValue>): ConversationTe
 }
 
 export async function listConversationTelemetry(
-  client: SunjetClient,
+  client: AelioDbClient,
   table: string,
   input: {
     limit?: number;

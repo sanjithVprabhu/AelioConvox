@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { cosineSimilarity, embed } from '../analyst/embeddings.js';
 import { i64, readUtf8, readVector, utf8 } from './helpers.js';
 import { normalizeEmbedding } from './messages.js';
-import type { SunjetStorageConfig } from './types.js';
+import type { AelioDbStorageConfig } from './types.js';
 
 export type ArchetypeValence = 'positive' | 'negative' | 'neutral';
 
@@ -25,9 +25,9 @@ export type ArchetypeExemplar = {
 export type ArchetypeMatch = ArchetypeExemplar & {
   id: string;
   aspectId: string;
-  /** Recomputed cosine similarity (NOT the Sunjet RRF score). */
+  /** Recomputed cosine similarity (NOT the AelioDb RRF score). */
   score: number;
-  /** Sunjet hybrid RRF score when BM25+vector was used; 0 for vector-only. */
+  /** AelioDb hybrid RRF score when BM25+vector was used; 0 for vector-only. */
   rrfScore: number;
 };
 
@@ -48,12 +48,12 @@ export function archetypeSignature(exemplar: ArchetypeExemplar): string {
 }
 
 export class ConvoxArchetypeStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
   readonly embedDim: number;
   readonly tenant: string;
 
-  constructor(config: SunjetStorageConfig, tenant = 'default') {
+  constructor(config: AelioDbStorageConfig, tenant = 'default') {
     this.client = config.client;
     this.table = config.tables.archetypes;
     this.embedDim = config.embedDim;
@@ -130,7 +130,7 @@ export class ConvoxArchetypeStore {
 
   /**
    * Semantic search over archetype buckets using a precomputed message vector.
-   * Sunjet's query score is RRF rank fusion, so we hydrate the candidate rows
+   * AelioDb's query score is RRF rank fusion, so we hydrate the candidate rows
    * and recompute cosine — the only score comparable across valence buckets.
    * Pass `text` to also run BM25 over `description` and fuse via RRF.
    */
@@ -183,7 +183,7 @@ export class ConvoxArchetypeStore {
 }
 
 export function createConvoxArchetypeStore(
-  config: SunjetStorageConfig,
+  config: AelioDbStorageConfig,
   tenant = 'default',
 ): ConvoxArchetypeStore {
   return new ConvoxArchetypeStore(config, tenant);

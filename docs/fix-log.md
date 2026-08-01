@@ -214,7 +214,7 @@ Tumhara app (4173)
 | Bug | Fix |
 |-----|-----|
 | BUG-019 | `AELIO_SDK_SECRET` in SDK README |
-| BUG-020 | README layout adds `channels/`, `sunjet-client/` |
+| BUG-020 | README layout adds `channels/`, `aelio-db-client/` |
 | BUG-021 | MANUAL.md telemetry + proactive + diagnostics |
 | BUG-022 | Phase 6 in `run-tests.mjs` + `diagnostic.mjs` |
 | BUG-023 | Deleted `scripts/e2e-widget-test.mjs` |

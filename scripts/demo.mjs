@@ -53,6 +53,7 @@ const serverBaseUrl = aelioHttpUrl();
 
 const childEnv = {
   ...process.env,
+      AELIO_ALLOW_INSECURE_OPEN: '1',
   AELIO_CONFIG: join(root, config),
   AELIO_SDK_SECRET: secret,
   AELIO_PORT: String(serverPort),

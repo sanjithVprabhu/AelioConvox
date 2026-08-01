@@ -1,7 +1,7 @@
 # Aelio-Convox — Full Repository Issues List
 
-> **Audit date:** 2026-07-10  
-> **Scope:** End-to-end review of **265 source files** (TypeScript, Rust, Python, scripts, configs, Blueprint) across `server/`, `packages/`, `sdk/`, `chat/`, `examples/`, `scripts/`, `Sunjet/Astrolobe/`, and root configs.  
+> **Audit date:** 2026-07-10
+> **Scope:** End-to-end review of **265 source files** (TypeScript, Rust, Python, scripts, configs, Blueprint) across `server/`, `packages/`, `sdk/`, `chat/`, `examples/`, `scripts/`, `aelio-os/`, and root configs.
 > **Companion:** [production-readiness-log.md](./production-readiness-log.md) · [bug-list.md](./bug-list.md) · [fix-log.md](./fix-log.md)
 
 ---
@@ -60,7 +60,7 @@
 | ID | Issue | Location | Notes |
 |----|-------|----------|-------|
 | SEC-001 | **Widget customer impersonation** — any `customerId` accepted on `init`; `authToken` logged but never verified | `server/src/routes/widget.ts:96–129` | Magic link verify returns identity but issues no bound session credential |
-| SEC-002 | **Telemetry APIs unauthenticated** — turn calls, Sunjet events expose conversation data | `server/src/routes/telemetry.ts:14–78` | `/telemetry` HTML also public |
+| SEC-002 | **Telemetry APIs unauthenticated** — turn calls, Aelio DB events expose conversation data | `server/src/routes/telemetry.ts:14–78` | `/telemetry` HTML also public |
 | ✅ SEC-003 | **WhatsApp webhook verify bypass** — if `verify_token` unset, `undefined === undefined` subscribes webhook | `server/src/routes/whatsapp.ts:20` | `verify_token` optional in config schema |
 | SEC-004 | **WhatsApp HMAC on re-serialized JSON** — not raw body; signatures fail or `app_secret` disabled | `server/src/routes/whatsapp.ts:28–34` | Meta requires byte-identical body |
 | SEC-005 | **WhatsApp POST unsigned when `app_secret` unset** — fake inbound messages accepted | `server/src/routes/whatsapp.ts:30` | Entire HMAC block gated on secret |
@@ -95,7 +95,7 @@
 | SEC-010 | Magic link token in URL query — referrer/log leakage | `packages/core/src/identity/magic-link.ts` |
 | SEC-011 | SDK `?secret=` query param still supported (deprecated, hits logs) | `server/src/routes/sdk.ts:39–54` |
 | SEC-012 | `/ready` exposes full SDK catalog (function/state/flow names) | `server/src/routes/health.ts` |
-| SEC-013 | `ll-server` Docker runs open mode without `LL_API_KEYS` | `Sunjet/Astrolobe/crates/ll-server/src/main.rs` |
+| SEC-013 | `ll-server` Docker runs open mode without `LL_API_KEYS` | `aelio-os/crates/ll-server/src/main.rs` |
 
 ### Concurrency & data integrity
 
@@ -117,7 +117,7 @@
 | HAR-007 | **Resolve failure does not replan** — comment promises replan; returns static apology | `packages/core/src/harness/index.ts:166–173` |
 | ✅ HAR-008 | **`BudgetMeter.noteUsage()` never called** — `maxTurnTokens` unenforced | `packages/core/src/harness/budgets.ts:60`, LLM paths |
 | HAR-009 | **Hard policies prompt-only** — `severity: 'hard'` never evaluated in gates | `packages/core/src/lifecycle/index.ts:200`, `packages/core/src/harness/gates.ts` |
-| HAR-010 | **Sunjet/Astrolobe E2E untested from TS harness path** — mirror, tool search, traces only hit in-process fallback | `packages/core/src/lighthouse/mirror.ts`, default `sunjet.enabled: false` |
+| HAR-010 | **aelio-os E2E untested from TS harness path** — mirror, tool search, traces only hit in-process fallback | `packages/core/src/lighthouse/mirror.ts`, default `aelio-db.enabled: false` |
 
 ### SDK & channels
 
@@ -143,7 +143,7 @@
 | ID | Issue | Location |
 |----|-------|----------|
 | TST-001 | **No CI** — no `.github/workflows` | repo root |
-| TST-002 | **`test:all` excludes Phase 6, Sunjet, real LLM** | `scripts/run-tests.mjs` |
+| TST-002 | **`test:all` excludes Phase 6, Aelio DB, real LLM** | `scripts/run-tests.mjs` |
 | TST-003 | **`docker:verify` / `diagnostic` same gaps** | `scripts/docker-verify.mjs`, `diagnostic.mjs` |
 | TST-004 | **No automated real-LLM smoke test** | — |
 
@@ -182,7 +182,7 @@
 |----|-------|----------|
 | HAR-011 | Binder ambiguity unresolved — no disambiguation LLM | `packages/core/src/harness/binder.ts` |
 | ✅ HAR-012 | `hashArgs` uses `JSON.stringify` — key order breaks idempotency dedup | `packages/core/src/harness/executor.ts` |
-| HAR-013 | Suspension `clear()` does not mirror delete to Sunjet | `packages/core/src/harness/suspension.ts` |
+| HAR-013 | Suspension `clear()` does not mirror delete to Aelio DB | `packages/core/src/harness/suspension.ts` |
 | HAR-014 | Binding cache table defined but not used | `Blueprint/harness-spec.md`, `server/src/config.ts` |
 | HAR-015 | `transform` gate verdict — enum exists, no built-in rules | `packages/core/src/harness/gates.ts` |
 | HAR-016 | Planner degrade path silent — `degraded: true` not surfaced to user/telemetry prominently | `packages/core/src/harness/planner.ts` |
@@ -237,7 +237,7 @@
 | TST-007 | `e2e-widget-test.mjs` orphaned — not in npm scripts | `scripts/e2e-widget-test.mjs` |
 | TST-008 | `@aelio/chat` zero automated tests | `chat/` |
 | TST-009 | No tests for daemon, proactive, cache, BYO WhatsApp configs | `config.*.yaml` |
-| TST-010 | Sunjet Rust tests isolated from `pnpm test:all` | `Sunjet/Astrolobe/crates/**/tests/` |
+| TST-010 | Aelio DB Rust tests isolated from `pnpm test:all` | `aelio-os/crates/**/tests/` |
 
 ### Config & docs
 
@@ -245,15 +245,15 @@
 |----|-------|----------|
 | CFG-001 | 11 `config.*.yaml` files — no index of purpose | root |
 | CFG-002 | Provider configs omit explicit `harness`/`intent` blocks | `config.openai.yaml`, etc. |
-| CFG-003 | Sunjet URL port mismatch — `8080` vs test `18080` | `config.yaml`, `config.sunjet-test.yaml` |
+| CFG-003 | Aelio DB URL port mismatch — `8080` vs test `18080` | `config.yaml`, `config.aelio-db-test.yaml` |
 | CFG-004 | `config.logging.format` defined but ignored | `server/src/config.ts`, `server/src/app.ts` |
 | CFG-005 | Root `pnpm lint` — no package defines `lint` script | `package.json`, `turbo.json` |
 | CFG-006 | `@aelio/chat` excluded from `pnpm typecheck` | `chat/package.json` |
 | DOC-001 | Blueprint paths stale (`apps/server`, `packages/sdk-node`) | `Blueprint/v1-oss-spec.md` |
-| DOC-002 | Hardening plan claims `test:all (6/6) + sunjet` — false | `Blueprint/production-hardening-plan.md` |
-| DOC-003 | README Sunjet submodule claim — no `.gitmodules` | `README.md` |
+| DOC-002 | Hardening plan claims `test:all (6/6) + aelio-db` — false | `Blueprint/production-hardening-plan.md` |
+| DOC-003 | README Aelio DB submodule claim — no `.gitmodules` | `README.md` |
 | DOC-004 | `project-documentation.md` references `apps/web-widget`, `MANUAL.md` paths may drift | `docs/project-documentation.md` |
-| DOC-005 | `demo.html` links `/telemetry` — misleading when Sunjet off | `server/public/demo.html` |
+| DOC-005 | `demo.html` links `/telemetry` — misleading when Aelio DB off | `server/public/demo.html` |
 
 ### Schema
 
@@ -291,11 +291,11 @@
 | TD-005 | Embed telemetry errors swallowed | `packages/core/src/analyst/embeddings.ts` |
 | TD-006 | `assertWithinRateLimit` throws generic `Error` | `packages/core/src/runtime/rate-limit.ts` |
 | TD-007 | Django example README stub only | `examples/python-django/` |
-| TD-008 | `.env.example` missing `SUNJET_API_KEY`, `VOYAGE_API_KEY`, etc. | `.env.example` |
+| TD-008 | `.env.example` missing `AELIO DB_API_KEY`, `VOYAGE_API_KEY`, etc. | `.env.example` |
 | TD-009 | Phase 5 uses `tsx`; phases 2–4 use `node` | `package.json` |
 | TD-010 | `apps/web-widget/` dead scaffold — only `node_modules` | `apps/` |
 | TD-011 | `identity.allowAnonymous` in types unused in resolve path | `packages/core/src/identity/resolve.ts` |
-| TD-012 | Sunjet archive reconciliation after fallback not implemented | `packages/core/src/runtime/turn.ts` (comment) |
+| TD-012 | Aelio DB archive reconciliation after fallback not implemented | `packages/core/src/runtime/turn.ts` (comment) |
 | TD-013 | Richer state guard predicates deferred | `packages/protocol/src/index.ts` |
 | TD-014 | No HTTP CORS/helmet — acceptable for WS-heavy server | `server/src/app.ts` |
 | TD-015 | `replan.ts`, `store.ts`, `cycle-detect.ts` in glob — verify exports used | `packages/core/src/harness/` |
@@ -315,13 +315,13 @@
 | `packages/llm/` | 12 modules | Providers + embeddings + mock |
 | `packages/protocol/` | 1 module | Zod wire schemas |
 | `packages/channels/` | WhatsApp adapter | Parser, sender, verify |
-| `packages/sunjet-client/` | HTTP client | Astrolobe table API |
+| `packages/aelio-db-client/` | HTTP client | Aelio DB engine table API |
 | `sdk/node/` | Node SDK | Primary integration surface |
 | `sdk/python/` | Python SDK | Minimal subset |
 | `chat/` | Preact widget | Built → `server/public/widget.js` |
 | `examples/` | 4 backends | Express, sample-saas, FastAPI, Django stub |
-| `scripts/` | 16 test/run scripts | Phase tests, harness, sunjet, docker |
-| `Sunjet/Astrolobe/` | Rust crates | ll-server, index, query, daemon |
+| `scripts/` | 16 test/run scripts | Phase tests, harness, aelio-db, docker |
+| `aelio-os/` | Rust crates | ll-server, index, query, daemon |
 | `Blueprint/` | Specs | harness-spec, v1-oss-spec, daemon |
 | `docs/` | 5 markdown files | This list + readiness log + drifted bug-list |
 | Root | 11 `config.*.yaml` | Environment profiles |
@@ -339,7 +339,7 @@
 - **Widget origin policy** — diagnosable `origin_not_allowed` (`server/src/routes/widget.ts`)
 - **Config validation** — Zod + env interpolation (`server/src/config.ts`)
 - **Graceful shutdown** — SIGTERM handling (`server/src/shutdown.ts`)
-- **Sunjet boot fallback** — degrades to SQLite (`server/src/app.ts`)
+- **Aelio DB boot fallback** — degrades to SQLite (`server/src/app.ts`)
 - **Proactive guardrails** — opt-in, caps, WhatsApp window (`packages/core/src/runtime/proactive.ts`)
 - **Intent stack** — spine frames protected from TTL eviction (`packages/core/src/intent/stack.ts`)
 - **Phase integration tests** — 2–5 pass on mock LLM (`AELIO_TEST_MODE=1 pnpm test:all`)
@@ -360,7 +360,7 @@
 
 6. **HAR-003–005** — Executor halt on tool failure; wire `presentFields`; persist `harness_ledger`
 7. **CON-001–004** — Job reclaim, per-customer serialization, multi-instance queue
-8. **HAR-008–010** — Token budget wiring; Sunjet live harness test
+8. **HAR-008–010** — Token budget wiring; Aelio DB live harness test
 
 ### Before claiming "production ready" in docs
 

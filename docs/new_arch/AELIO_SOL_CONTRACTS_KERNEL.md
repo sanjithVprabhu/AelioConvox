@@ -1,7 +1,7 @@
 # Sol Contracts — Kernel Op I/O Spec
 
-**Status:** draft living spec (v0.1) — discuss & amend per op  
-**Depends on:** Kernel v0 ([`AELIO_L0_GLOSSARY.md`](./AELIO_L0_GLOSSARY.md) §4), Sol Contract language (design conversation)  
+**Status:** draft living spec (v0.1) — discuss & amend per op
+**Depends on:** Kernel v0 ([`AELIO_L0_GLOSSARY.md`](./AELIO_L0_GLOSSARY.md) §4), Sol Contract language (design conversation)
 **Rule:** Opₙ emits a Sol Contract; Opₙ₊₁ consumes it. Control ops may wrap child Ops; data still moves as Sol Contracts.
 
 ---
@@ -28,7 +28,7 @@ A Sol Contract is a JSON-shaped object:
 
 For Kernel plumbing, many ops treat the **entire threaded value** as either:
 
-- a full Sol Contract `{ sol, imprint?, body }`, or  
+- a full Sol Contract `{ sol, imprint?, body }`, or
 - a **bare `body` map** (normalized to a Sol Contract at Call boundaries).
 
 **Normative for Kernel v0:** evaluator threads a `Value`. When we say Sol Contract, we mean that `Value` interpreted as:
@@ -57,9 +57,9 @@ Every value in `body` is one of:
 
 ### 0.3 Fulfillment
 
-- **Fulfill** = body contains required keys with correct kinds/types.  
-- Missing → `NeedsRepair` / `Missing`.  
-- Wrong kind/type → `TypeViolation`.  
+- **Fulfill** = body contains required keys with correct kinds/types.
+- Missing → `NeedsRepair` / `Missing`.
+- Wrong kind/type → `TypeViolation`.
 - Ops document **requires** (in) and **ensures** (out).
 
 ---
@@ -80,7 +80,7 @@ Every value in `body` is one of:
 eval(Identity, S) → Ok(S)
 ```
 
-**Imprint:** optional schema label; Identity ignores its meaning.  
+**Imprint:** optional schema label; Identity ignores its meaning.
 **Body keys:** whatever the pipeline already placed; Identity does not require a fixed key set.
 
 **Example in → out:** identical Sol Contract (see design conversation test with `turn.ingress.v1`).
@@ -374,9 +374,9 @@ Imprint example `sense.v1` required keys: `now`, `channel`, `turn_index`, `activ
 
 ## 4. Open discussion points
 
-1. **Merge vs replace** on Call out — recommend callees **merge** into input body under namespaces (`sense`, `result`) unless imprint says replace.  
-2. **Let** mutates locals only vs writes into Sol body.  
-3. **Plain JSON sugar** vs mandatory SolValue tags everywhere.  
+1. **Merge vs replace** on Call out — recommend callees **merge** into input body under namespaces (`sense`, `result`) unless imprint says replace.
+2. **Let** mutates locals only vs writes into Sol body.
+3. **Plain JSON sugar** vs mandatory SolValue tags everywhere.
 4. **Park** persistence: which keys of `S` are written to `flow_instances.slots`.
 
 ---
@@ -385,9 +385,9 @@ Imprint example `sense.v1` required keys: `now`, `channel`, `turn_index`, `activ
 
 When we “lock” an op:
 
-- [ ] requires / ensures written  
-- [ ] error codes listed  
-- [ ] neighbor behavior under `Seq` clear  
-- [ ] no domain nouns in the contract  
+- [ ] requires / ensures written
+- [ ] error codes listed
+- [ ] neighbor behavior under `Seq` clear
+- [ ] no domain nouns in the contract
 
 **Locked so far in conversation intent:** Const, Identity, Call, Seq (wire) — review this file and confirm or amend.

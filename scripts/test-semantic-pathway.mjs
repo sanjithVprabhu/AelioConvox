@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Semantic Pathway Engine integration + latency smoke against real Sunjet.
+ * Semantic Pathway Engine integration + latency smoke against real AelioDb.
  */
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -9,17 +9,17 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bootstrapSunjetTables,
+  bootstrapAelioDbTables,
   configureEmbedder,
   createConvoxMemoryStore,
   createSemanticPathwayEngine,
   embed,
 } from '@aelio/core';
-import { SunjetClient } from '@aelio/sunjet-client';
+import { AelioDbClient } from '@aelio/db-client';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ASTROLOBE = join(ROOT, 'Sunjet/Astrolobe');
-const LL_SERVER = join(ASTROLOBE, 'target/release/ll-server');
+const AELIO_OS = join(ROOT, 'aelio-os');
+const AELIO_SERVER = join(AELIO_OS, 'target/release/aelio-server');
 const DIM = 32;
 const TABLES = {
   messages: 'convox_messages', conversations: 'convox_conversations',
@@ -85,7 +85,7 @@ async function healthy(url) {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error('ll-server did not become healthy');
+  throw new Error('aelio-server did not become healthy');
 }
 
 function assert(condition, message) {
@@ -104,9 +104,9 @@ async function main() {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   temp = mkdtempSync(join(tmpdir(), 'aelio-pathway-'));
-  child = spawn(LL_SERVER, [], {
-    cwd: ASTROLOBE,
-    env: { ...process.env, LL_BIND: `127.0.0.1:${port}`, LL_DATA_DIR: join(temp, 'data') },
+  child = spawn(AELIO_SERVER, [], {
+    cwd: AELIO_OS,
+    env: { ...process.env, AELIO_ALLOW_INSECURE_OPEN: '1', AELIO_RUNTIME_BIND: `127.0.0.1:${port}`, AELIO_DATA_DIR: join(temp, 'data') },
     stdio: 'ignore',
   });
   // Some sandboxed runners deny signalling a spawned native process during
@@ -114,8 +114,8 @@ async function main() {
   child.on('error', () => {});
   await healthy(url);
 
-  const client = new SunjetClient({ baseUrl: url });
-  await bootstrapSunjetTables(client, TABLES, DIM);
+  const client = new AelioDbClient({ baseUrl: url });
+  await bootstrapAelioDbTables(client, TABLES, DIM);
   configureEmbedder(async (text) => vectorize(text));
 
   const memoryStore = createConvoxMemoryStore({ client, tables: TABLES, embedDim: DIM });
@@ -161,7 +161,7 @@ async function main() {
 
   assert(decision.intent.label === 'order_refund', 'semantic intent selects refund pathway');
   assert(decision.tools[0]?.fn.name === 'refund_order', 'refund tool ranks first');
-  assert(decision.memories.some((memory) => memory.content === memoryText), 'Sunjet VSS recalls relevant memory');
+  assert(decision.memories.some((memory) => memory.content === memoryText), 'AelioDb VSS recalls relevant memory');
   assert(decision.policies.some((policy) => policy.id === 'confirm-writes'), 'hard policy always survives retrieval');
   assert(decision.flow?.definition.id === 'refund-flow', 'active-state flow is selected');
   assert(decision.strategy === 'guide', 'active flow produces guided response strategy');

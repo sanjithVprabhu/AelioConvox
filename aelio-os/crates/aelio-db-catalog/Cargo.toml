@@ -1,0 +1,10 @@
+[package]
+name = "aelio-db-catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LL catalog: tables, columns (with modality), indexes, and the files per table."
+
+[dependencies]
+# Dependency-free: in-memory catalog with manual atomic file persistence.
+# (The spec's redb backing is a later swap.)

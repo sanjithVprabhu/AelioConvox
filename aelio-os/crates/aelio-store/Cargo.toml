@@ -3,8 +3,13 @@ name = "aelio-store"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Store trait + in-memory double for Once/CAS and P0 persistence (§24, F-002)"
+description = "Aelio embedded database binding plus the Store trait and in-memory test double"
 
 [dependencies]
 aelio-sol = { workspace = true }
+aelio-db-query = { path = "../aelio-db-query" }
+blake3.workspace = true
 serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,92 +1,48 @@
 #!/bin/bash
-# Starts Sunjet (ll-server) + Aelio in one container.
+# Starts the authoritative Rust Aelio OS/database, then the TypeScript host/transport edge.
 set -euo pipefail
 
-export LL_DATA_DIR="${LL_DATA_DIR:-/data/sunjet}"
-export LL_BIND="${LL_BIND:-127.0.0.1:8080}"
-
-# Shared secret between Aelio ↔ ll-server (default is fine for single-node docker).
-if [[ -z "${LL_API_KEYS:-}" ]]; then
-  export LL_API_KEYS="${SUNJET_API_KEY:-aelio-local}"
+if [[ -z "${AELIO_INTERNAL_TOKEN:-}" || "${#AELIO_INTERNAL_TOKEN}" -lt 32 ]]; then
+  echo "[aelio] AELIO_INTERNAL_TOKEN is required and must contain at least 32 characters" >&2
+  exit 1
 fi
-export SUNJET_API_KEY="${SUNJET_API_KEY:-${LL_API_KEYS%%,*}}"
+export AELIO_RUNTIME_TOKENS="${AELIO_RUNTIME_TOKENS:-$AELIO_INTERNAL_TOKEN}"
+export AELIO_RUNTIME_TOKEN="${AELIO_RUNTIME_TOKEN:-$AELIO_INTERNAL_TOKEN}"
+export AELIO_EVENT_KEY_SECRET="${AELIO_EVENT_KEY_SECRET:-$AELIO_INTERNAL_TOKEN}"
+export AELIO_HOST_TOKEN="${AELIO_HOST_TOKEN:-$AELIO_INTERNAL_TOKEN}"
+export AELIO_LLM_GATEWAY_TOKEN="${AELIO_LLM_GATEWAY_TOKEN:-$AELIO_HOST_TOKEN}"
+export AELIO_LLM_GATEWAY_URL="${AELIO_LLM_GATEWAY_URL:-http://127.0.0.1:3000/internal/aelio/llm/complete}"
+export AELIO_LLM_EMBED_URL="${AELIO_LLM_EMBED_URL:-http://127.0.0.1:3000/internal/aelio/llm/embed}"
+export AELIO_TENANT_ID="${AELIO_TENANT_ID:-aelio-docker}"
+export DB_API_KEY="${DB_API_KEY:-$AELIO_INTERNAL_TOKEN}"
 
-# Map Aelio segment env → LL_* aliases ll-server also reads.
-if [[ -n "${AELIO_SUNJET_SEGMENT_BACKEND:-}" && -z "${LL_SEGMENT_BACKEND:-}" ]]; then
-  export LL_SEGMENT_BACKEND="$AELIO_SUNJET_SEGMENT_BACKEND"
-fi
-for pair in \
-  AELIO_SUNJET_S3_BUCKET:LL_S3_BUCKET \
-  AELIO_SUNJET_S3_REGION:LL_S3_REGION \
-  AELIO_SUNJET_S3_ENDPOINT:LL_S3_ENDPOINT \
-  AELIO_SUNJET_S3_ACCESS_KEY_ID:LL_S3_ACCESS_KEY_ID \
-  AELIO_SUNJET_S3_SECRET_ACCESS_KEY:LL_S3_SECRET_ACCESS_KEY \
-  AELIO_SUNJET_S3_ALLOW_HTTP:LL_S3_ALLOW_HTTP \
-  AELIO_SUNJET_S3_PATH_STYLE:LL_S3_PATH_STYLE \
-  AELIO_SUNJET_SEGMENT_PREFIX:LL_SEGMENT_PREFIX
-do
-  src="${pair%%:*}"
-  dst="${pair##*:}"
-  src_val="${!src:-}"
-  dst_val="${!dst:-}"
-  if [[ -n "$src_val" && -z "$dst_val" ]]; then
-    export "$dst=$src_val"
-  fi
-done
+mkdir -p "${AELIO_DATA_DIR:-/data}"
 
-mkdir -p /data "$LL_DATA_DIR"
-
-SUNJET_PID=""
+aelio-server &
+RUST_PID=$!
 cleanup() {
-  if [[ -n "$SUNJET_PID" ]] && kill -0 "$SUNJET_PID" 2>/dev/null; then
-    kill "$SUNJET_PID" 2>/dev/null || true
-    wait "$SUNJET_PID" 2>/dev/null || true
+  if kill -0 "$RUST_PID" 2>/dev/null; then
+    kill "$RUST_PID" 2>/dev/null || true
+    wait "$RUST_PID" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
 
-# AELIO_SUNJET_ENABLED=0 → SQLite-only (skip Astrolobe).
-# AELIO_SKIP_EMBEDDED_SUNJET=1 → use an external ll-server (compose split) without
-# starting a second copy inside this container.
-case "${AELIO_SKIP_EMBEDDED_SUNJET:-0}" in
-  1|true|TRUE|yes|YES|on|ON)
-    export AELIO_SUNJET_ENABLED="${AELIO_SUNJET_ENABLED:-1}"
-    echo "[aelio] embedded Sunjet skipped — using ${AELIO_SUNJET_URL:-external}"
-    ;;
-  *)
-    case "${AELIO_SUNJET_ENABLED:-1}" in
-      0|false|FALSE|no|NO|off|OFF)
-        export AELIO_SUNJET_ENABLED=0
-        echo "[aelio] Sunjet disabled (AELIO_SUNJET_ENABLED=0) — SQLite only"
-        ;;
-      *)
-        export AELIO_SUNJET_ENABLED=1
-        export AELIO_SUNJET_URL="${AELIO_SUNJET_URL:-http://127.0.0.1:8080}"
-        echo "[aelio] starting ll-server on ${LL_BIND} (data=${LL_DATA_DIR})…"
-        ll-server &
-        SUNJET_PID=$!
+ready=0
+for _ in $(seq 1 90); do
+  if curl -fsS "${AELIO_RUST_RUNTIME_URL:-http://127.0.0.1:8090}/readyz" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  if ! kill -0 "$RUST_PID" 2>/dev/null; then
+    echo "[aelio] Rust runtime exited before becoming ready" >&2
+    exit 1
+  fi
+  sleep 0.5
+done
+if [[ "$ready" -ne 1 ]]; then
+  echo "[aelio] timed out waiting for the Rust runtime" >&2
+  exit 1
+fi
 
-        ready=0
-        for _ in $(seq 1 90); do
-          if curl -fsS "http://127.0.0.1:${LL_BIND##*:}/v1/health" >/dev/null 2>&1; then
-            ready=1
-            break
-          fi
-          if ! kill -0 "$SUNJET_PID" 2>/dev/null; then
-            echo "[aelio] ll-server exited before becoming healthy" >&2
-            exit 1
-          fi
-          sleep 0.5
-        done
-        if [[ "$ready" -ne 1 ]]; then
-          echo "[aelio] timed out waiting for ll-server /v1/health" >&2
-          exit 1
-        fi
-        echo "[aelio] ll-server ready"
-        ;;
-    esac
-    ;;
-esac
-
-cd /app
-exec node dist/main.js
+exec node /app/dist/main.js

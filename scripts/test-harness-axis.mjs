@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Harness Axis + temporal + evidence integration smoke against real Sunjet.
+ * Harness Axis + temporal + evidence integration smoke against real AelioDb.
  *
  * Proves:
  *   1. Temporal resolver locks onto "last week"
@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bootstrapSunjetTables,
+  bootstrapAelioDbTables,
   configureEmbedder,
   createArchetypeEngine,
   createConvoxArchetypeStore,
@@ -32,11 +32,11 @@ import {
   selectEvidence,
   renderEvidenceBlock,
 } from '@aelio/core';
-import { SunjetClient } from '@aelio/sunjet-client';
+import { AelioDbClient } from '@aelio/db-client';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ASTROLOBE = join(ROOT, 'Sunjet/Astrolobe');
-const LL_SERVER = join(ASTROLOBE, 'target/release/ll-server');
+const AELIO_OS = join(ROOT, 'aelio-os');
+const AELIO_SERVER = join(AELIO_OS, 'target/release/aelio-server');
 const DIM = 64;
 const TABLES = {
   messages: 'convox_messages', conversations: 'convox_conversations',
@@ -96,7 +96,7 @@ async function healthy(url) {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error('ll-server did not become healthy');
+  throw new Error('aelio-server did not become healthy');
 }
 
 function assert(condition, message) {
@@ -114,7 +114,7 @@ function cleanup(code) {
 }
 
 async function main() {
-  // --- pure temporal / resolution unit checks (no Sunjet needed) ---
+  // --- pure temporal / resolution unit checks (no AelioDb needed) ---
   const lastWeek = resolveTemporalScope({
     message: 'Last week you said there was a monthly option',
     now: Date.parse('2026-07-19T12:00:00Z'),
@@ -139,20 +139,20 @@ async function main() {
   });
   assert(nudge.action === 'nudge', `unresolved awaiting_user activates nudge (score=${nudge.score.toFixed(2)})`);
 
-  // --- Sunjet axis graph ---
+  // --- AelioDb axis graph ---
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   temp = mkdtempSync(join(tmpdir(), 'aelio-axis-'));
-  child = spawn(LL_SERVER, [], {
-    cwd: ASTROLOBE,
-    env: { ...process.env, LL_BIND: `127.0.0.1:${port}`, LL_DATA_DIR: join(temp, 'data') },
+  child = spawn(AELIO_SERVER, [], {
+    cwd: AELIO_OS,
+    env: { ...process.env, AELIO_ALLOW_INSECURE_OPEN: '1', AELIO_RUNTIME_BIND: `127.0.0.1:${port}`, AELIO_DATA_DIR: join(temp, 'data') },
     stdio: 'ignore',
   });
   child.on('error', () => {});
   await healthy(url);
 
-  const client = new SunjetClient({ baseUrl: url });
-  await bootstrapSunjetTables(client, TABLES, DIM);
+  const client = new AelioDbClient({ baseUrl: url });
+  await bootstrapAelioDbTables(client, TABLES, DIM);
   configureEmbedder(async (text) => vectorize(text));
 
   const config = { client, tables: TABLES, embedDim: DIM };

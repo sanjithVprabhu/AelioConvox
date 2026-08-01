@@ -15,6 +15,10 @@ aelio = Aelio(secret=os.getenv("AELIO_SDK_SECRET", "change-me-in-production"))
     description="Get the status of a customer order",
     params={"orderId": "string"},
     safety="read",
+    output={
+        "orderId": {"type": "string", "meaning": "The order identifier"},
+        "status": {"type": "string", "meaning": "The current fulfillment status"},
+    },
 )
 async def get_order_status(args, ctx):
     return {

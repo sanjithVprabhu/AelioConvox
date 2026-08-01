@@ -24,7 +24,12 @@ aelio.expose('getOrderStatus', async ({ orderId }, ctx) => {
 }, {
   description: 'Get the status of a customer order',
   params: { orderId: 'string' },
-  safety: 'read'
+  safety: 'read',
+  intent: 'get_order_status',
+  output: {
+    status: { type: 'string', meaning: 'Current fulfillment status' },
+    tracking: { type: 'string', meaning: 'Shipment tracking number' },
+  },
 })
 
 aelio.expose('cancelOrder', async ({ orderId }, ctx) => {
@@ -32,7 +37,12 @@ aelio.expose('cancelOrder', async ({ orderId }, ctx) => {
 }, {
   description: 'Cancel a pending order',
   params: { orderId: 'string' },
-  safety: 'write' // write actions are confirmed with the user before running
+  safety: 'write', // write actions are confirmed with the user before running
+  intent: 'cancel_order',
+  output: {
+    status: { type: 'string', meaning: 'Resulting order status' },
+  },
+  outputRole: 'effect_confirmation',
 })
 
 await aelio.listen({
@@ -42,6 +52,10 @@ await aelio.listen({
 ```
 
 That's the whole integration.
+
+`output` is the closed semantic allowlist for tool results. Only declared fields may become
+evidence, enter memory, or be shown to an LLM. Add `sensitivity: 'pii'` or `'secret'` to a field
+that must be redacted. An `intent` is an executable label and must resolve to one tool.
 
 ## Declaring parameters
 
@@ -162,7 +176,6 @@ aelio.flow('onboarding_setup', {
 
 // When your app knows the customer's stage (login, webhook, cron…):
 aelio.setCustomerState(userId, 'onboarding')
-aelio.setFlowProgress(userId, 'onboarding_setup', 1, ['review_orders'])
 ```
 
 ## API
@@ -176,7 +189,6 @@ aelio.setFlowProgress(userId, 'onboarding_setup', 1, ['review_orders'])
 - `aelio.policy(id, schema)` — declare a conversation policy.
 - `aelio.flow(id, schema)` — declare a guided multi-step flow for a state.
 - `aelio.setCustomerState(customerId, stateId, reason?)` — push current state to Aelio.
-- `aelio.setFlowProgress(customerId, flowId, stepIndex, completedSteps?)` — update flow progress.
 - `aelio.listen({ secret, url? })` — connect to the Aelio server (auto-reconnect + heartbeat).
 - `aelio.disconnect()` — drain and close.
 

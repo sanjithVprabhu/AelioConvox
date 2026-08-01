@@ -26,6 +26,12 @@ aelio.expose(
     description: 'Get the status of a customer order',
     params: { orderId: 'string' },
     safety: 'read',
+    intent: 'get_order_status',
+    output: {
+      orderId: { type: 'string', meaning: 'The order identifier' },
+      status: { type: 'string', meaning: 'The current fulfillment status' },
+      tracking: { type: 'string', meaning: 'The shipment tracking number' },
+    },
   },
 );
 
@@ -43,6 +49,13 @@ aelio.expose(
     description: 'Cancel a pending customer order',
     params: { orderId: 'string' },
     safety: 'write',
+    intent: 'cancel_order',
+    output: {
+      orderId: { type: 'string', meaning: 'The cancelled order identifier' },
+      status: { type: 'string', meaning: 'The resulting order status' },
+      cancelledAt: { type: 'string', meaning: 'The cancellation timestamp' },
+    },
+    outputRole: 'effect_confirmation',
   },
 );
 
@@ -71,6 +84,11 @@ aelio.expose(
       limit: 'number?',
     },
     safety: 'read',
+    intent: 'list_orders',
+    output: {
+      count: { type: 'number', meaning: 'The number of matching orders' },
+      orders: { type: 'array', meaning: 'The matching customer order records' },
+    },
   },
 );
 

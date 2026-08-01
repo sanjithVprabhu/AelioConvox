@@ -11,12 +11,12 @@ importers:
       '@aelio/core':
         specifier: workspace:*
         version: link:packages/core
+      '@aelio/db-client':
+        specifier: workspace:*
+        version: link:packages/db-client
       '@aelio/llm':
         specifier: workspace:*
         version: link:packages/llm
-      '@aelio/sunjet-client':
-        specifier: workspace:*
-        version: link:packages/sunjet-client
       '@types/node':
         specifier: ^22.15.30
         version: 22.19.21
@@ -93,21 +93,33 @@ importers:
 
   packages/core:
     dependencies:
+      '@aelio/db-client':
+        specifier: workspace:*
+        version: link:../db-client
       '@aelio/llm':
         specifier: workspace:*
         version: link:../llm
       '@aelio/protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@aelio/sunjet-client':
-        specifier: workspace:*
-        version: link:../sunjet-client
       zod:
         specifier: ^3.25.67
         version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^22.15.21
+        version: 22.19.21
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
+  packages/db-client:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.32
         version: 22.19.21
       tsup:
         specifier: ^8.5.0
@@ -160,18 +172,6 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
-  packages/sunjet-client:
-    devDependencies:
-      '@types/node':
-        specifier: ^22.15.32
-        version: 22.19.21
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.3
-
   sdk/node:
     dependencies:
       ws:
@@ -202,15 +202,15 @@ importers:
       '@aelio/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@aelio/db-client':
+        specifier: workspace:*
+        version: link:../packages/db-client
       '@aelio/llm':
         specifier: workspace:*
         version: link:../packages/llm
       '@aelio/protocol':
         specifier: workspace:*
         version: link:../packages/protocol
-      '@aelio/sunjet-client':
-        specifier: workspace:*
-        version: link:../packages/sunjet-client
       '@fastify/static':
         specifier: ^8.2.0
         version: 8.3.0

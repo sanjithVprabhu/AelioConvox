@@ -5,7 +5,7 @@
 
 **Stack (aligned to Aelio-Convox):**
 - Orchestration: `@aelio/core` turn loop (Fastify server, Node.js) — the harness extends this directly, it is not a separate package
-- Vector + hybrid search: Sunjet (custom Rust engine, codename LL), with `sqlite-vec` as the fallback path when `sunjet.enabled: false`
+- Vector + hybrid search: Aelio DB (custom Rust engine, codename LL), with `sqlite-vec` as the fallback path when `aelio-db.enabled: false`
 - Transactional source of truth: SQLite + Drizzle ORM (`@aelio/db`, `better-sqlite3`) — not Postgres/Neon
 - Planning/synthesis: Gemini via `@aelio/llm`'s Gemini provider (Pro-tier model for planning/synthesis, Flash-tier model for routing) — confirm exact model strings against your `config.yaml` / `config.gemini.yaml`, since these get renamed/versioned over time
 
@@ -15,7 +15,7 @@
 
 ## 1. Design Principles (the non-negotiables)
 
-1. **SQLite (via Drizzle, `@aelio/db`) is the only source of truth for anything that moves money or state.** Sunjet is a search index, not a ledger. If Sunjet is down, slow, or wrong, no order should ever be double-placed or lost.
+1. **SQLite (via Drizzle, `@aelio/db`) is the only source of truth for anything that moves money or state.** Aelio DB is a search index, not a ledger. If Aelio DB is down, slow, or wrong, no order should ever be double-placed or lost.
 2. **The LLM proposes, the state machine disposes.** Planning is an LLM's job. Executing, retrying, and enforcing limits is deterministic code — never re-delegated to the model mid-execution.
 3. **Every side-effecting call is idempotent by construction**, not by convention. A key exists before the call is attempted, not after.
 4. **Every loop has a ceiling that is enforced by schema or DB constraint, not by prompt instruction.** "Don't do more than 10 steps" in a system prompt is a suggestion. A `maxItems: 10` in a tool schema, or a `CHECK`/`UNIQUE` constraint in SQLite, is a guarantee.
@@ -32,9 +32,9 @@ flowchart TD
     A[User message arrives] --> B[Router pass — Gemini Flash-tier]
     B --> C{Budget check}
     C -->|exceeded| Z[Abort, return graceful error]
-    C -->|ok| D[Flow match — Sunjet, no LLM]
+    C -->|ok| D[Flow match — Aelio DB, no LLM]
     D -->|high confidence match| E[Load fixed plan from flows table - SQLite]
-    D -->|no match| F[Tool retrieval — Sunjet hybrid query]
+    D -->|no match| F[Tool retrieval — Aelio DB hybrid query]
     F --> G[Planner pass — Gemini Pro-tier, forced function call, schema-capped steps]
     G --> H{Budget check}
     H -->|exceeded| Z
@@ -92,7 +92,7 @@ Tenants pre-register known multi-step flows ("buy on COD" → add_to_cart → ch
 const FLOW_CONFIDENCE_THRESHOLD = 0.82;
 
 async function matchFlow(intent, tenantId) {
-  const result = await sunjetClient.query("flows", {
+  const result = await aelio-dbClient.query("flows", {
     k: 1,
     semantic: { col: "embedding", text: intent },
     filters: [{ col: "tenant_id", op: "eq", value: { type: "utf8", value: tenantId } }]
@@ -108,11 +108,11 @@ Tune this threshold empirically — log every flow-match score alongside whether
 
 ### 3.3 Tool retrieval — hybrid query, tenant-isolated
 
-When there's no flow match, retrieve candidate tools via Sunjet's fused vector + text + filter query in a single call:
+When there's no flow match, retrieve candidate tools via Aelio DB's fused vector + text + filter query in a single call:
 
 ```javascript
 async function retrieveTools(intent, tenantId, k = 12) {
-  const result = await sunjetClient.query("tools", {
+  const result = await aelio-dbClient.query("tools", {
     k,
     semantic: { col: "embedding", text: intent },
     text: { col: "when_to_call", query: extractKeywords(intent) },
@@ -124,7 +124,7 @@ async function retrieveTools(intent, tenantId, k = 12) {
 
 The `text` clause on `when_to_call` matters as much as the semantic clause — embeddings blur exact operational phrases ("cash on delivery," "COD," a specific SKU code) that keyword match catches cleanly. The RRF fusion combines both without you writing merge logic by hand.
 
-Tenant isolation lives in the `filters` clause, not in separate per-tenant indexes — Sunjet's cost-based optimizer pre-filters on low-selectivity scalar predicates like `tenant_id`, so this stays exact-recall rather than degrading the way naive ANN-then-filter setups do.
+Tenant isolation lives in the `filters` clause, not in separate per-tenant indexes — Aelio DB's cost-based optimizer pre-filters on low-selectivity scalar predicates like `tenant_id`, so this stays exact-recall rather than degrading the way naive ANN-then-filter setups do.
 
 ### 3.4 Planner — one call, schema-capped, forced tool use
 
@@ -288,7 +288,7 @@ async function invokeTool(toolId, input, idempotencyKey) {
 
 ### 3.8 Cycle detection — cheap because plans are small
 
-Because the step cap keeps plans at ≤10 steps, a full DFS cycle check on the in-memory `depends_on` graph is trivial — no need to push this into Sunjet's graph engine for something this size:
+Because the step cap keeps plans at ≤10 steps, a full DFS cycle check on the in-memory `depends_on` graph is trivial — no need to push this into Aelio DB's graph engine for something this size:
 
 ```javascript
 function detectCycle(steps) {
@@ -344,14 +344,14 @@ Every LLM call site increments `token_spend` with the actual usage returned by t
 
 | Concern | System | Why |
 |---|---|---|
-| Tool/flow embeddings, semantic search | Sunjet | Native hybrid vector+text+filter query, single round trip |
-| Message/memory semantic recall | Sunjet | Same — replaces the SQLite brute-force path |
-| Conversation threading (`parent_ids`) | Sunjet | Graph traversal for reply-chain context |
-| `plans` / `plan_steps` (the ledger) | SQLite (Drizzle, `@aelio/db`) | Transactional guarantees, foreign keys, `UNIQUE` idempotency constraint — this is money-adjacent state and Sunjet is pre-alpha |
-| `tools` / `flows` canonical definitions | SQLite, mirrored into Sunjet | SQLite is source of truth; Sunjet holds the embedding copy for search only |
-| Ephemeral loop counters | SQLite columns on `plans` (durable) + optionally Sunjet `runtime_state` (fast, TTL-swept) | Durable for crash recovery, fast copy for the hot loop check if needed |
+| Tool/flow embeddings, semantic search | Aelio DB | Native hybrid vector+text+filter query, single round trip |
+| Message/memory semantic recall | Aelio DB | Same — replaces the SQLite brute-force path |
+| Conversation threading (`parent_ids`) | Aelio DB | Graph traversal for reply-chain context |
+| `plans` / `plan_steps` (the ledger) | SQLite (Drizzle, `@aelio/db`) | Transactional guarantees, foreign keys, `UNIQUE` idempotency constraint — this is money-adjacent state and Aelio DB is pre-alpha |
+| `tools` / `flows` canonical definitions | SQLite, mirrored into Aelio DB | SQLite is source of truth; Aelio DB holds the embedding copy for search only |
+| Ephemeral loop counters | SQLite columns on `plans` (durable) + optionally Aelio DB `runtime_state` (fast, TTL-swept) | Durable for crash recovery, fast copy for the hot loop check if needed |
 
-This mirrors the "operational split" already in your Sunjet integration notes — SQLite for transactional state, Sunjet for archival and semantic layers. The one addition specific to this harness: **`plan_steps` is transactional, not archival**, so it belongs in SQLite even though it's conceptually close to `convox_messages`. The moment you write a checkout call, you want ACID guarantees, not eventual consistency, and `better-sqlite3` gives you that on a single node.
+This mirrors the "operational split" already in your Aelio DB integration notes — SQLite for transactional state, Aelio DB for archival and semantic layers. The one addition specific to this harness: **`plan_steps` is transactional, not archival**, so it belongs in SQLite even though it's conceptually close to `convox_messages`. The moment you write a checkout call, you want ACID guarantees, not eventual consistency, and `better-sqlite3` gives you that on a single node.
 
 ---
 
@@ -447,7 +447,7 @@ A CTO-honest list of things this document deliberately does not resolve, because
 1. **What happens when a plan aborts mid-purchase?** If step 1 (add_to_cart) succeeded and step 2 (checkout) hit the budget cap — do you leave the cart populated and tell the user, or auto-rollback? This needs a per-tool "compensating action" concept (e.g. `remove_from_cart` as the rollback for `add_to_cart`) if you want clean rollback, which isn't in scope above.
 2. **Cross-tenant tool schema validation** — right now a malformed `input_schema` from a tenant's backend team would only surface at planning time. Consider validating tool registration payloads at write time.
 3. **What the user sees during a multi-step plan** — this doc covers backend execution; you'll want a progress-streaming layer (your SSE/webhook re-engagement work is the natural fit) so a 3-step checkout doesn't look like a silent hang.
-4. **Sunjet's pre-alpha status** — re-flagging this from before: don't put anything transactional there until it's hardened. The split above already isolates that risk, but worth a standing item to revisit as Sunjet matures.
+4. **Aelio DB's pre-alpha status** — re-flagging this from before: don't put anything transactional there until it's hardened. The split above already isolates that risk, but worth a standing item to revisit as Aelio DB matures.
 
 ---
 
@@ -457,4 +457,4 @@ A CTO-honest list of things this document deliberately does not resolve, because
 - **The LLM never re-enters a live tool call.** Planning and execution are separate phases; execution is a deterministic loop that only calls back to the LLM at well-defined recovery points (replan), each gated by a budget check.
 - **Every side effect has a key before it has a call.** Idempotency is structural, enforced by a `UNIQUE` constraint, not application discipline.
 - **State is persisted after every step, not at the end.** A crash mid-plan leaves a resumable, inspectable row trail in SQLite — not a lost conversation.
-- **Sunjet does what it's good at (search), SQLite does what it's good at (transactions).** Neither system is asked to be something it isn't.
+- **Aelio DB does what it's good at (search), SQLite does what it's good at (transactions).** Neither system is asked to be something it isn't.

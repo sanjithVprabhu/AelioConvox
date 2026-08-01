@@ -1,8 +1,8 @@
 # Fix proposal: Wrong OTP yields `SigMismatch` instead of `NeedsRepair`
 
-Status: **proposed, not implemented**  
-Observed in: simulation 6 (`docs/new_arch/AELIO_RUST_12_SIMULATIONS.md`)  
-Primary code: `Sunjet/Astrolobe/crates/aelio/src/abilities/invoke.rs`
+Status: **proposed, not implemented**
+Observed in: simulation 6 (`docs/new_arch/AELIO_RUST_12_SIMULATIONS.md`)
+Primary code: `aelio-os/crates/aelio/src/abilities/invoke.rs`
 
 ## Problem
 
@@ -87,7 +87,7 @@ Prefer the explicit reorder for clarity and auditability.
 Re-run:
 
 ```bash
-cargo run --manifest-path Sunjet/Astrolobe/Cargo.toml -p aelio --example aelio_12_simulations
+cargo run --manifest-path aelio-os/Cargo.toml -p aelio --example aelio_12_simulations
 ```
 
 Expect scenario 6: `supported` / assertion pass, gap text removed.

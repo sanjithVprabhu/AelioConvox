@@ -1,9 +1,9 @@
 # Sol Conversion — Fundamental Type Rules & Metadata
 
-**Status:** draft for design lock (v0.1)  
+**Status:** draft for design lock (v0.1)
 **Companion test:** [`AELIO_SOL_CONVERSION_THEORY_TEST.md`](./AELIO_SOL_CONVERSION_THEORY_TEST.md)
 
-Goal: every Sol→Sol converter is built from **declared rules** over **fundamental types**, with **metadata** stored in Sunjet so warm path never needs the LLM.
+Goal: every Sol→Sol converter is built from **declared rules** over **fundamental types**, with **metadata** stored in Aelio DB so warm path never needs the LLM.
 
 ---
 
@@ -61,12 +61,12 @@ Legend: **Y** = always allowed · **C** = allowed with constraint · **N** = for
 | **list** | N | N | N | N | C⁶ | Y | N |
 | **map** | N | N | N | N | C⁶ | N | Y |
 
-¹ bool→int/float: `false→0`, `true→1` only  
-² int/float→bool: only `0→false`, nonzero→true if rule sets `mode: nonzero` — else **N**  
-³ float→int: only if `mode: trunc|floor|ceil|round` declared; reject non-finite  
-⁴ str→bool: only closed sets e.g. `{"true","false"}` / `{"0","1"}` in rule  
-⁵ str→int/float: parse; fail → `ParseError` (not silent)  
-⁶ list/map→str: only if `mode: json` explicit  
+¹ bool→int/float: `false→0`, `true→1` only
+² int/float→bool: only `0→false`, nonzero→true if rule sets `mode: nonzero` — else **N**
+³ float→int: only if `mode: trunc|floor|ceil|round` declared; reject non-finite
+⁴ str→bool: only closed sets e.g. `{"true","false"}` / `{"0","1"}` in rule
+⁵ str→int/float: parse; fail → `ParseError` (not silent)
+⁶ list/map→str: only if `mode: json` explicit
 
 **Identity cast** (type→same type): always Y (no-op).
 
@@ -88,7 +88,7 @@ Legend: **Y** = always allowed · **C** = allowed with constraint · **N** = for
 
 ---
 
-## 5. Metadata stored per conversion edge (Sunjet)
+## 5. Metadata stored per conversion edge (Aelio DB)
 
 Every promoted converter row/edge **must** carry:
 
@@ -140,9 +140,9 @@ Store searchable edges:
 
 Lookup order:
 
-1. Exact imprint pair + key map  
-2. Field-level type edge (`age:int` → `years_lived:int`)  
-3. Miss → cold LLM propose  
+1. Exact imprint pair + key map
+2. Field-level type edge (`age:int` → `years_lived:int`)
+3. Miss → cold LLM propose
 
 ---
 
@@ -238,10 +238,10 @@ Two edges (or one composite conversion with two rules) — both pure, both metad
 
 ## 8. Decisions to lock with you
 
-1. Accept fundamental types list (`null…map`)?  
-2. Accept cast matrix (especially float→int needs explicit mode)?  
-3. Accept metadata fields in §5?  
-4. `map_enum` mandatory for vocabulary changes (no silent str rename for Male→M)?  
+1. Accept fundamental types list (`null…map`)?
+2. Accept cast matrix (especially float→int needs explicit mode)?
+3. Accept metadata fields in §5?
+4. `map_enum` mandatory for vocabulary changes (no silent str rename for Male→M)?
 5. Composite converters (many rules, one edge) vs one edge per field?
 
 ---

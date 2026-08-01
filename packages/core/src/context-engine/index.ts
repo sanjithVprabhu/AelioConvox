@@ -3,7 +3,7 @@
  *
  * Messages live in a hot 5-minute window (in-memory cache, verbatim). Once a
  * message ages past the hot window it "slides down" through time buckets
- * persisted in the Sunjet compactions table:
+ * persisted in the AelioDb compactions table:
  *
  *   tier 1: 5–15 minutes ago
  *   tier 2: 15–30 minutes ago
@@ -19,14 +19,14 @@
  *
  * The rendered context block is cached per customer with a short TTL and
  * invalidated on every recorded message, so the hot path usually costs zero
- * Sunjet reads. The block is designed to be fed into the system prompt via
+ * AelioDb reads. The block is designed to be fed into the system prompt via
  * the prompt factory so the model keeps continuity across sessions/channels.
  */
 
 import type { LLMProvider } from '@aelio/llm';
-import type { ApiValue } from '@aelio/sunjet-client';
+import type { ApiValue } from '@aelio/db-client';
 import { i64, readI64, readUtf8, utf8 } from '../storage/helpers.js';
-import type { SunjetStorageConfig } from '../storage/types.js';
+import type { AelioDbStorageConfig } from '../storage/types.js';
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -83,7 +83,7 @@ export type ImmediateContextSnapshot = {
 };
 
 export type ImmediateContextEngineOptions = {
-  storage: SunjetStorageConfig;
+  storage: AelioDbStorageConfig;
   /** When present, tier merges are condensed by the LLM; otherwise deterministic truncation. */
   llm?: LLMProvider;
   model?: string;
@@ -108,7 +108,7 @@ function text(value: string): ApiValue {
 }
 
 export class ImmediateContextEngine {
-  private readonly client: SunjetStorageConfig['client'];
+  private readonly client: AelioDbStorageConfig['client'];
   private readonly table: string;
   private readonly messagesTable: string;
   private readonly llm?: LLMProvider;
@@ -139,7 +139,7 @@ export class ImmediateContextEngine {
       content: message.content,
       createdAt: message.createdAt ?? Date.now(),
     };
-    // Only append when the hot list has been seeded from Sunjet — otherwise the
+    // Only append when the hot list has been seeded from AelioDb — otherwise the
     // next seed scan would double-count this message (it is already persisted).
     if (this.hotSeeded.has(customerId)) {
       const list = this.hot.get(customerId) ?? [];

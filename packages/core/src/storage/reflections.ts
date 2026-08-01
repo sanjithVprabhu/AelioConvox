@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { f64, i64, parseJson, readF64, readI64, readUtf8, utf8 } from './helpers.js';
-import type { SunjetStorageConfig } from './types.js';
+import type { AelioDbStorageConfig } from './types.js';
 
 export type ReflectionStoreInput = {
   sessionId: string;
@@ -27,10 +27,10 @@ export type ReflectionRecord = {
 };
 
 export class ConvoxReflectionStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
 
-  constructor(config: SunjetStorageConfig) {
+  constructor(config: AelioDbStorageConfig) {
     this.client = config.client;
     this.table = config.tables.reflections;
   }
@@ -87,6 +87,6 @@ export class ConvoxReflectionStore {
   }
 }
 
-export function createConvoxReflectionStore(config: SunjetStorageConfig): ConvoxReflectionStore {
+export function createConvoxReflectionStore(config: AelioDbStorageConfig): ConvoxReflectionStore {
   return new ConvoxReflectionStore(config);
 }

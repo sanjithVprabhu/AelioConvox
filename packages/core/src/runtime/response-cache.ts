@@ -18,7 +18,7 @@ export async function lookupCachedResponse(input: {
   responseCacheStore: ConvoxResponseCacheStore;
 }): Promise<string | null> {
   if (!input.responseCacheStore) {
-    throw new Error('Sunjet responseCacheStore is required');
+    throw new Error('AelioDb responseCacheStore is required');
   }
   return input.responseCacheStore.lookup(input.customerId, input.message, input.threshold);
 }
@@ -32,7 +32,7 @@ export async function storeCachedResponse(input: {
   responseCacheStore: ConvoxResponseCacheStore;
 }): Promise<void> {
   if (!input.responseCacheStore) {
-    throw new Error('Sunjet responseCacheStore is required');
+    throw new Error('AelioDb responseCacheStore is required');
   }
   await input.responseCacheStore.store(input.customerId, input.message, input.reply, input.ttlMinutes);
 }

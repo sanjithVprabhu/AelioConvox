@@ -1,5 +1,5 @@
 import type { LLMCompleteOptions, LLMCompleteResult, LLMProvider } from '@aelio/llm';
-import type { SunjetClient } from '@aelio/sunjet-client';
+import type { AelioDbClient } from '@aelio/db-client';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { i64, parseJson, readI64, readUtf8, utf8 } from '../storage/helpers.js';
@@ -29,8 +29,8 @@ export type TurnApiCallPurpose =
   | 'synthesis'
   | 'recoil_extract';
 
-export type TurnApiCallsSunjetConfig = {
-  client: SunjetClient;
+export type TurnApiCallsAelioDbConfig = {
+  client: AelioDbClient;
   table: string;
 };
 
@@ -39,8 +39,8 @@ export type TurnContext = {
   sessionId: string;
   customerId: string;
   sequence: number;
-  /** When present, per-turn API call telemetry writes to Sunjet exclusively. */
-  sunjet?: TurnApiCallsSunjetConfig;
+  /** When present, per-turn API call telemetry writes to AelioDb exclusively. */
+  aelioDb?: TurnApiCallsAelioDbConfig;
 };
 
 export type TurnApiCallRecord = {
@@ -112,8 +112,8 @@ export function buildLlmPromptSummary(
 }
 
 /**
- * Record one per-turn API call. Writes to Sunjet exclusively — either the
- * `sunjet` config passed explicitly or the one carried on the ambient turn
+ * Record one per-turn API call. Writes to AelioDb exclusively — either the
+ * `aelioDb` config passed explicitly or the one carried on the ambient turn
  * context (see `runWithTurnContext`). Silently no-ops (returns null) when
  * neither is available, since telemetry must never break the turn.
  */
@@ -134,15 +134,15 @@ export async function recordTurnApiCall(input: {
   turnId?: string;
   sessionId?: string;
   customerId?: string;
-  sunjet?: TurnApiCallsSunjetConfig;
+  aelioDb?: TurnApiCallsAelioDbConfig;
 }): Promise<string | null> {
   const ctx = getTurnContext();
   const turnId = input.turnId ?? ctx?.turnId;
   const sessionId = input.sessionId ?? ctx?.sessionId;
   const customerId = input.customerId ?? ctx?.customerId;
-  const sunjet = input.sunjet ?? ctx?.sunjet;
+  const aelioDb = input.aelioDb ?? ctx?.aelioDb;
 
-  if (!turnId || !sessionId || !customerId || !sunjet) {
+  if (!turnId || !sessionId || !customerId || !aelioDb) {
     return null;
   }
 
@@ -150,7 +150,7 @@ export async function recordTurnApiCall(input: {
   const id = randomUUID();
   const now = new Date();
 
-  await sunjet.client.insertRow(sunjet.table, {
+  await aelioDb.client.insertRow(aelioDb.table, {
     call_id: utf8(id),
     turn_id: utf8(turnId),
     session_id: utf8(sessionId),
@@ -231,11 +231,11 @@ export async function listTurnApiCalls(
     sessionId?: string;
     limit?: number;
   } = {},
-  sunjet?: TurnApiCallsSunjetConfig,
+  aelioDb?: TurnApiCallsAelioDbConfig,
 ): Promise<TurnApiCallRecord[]> {
   const limit = Math.min(Math.max(input.limit ?? 200, 1), 1000);
 
-  if (!sunjet) {
+  if (!aelioDb) {
     return [];
   }
 
@@ -246,7 +246,7 @@ export async function listTurnApiCalls(
   if (input.sessionId) {
     filters.push({ col: 'session_id', op: 'eq' as const, value: utf8(input.sessionId) });
   }
-  const scan = await sunjet.client.scanRows(sunjet.table, {
+  const scan = await aelioDb.client.scanRows(aelioDb.table, {
     k: Math.max(limit * 4, 500),
     filters,
   });
@@ -275,7 +275,7 @@ export async function listTurnApiCalls(
 
 export async function summarizeTurnApiCalls(
   turnId: string,
-  sunjet?: TurnApiCallsSunjetConfig,
+  aelioDb?: TurnApiCallsAelioDbConfig,
 ): Promise<{
   turnId: string;
   totalCalls: number;
@@ -283,7 +283,7 @@ export async function summarizeTurnApiCalls(
   embedCalls: number;
   calls: TurnApiCallRecord[];
 }> {
-  const calls = await listTurnApiCalls({ turnId, limit: 100 }, sunjet);
+  const calls = await listTurnApiCalls({ turnId, limit: 100 }, aelioDb);
   return {
     turnId,
     totalCalls: calls.length,

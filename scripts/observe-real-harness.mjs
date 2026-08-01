@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Ten real-LLM Harness interactions against an isolated live Sunjet.
+ * Ten real-LLM Harness interactions against an isolated live AelioDb.
  *
  * Uses the configured OPENAI_API_KEY for response generation. Retrieval is
  * deterministic so observations isolate the Harness decisions while replies
@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bootstrapSunjetTables,
+  bootstrapAelioDbTables,
   configureEmbedder,
   createArchetypeEngine,
   createConvoxArchetypeStore,
@@ -35,11 +35,11 @@ import {
   embed,
 } from '@aelio/core';
 import { createLLMProvider } from '@aelio/llm';
-import { SunjetClient } from '@aelio/sunjet-client';
+import { AelioDbClient } from '@aelio/db-client';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ASTROLOBE = join(ROOT, 'Sunjet/Astrolobe');
-const LL_SERVER = join(ASTROLOBE, 'target/release/ll-server');
+const AELIO_OS = join(ROOT, 'aelio-os');
+const AELIO_SERVER = join(AELIO_OS, 'target/release/aelio-server');
 const REPORT_PATH = join(ROOT, 'docs/HARNESS_10_REAL_LLM_OBSERVATION.md');
 const DIM = 128;
 
@@ -123,7 +123,7 @@ async function waitHealthy(url) {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error('temporary ll-server did not become healthy');
+  throw new Error('temporary aelio-server did not become healthy');
 }
 
 function buildSdk() {
@@ -300,12 +300,13 @@ async function main() {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   temp = mkdtempSync(join(tmpdir(), 'aelio-real-observation-'));
-  child = spawn(LL_SERVER, [], {
-    cwd: ASTROLOBE,
+  child = spawn(AELIO_SERVER, [], {
+    cwd: AELIO_OS,
     env: {
       ...process.env,
-      LL_BIND: `127.0.0.1:${port}`,
-      LL_DATA_DIR: join(temp, 'data'),
+      AELIO_ALLOW_INSECURE_OPEN: '1',
+      AELIO_RUNTIME_BIND: `127.0.0.1:${port}`,
+      AELIO_DATA_DIR: join(temp, 'data'),
     },
     stdio: 'ignore',
   });
@@ -313,8 +314,8 @@ async function main() {
   await waitHealthy(url);
 
   configureEmbedder(async (text) => vectorize(text));
-  const client = new SunjetClient({ baseUrl: url });
-  await bootstrapSunjetTables(client, TABLES, DIM);
+  const client = new AelioDbClient({ baseUrl: url });
+  await bootstrapAelioDbTables(client, TABLES, DIM);
   const storage = { client, tables: TABLES, embedDim: DIM };
 
   const messageStore = createConvoxMessageStore(storage);
@@ -327,7 +328,7 @@ async function main() {
   const archetypeStore = createConvoxArchetypeStore(storage);
   const axisStore = createConvoxAxisStore(storage);
   const suspensionStore = new SuspensionStore({
-    sunjet: {
+    aelioDb: {
       client,
       table: TABLES.harnessSuspensions,
       tenant: 'real-observation',
@@ -377,7 +378,7 @@ async function main() {
     archetypeEngine: createArchetypeEngine({ store: archetypeStore, aspectStore }),
     axisStore,
     suspensionStore,
-    ledgerSunjet: {
+    ledgerAelioDb: {
       client,
       table: TABLES.harnessLedger,
       tenant: 'real-observation',
@@ -575,7 +576,7 @@ async function main() {
   }
 
   // Aspect discovery is deliberately fire-and-forget in the turn path. Give
-  // those observations time to finish before tearing down their Sunjet store.
+  // those observations time to finish before tearing down their AelioDb store.
   await new Promise((resolve) => setTimeout(resolve, 3000));
   const axes = (
     await Promise.all(

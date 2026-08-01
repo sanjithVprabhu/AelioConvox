@@ -1,5 +1,5 @@
 import type { FunctionDefinition } from '@aelio/protocol';
-import type { SunjetClient } from '@aelio/sunjet-client';
+import type { AelioDbClient } from '@aelio/db-client';
 import { cosineSimilarity, embed } from '../analyst/embeddings.js';
 import type { SdkBridge } from '../sdk-bridge/types.js';
 import { registryHash, type RegistrySnapshot } from './hash.js';
@@ -13,8 +13,8 @@ export { LighthouseMirror, type ToolSearchHit } from './mirror.js';
 export type LighthouseConfig = {
   bridge: SdkBridge;
   tenant: string;
-  sunjet?: {
-    client: SunjetClient;
+  aelioDb?: {
+    client: AelioDbClient;
     toolsTable: string;
     capabilitiesTable: string;
     embedDim: number;
@@ -25,7 +25,7 @@ export type LighthouseConfig = {
  * Lighthouse: the harness's single read model over everything the SDK has
  * registered. The in-memory bridge stays authoritative for liveness and
  * schemas; Lighthouse adds the derived artifacts the planner and binder need —
- * a stable registry hash, the capability brief, and (when Sunjet is up) an
+ * a stable registry hash, the capability brief, and (when AelioDb is up) an
  * indexed mirror for semantic tool search with prerequisite-graph expansion.
  *
  * All derived artifacts are keyed by the registry hash: nothing is recomputed
@@ -39,12 +39,12 @@ export class LighthouseService {
   private syncing: Promise<void> | null = null;
 
   constructor(private readonly config: LighthouseConfig) {
-    this.mirror = config.sunjet
+    this.mirror = config.aelioDb
       ? new LighthouseMirror({
-          client: config.sunjet.client,
-          toolsTable: config.sunjet.toolsTable,
-          capabilitiesTable: config.sunjet.capabilitiesTable,
-          embedDim: config.sunjet.embedDim,
+          client: config.aelioDb.client,
+          toolsTable: config.aelioDb.toolsTable,
+          capabilitiesTable: config.aelioDb.capabilitiesTable,
+          embedDim: config.aelioDb.embedDim,
           tenant: config.tenant,
         })
       : null;
@@ -64,7 +64,7 @@ export class LighthouseService {
 
   /**
    * Recompute the hash from the live registry; on change, rebuild the brief and
-   * (fire-and-forget) resync the Sunjet mirror. Cheap when nothing changed —
+   * (fire-and-forget) resync the AelioDb mirror. Cheap when nothing changed —
    * safe to call on every SDK register/unregister AND lazily per turn.
    */
   refresh(): { hash: string; changed: boolean } {
@@ -76,7 +76,7 @@ export class LighthouseService {
     this.hash = hash;
     this.brief = buildCapabilityBrief(snapshot);
     if (this.mirror) {
-      // Serialize syncs; a Sunjet outage degrades search to in-process, never a turn.
+      // Serialize syncs; a AelioDb outage degrades search to in-process, never a turn.
       const run = async () => {
         try {
           await this.mirror!.sync(snapshot, hash, this.brief);
@@ -102,7 +102,7 @@ export class LighthouseService {
   }
 
   /**
-   * Ranked semantic tool search. Sunjet mirror (with prerequisite expansion)
+   * Ranked semantic tool search. AelioDb mirror (with prerequisite expansion)
    * when available; otherwise an in-process embedding rank over the live
    * registry. Always returns live-registry definitions.
    */

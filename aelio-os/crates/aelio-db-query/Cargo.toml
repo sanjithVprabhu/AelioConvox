@@ -1,0 +1,24 @@
+[package]
+name = "aelio-db-query"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LL query layer: the Source abstraction unifying memtable and files across modalities."
+
+[dependencies]
+aelio-db-engine = { path = "../aelio-db-engine" }
+aelio-db-format = { path = "../aelio-db-format" }
+aelio-db-index = { path = "../aelio-db-index" }
+aelio-db-text = { path = "../aelio-db-text" } # tokenizer + TextView
+aelio-db-graph = { path = "../aelio-db-graph" }
+aelio-db-catalog = { path = "../aelio-db-catalog" }
+aelio-db-cost = { path = "../aelio-db-cost" } # selectivity-driven filtered-vector strategy selection
+aelio-db-storage = { path = "../aelio-db-storage" }
+aelio-query = { path = "../aelio-query" }
+aelio-sol = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+aelio-db-storage = { path = "../aelio-db-storage" }
+serde_json = { workspace = true }

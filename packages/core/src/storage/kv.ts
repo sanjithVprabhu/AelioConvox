@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { i64, parseJson, readI64, readUtf8, utf8 } from './helpers.js';
-import type { SunjetStorageConfig } from './types.js';
+import type { AelioDbStorageConfig } from './types.js';
 
 const SCAN_CAP = 2_000;
 const DEDUP_PRUNE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Inbound webhook message dedup. Sunjet has no unique-constraint enforcement
+ * Inbound webhook message dedup. AelioDb has no unique-constraint enforcement
  * over HTTP, so `claim()` is scan-then-insert rather than a true atomic
  * `INSERT OR IGNORE`: a same-millisecond race between two claims for the same
  * `messageId` could both succeed. This mirrors the acceptable-risk tradeoff
@@ -14,10 +14,10 @@ const DEDUP_PRUNE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
  * practice to not warrant a distributed lock here).
  */
 export class ConvoxInboundDedupStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
 
-  constructor(config: SunjetStorageConfig) {
+  constructor(config: AelioDbStorageConfig) {
     this.client = config.client;
     this.table = config.tables.inboundDedup;
   }
@@ -77,10 +77,10 @@ export type MagicLinkCreateInput = {
 };
 
 export class ConvoxMagicLinkStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
 
-  constructor(config: SunjetStorageConfig) {
+  constructor(config: AelioDbStorageConfig) {
     this.client = config.client;
     this.table = config.tables.magicLinks;
   }
@@ -156,10 +156,10 @@ export type SdkConnectionUpsertInput = {
 };
 
 export class ConvoxSdkConnectionStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
 
-  constructor(config: SunjetStorageConfig) {
+  constructor(config: AelioDbStorageConfig) {
     this.client = config.client;
     this.table = config.tables.sdkConnections;
   }
@@ -224,17 +224,17 @@ export class ConvoxSdkConnectionStore {
 }
 
 export function createConvoxInboundDedupStore(
-  config: SunjetStorageConfig,
+  config: AelioDbStorageConfig,
 ): ConvoxInboundDedupStore {
   return new ConvoxInboundDedupStore(config);
 }
 
-export function createConvoxMagicLinkStore(config: SunjetStorageConfig): ConvoxMagicLinkStore {
+export function createConvoxMagicLinkStore(config: AelioDbStorageConfig): ConvoxMagicLinkStore {
   return new ConvoxMagicLinkStore(config);
 }
 
 export function createConvoxSdkConnectionStore(
-  config: SunjetStorageConfig,
+  config: AelioDbStorageConfig,
 ): ConvoxSdkConnectionStore {
   return new ConvoxSdkConnectionStore(config);
 }

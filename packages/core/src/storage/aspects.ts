@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { cosineSimilarity, embed } from '../analyst/embeddings.js';
 import { i64, readI64, readUtf8, readVector, utf8 } from './helpers.js';
 import { normalizeEmbedding } from './messages.js';
-import type { SunjetStorageConfig } from './types.js';
+import type { AelioDbStorageConfig } from './types.js';
 
 export type AspectStatus = 'candidate' | 'active' | 'retired';
 export type AspectSource = 'builtin' | 'discovered';
@@ -19,7 +19,7 @@ export type AspectRecord = {
 };
 
 export type AspectMatch = AspectRecord & {
-  /** Recomputed cosine similarity (NOT the Sunjet RRF score). */
+  /** Recomputed cosine similarity (NOT the AelioDb RRF score). */
   score: number;
 };
 
@@ -36,7 +36,7 @@ function aspectSignature(name: string, description: string): string {
   return [name, description].filter(Boolean).join(' — ');
 }
 
-function rowToRecord(values: Record<string, import('@aelio/sunjet-client').ApiValue>): AspectRecord {
+function rowToRecord(values: Record<string, import('@aelio/db-client').ApiValue>): AspectRecord {
   return {
     id: readUtf8(values, 'aspect_id'),
     name: readUtf8(values, 'name'),
@@ -50,14 +50,14 @@ function rowToRecord(values: Record<string, import('@aelio/sunjet-client').ApiVa
 }
 
 export class ConvoxAspectStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
   readonly embedDim: number;
   readonly tenant: string;
   /** Candidate is promoted to active once hits reaches this. */
   readonly promoteAtHits: number;
 
-  constructor(config: SunjetStorageConfig, tenant = 'default', promoteAtHits = 3) {
+  constructor(config: AelioDbStorageConfig, tenant = 'default', promoteAtHits = 3) {
     this.client = config.client;
     this.table = config.tables.aspects;
     this.embedDim = config.embedDim;
@@ -188,7 +188,7 @@ export class ConvoxAspectStore {
 }
 
 export function createConvoxAspectStore(
-  config: SunjetStorageConfig,
+  config: AelioDbStorageConfig,
   tenant = 'default',
 ): ConvoxAspectStore {
   return new ConvoxAspectStore(config, tenant);

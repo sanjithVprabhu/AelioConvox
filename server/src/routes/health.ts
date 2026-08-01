@@ -19,21 +19,28 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
     }
 
     const checks: Record<string, boolean> = {
-      sunjet: false,
+      runtime: false,
+      aelioDb: false,
       widget: false,
     };
 
-    // Aelio is Sunjet-only — readiness reflects Sunjet's own health directly.
     try {
-      const health = await deps.sunjetClient.health();
-      checks.sunjet = health.status === 'ok';
+      await deps.aelioRuntime.ready();
+      checks.runtime = true;
     } catch {
-      checks.sunjet = false;
+      checks.runtime = false;
+    }
+
+    try {
+      const health = await deps.aelioDbClient.health();
+      checks.aelioDb = health.status === 'ok';
+    } catch {
+      checks.aelioDb = false;
     }
 
     checks.widget = existsSync(resolvePublicDir() + '/widget.js');
 
-    const ready = checks.widget && checks.sunjet;
+    const ready = checks.widget && checks.runtime && checks.aelioDb;
     const isProduction = process.env.NODE_ENV === 'production';
     const authorized = secretsMatch(bearerToken(request), deps.config.secret);
     const redactCatalog = isProduction && !authorized;
@@ -54,38 +61,37 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
       },
       memory: {
         enabled: deps.config.memory.enabled,
-        backend: 'sunjet',
+        backend: 'aelioDb',
       },
       channels: {
         web: deps.config.channels.web.enabled,
         whatsapp: deps.config.channels.whatsapp.enabled,
       },
       llm: deps.config.llm.provider,
-      sunjet: {
-        enabled: deps.config.sunjet.enabled,
-        url: deps.config.sunjet.url,
-        messageBackend: 'sunjet',
-        memoryBackend: 'sunjet',
-        sessionBackend: 'sunjet',
-        customerBackend: 'sunjet',
-        jobBackend: 'sunjet',
-        responseCacheBackend: 'sunjet',
-        functionCallBackend: 'sunjet',
-        reflectionBackend: 'sunjet',
-        proactiveBackend: 'sunjet',
-        inboundDedupBackend: 'sunjet',
-        magicLinkBackend: 'sunjet',
-        sdkConnectionBackend: 'sunjet',
+      aelioDb: {
+        enabled: deps.config.aelioDb.enabled,
+        url: deps.config.aelioDb.url,
+        messageBackend: 'aelioDb',
+        memoryBackend: 'aelioDb',
+        sessionBackend: 'aelioDb',
+        customerBackend: 'aelioDb',
+        jobBackend: 'aelioDb',
+        responseCacheBackend: 'aelioDb',
+        functionCallBackend: 'aelioDb',
+        reflectionBackend: 'aelioDb',
+        proactiveBackend: 'aelioDb',
+        inboundDedupBackend: 'aelioDb',
+        magicLinkBackend: 'aelioDb',
+        sdkConnectionBackend: 'aelioDb',
         segmentStorage: {
-          backend: deps.config.sunjet.segment_storage.backend,
-          prefix: deps.config.sunjet.segment_storage.prefix ?? null,
-          bucket: deps.config.sunjet.segment_storage.bucket ?? null,
-          region: deps.config.sunjet.segment_storage.region ?? null,
-          endpoint: deps.config.sunjet.segment_storage.endpoint ?? null,
+          backend: deps.config.aelioDb.segment_storage.backend,
+          prefix: deps.config.aelioDb.segment_storage.prefix ?? null,
+          bucket: deps.config.aelioDb.segment_storage.bucket ?? null,
+          region: deps.config.aelioDb.segment_storage.region ?? null,
+          endpoint: deps.config.aelioDb.segment_storage.endpoint ?? null,
           // Secrets never echoed — only whether they are set.
           credentialsConfigured: Boolean(
-            process.env.AELIO_SUNJET_S3_ACCESS_KEY_ID ||
-              process.env.LL_S3_ACCESS_KEY_ID ||
+            process.env.AELIO_DB_S3_ACCESS_KEY_ID ||
               process.env.AWS_ACCESS_KEY_ID,
           ),
         },

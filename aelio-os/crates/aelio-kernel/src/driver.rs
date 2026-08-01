@@ -508,6 +508,7 @@ impl LiveBackend<'_> {
 
 impl Backend for LiveBackend<'_> {
     fn call(&mut self, nid: &str, id: &str, args: SolValue) -> Result<CallOutput, ErrV1> {
+        let corr = format!("{}:{nid}", self.turn_id);
         let effect = self.registry.effect_of(id).ok_or_else(|| {
             ErrV1::new(
                 ReasonCode::Shape,
@@ -558,12 +559,23 @@ impl Backend for LiveBackend<'_> {
                 Some(nid),
                 "call_dispatch",
                 Category::Verify,
-                SolValue::map([("corr", SolValue::str(format!("{}:{nid}", self.turn_id)))]),
+                SolValue::map([("corr", SolValue::str(&corr))]),
             )?;
         }
+        let context = crate::registry::CallContext {
+            corr,
+            tenant: self.tenant.clone(),
+            instance_id: self.instance_id.clone(),
+            turn_id: self.turn_id.clone(),
+            nid: nid.into(),
+            deadline_ms: match self.registry.boundedness_of(id) {
+                Some(crate::registry::Boundedness::DeadlineCompliant { max_ms }) => Some(*max_ms),
+                _ => None,
+            },
+        };
         let result = self
             .registry
-            .invoke(id, &args)
+            .invoke_contextual(id, &args, &context)
             .ok_or_else(|| ErrV1::new(ReasonCode::Internal, nid, "target vanished"))?;
         let kind = if is_model {
             "model_call"

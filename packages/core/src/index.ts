@@ -14,7 +14,7 @@ export {
   summarizeTurnApiCalls,
   type TurnApiCallPurpose,
   type TurnApiCallRecord,
-  type TurnApiCallsSunjetConfig,
+  type TurnApiCallsAelioDbConfig,
   type TurnContext,
 } from './telemetry/index.js';
 export { runToolLoop, type ToolLoopResult } from './runtime/tool-loop.js';
@@ -139,7 +139,7 @@ export {
 } from './session/lifecycle.js';
 export {
   appendConversationRecord,
-  bootstrapSunjetTables,
+  bootstrapAelioDbTables,
   buildConversationContext,
   ConvoxMessageStore,
   createConvoxMessageStore,
@@ -188,8 +188,8 @@ export {
   type MessageStoreHistoryRow,
   type MemoryStoreWriteInput,
   type MemoryRecallHit,
-  type SunjetStorageConfig,
-  type SunjetTableNames,
+  type AelioDbStorageConfig,
+  type AelioDbTableNames,
   type ClosedSessionRecord,
   type SessionRecord,
   type CustomerRecord,
@@ -314,7 +314,7 @@ export {
   type HarnessBindingConfig,
 } from './harness/schema.js';
 export { SuspensionStore, type SuspendedPlanRecord, type SuspensionStoreConfig } from './harness/suspension.js';
-export { type LedgerSunjetConfig } from './harness/ledger.js';
+export { type LedgerAelioDbConfig } from './harness/ledger.js';
 export { type BindingCacheConfig } from './harness/binder.js';
 export { HarnessTracer, type TraceKind, type HarnessTracerConfig } from './harness/traces.js';
 export {

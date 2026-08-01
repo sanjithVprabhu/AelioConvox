@@ -24,7 +24,8 @@
     "test:relevance": "node scripts/test-turn-relevance.mjs",
     "test:scenarios": "node scripts/test-scenario-matrix.mjs",
     "test:llm": "node scripts/test-llm-providers.mjs",
-    "test:sunjet": "node scripts/test-sunjet-integration.mjs",
+    "test:aelio-db": "node scripts/test-aelio-db-integration.mjs",
+    "test:aelio-specs": "node scripts/validate-aelio-requirements.mjs && node scripts/check-aelio-spec-convergence.mjs",
     "test:admin-db": "node scripts/test-admin-db.mjs",
     "test:segment-storage": "node scripts/test-segment-storage.mjs",
     "test:all": "node scripts/run-tests.mjs",
@@ -37,7 +38,7 @@
   "devDependencies": {
     "@aelio/core": "workspace:*",
     "@aelio/llm": "workspace:*",
-    "@aelio/sunjet-client": "workspace:*",
+    "@aelio/db-client": "workspace:*",
     "@types/node": "^22.15.30",
     "tsx": "^4.20.3",
     "turbo": "^2.5.4",

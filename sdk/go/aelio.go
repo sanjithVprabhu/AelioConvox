@@ -18,10 +18,10 @@ import (
 )
 
 const (
-	DefaultSDKPath       = "/sdk"
-	HeartbeatInterval    = 30 * time.Second
-	HeartbeatTimeout     = 60 * time.Second
-	SDKVersion           = "0.1.0"
+	DefaultSDKPath    = "/sdk"
+	HeartbeatInterval = 30 * time.Second
+	HeartbeatTimeout  = 60 * time.Second
+	SDKVersion        = "0.1.0"
 )
 
 // SafetyLevel mirrors the wire protocol.
@@ -47,6 +47,17 @@ type FunctionSchema struct {
 	Params      map[string]interface{} `json:"params"`
 	Safety      SafetyLevel            `json:"safety"`
 	Intent      string                 `json:"intent,omitempty"`
+	Output      map[string]OutputField `json:"output,omitempty"`
+	OutputRole  string                 `json:"outputRole,omitempty"`
+}
+
+// OutputField declares the stable meaning and disclosure class of one tool result field.
+// Path defaults to the output field name. Type defaults to "auto"; Sensitivity defaults to "none".
+type OutputField struct {
+	Path        string `json:"path,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Sensitivity string `json:"sensitivity,omitempty"`
+	Meaning     string `json:"meaning"`
 }
 
 // Handler is an exposed backend function.
@@ -74,17 +85,18 @@ type InboundIngest struct {
 
 // StateSchema declares a customer lifecycle state.
 type StateSchema struct {
-	Description  string                 `json:"description"`
-	AllowedTools []string               `json:"allowedTools,omitempty"`
-	BlockedTools []string               `json:"blockedTools,omitempty"`
-	Guards       map[string]interface{} `json:"guards,omitempty"`
+	Description  string                   `json:"description"`
+	AllowedTools []string                 `json:"allowedTools,omitempty"`
+	BlockedTools []string                 `json:"blockedTools,omitempty"`
+	Guards       map[string]interface{}   `json:"guards,omitempty"`
 	Transitions  []map[string]interface{} `json:"transitions,omitempty"`
 }
 
 // PolicySchema declares a conversation policy.
 type PolicySchema struct {
-	Description string `json:"description"`
-	Severity    string `json:"severity,omitempty"` // hard | soft
+	Description string                 `json:"description"`
+	Severity    string                 `json:"severity,omitempty"` // hard | soft
+	Aelio       map[string]interface{} `json:"aelio,omitempty"`
 }
 
 // FlowStepSchema is one step inside a guided flow.
@@ -204,20 +216,6 @@ func (c *Client) SetCustomerState(customerID, stateID, reason string) {
 	}
 	if reason != "" {
 		payload["reason"] = reason
-	}
-	c.sendJSON(payload)
-}
-
-// SetFlowProgress updates guided-flow progress.
-func (c *Client) SetFlowProgress(customerID, flowID string, stepIndex int, completed []string) {
-	payload := map[string]interface{}{
-		"type":       "set_flow_progress",
-		"customerId": customerID,
-		"flowId":     flowID,
-		"stepIndex":  stepIndex,
-	}
-	if completed != nil {
-		payload["completedSteps"] = completed
 	}
 	c.sendJSON(payload)
 }
@@ -381,6 +379,12 @@ func (c *Client) sendRegister() error {
 		if entry.schema.Intent != "" {
 			fn["intent"] = entry.schema.Intent
 		}
+		if len(entry.schema.Output) > 0 {
+			fn["output"] = entry.schema.Output
+		}
+		if entry.schema.OutputRole != "" {
+			fn["outputRole"] = entry.schema.OutputRole
+		}
 		functions = append(functions, fn)
 	}
 
@@ -420,11 +424,15 @@ func (c *Client) sendRegister() error {
 	if len(c.policies) > 0 {
 		policies := make([]map[string]interface{}, 0, len(c.policies))
 		for id, p := range c.policies {
-			policies = append(policies, map[string]interface{}{
+			policy := map[string]interface{}{
 				"id":          id,
 				"description": p.Description,
 				"severity":    p.Severity,
-			})
+			}
+			if p.Aelio != nil {
+				policy["aelio"] = p.Aelio
+			}
+			policies = append(policies, policy)
 		}
 		payload["policies"] = policies
 	}
@@ -620,18 +628,15 @@ func (c *Client) sendJSON(payload map[string]interface{}) {
 func Expose(name string, schema FunctionSchema, handler Handler) {
 	Default.Expose(name, schema, handler)
 }
-func Persona(text string)                              { Default.Persona(text) }
-func Describe(text string)                             { Default.Describe(text) }
-func State(id string, schema StateSchema)              { Default.State(id, schema) }
-func Policy(id string, schema PolicySchema)            { Default.Policy(id, schema) }
-func Flow(id string, schema FlowSchema)                { Default.Flow(id, schema) }
-func OnSend(handler SendHandler)                       { Default.OnSend(handler) }
+func Persona(text string)                   { Default.Persona(text) }
+func Describe(text string)                  { Default.Describe(text) }
+func State(id string, schema StateSchema)   { Default.State(id, schema) }
+func Policy(id string, schema PolicySchema) { Default.Policy(id, schema) }
+func Flow(id string, schema FlowSchema)     { Default.Flow(id, schema) }
+func OnSend(handler SendHandler)            { Default.OnSend(handler) }
 func SetCustomerState(customerID, stateID, reason string) {
 	Default.SetCustomerState(customerID, stateID, reason)
 }
-func SetFlowProgress(customerID, flowID string, stepIndex int, completed []string) {
-	Default.SetFlowProgress(customerID, flowID, stepIndex, completed)
-}
-func Ingest(msg InboundIngest)           { Default.Ingest(msg) }
-func Listen(opts ListenOptions) error    { return Default.Listen(opts) }
-func Disconnect()                        { Default.Disconnect() }
+func Ingest(msg InboundIngest)        { Default.Ingest(msg) }
+func Listen(opts ListenOptions) error { return Default.Listen(opts) }
+func Disconnect()                     { Default.Disconnect() }

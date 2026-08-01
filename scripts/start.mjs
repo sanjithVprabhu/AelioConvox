@@ -86,7 +86,7 @@ async function pickPort(preferred) {
       return port;
     }
   }
-  fail(`no free port in [${preferred.join(', ')}] — stop conflicting processes (e.g. docker stop aelio-sunjet-1)`);
+  fail(`no free port in [${preferred.join(', ')}] — stop conflicting processes (e.g. docker stop aelio-aelioDb-1)`);
 }
 
 // ── Prerequisites ───────────────────────────────────────────────────────────
@@ -140,6 +140,15 @@ if (needsBuild()) {
   ]);
 }
 
+log('setup', 'building authoritative Rust runtime…');
+runSync('cargo', [
+  'build',
+  '--manifest-path',
+  join(root, 'aelio-os/Cargo.toml'),
+  '-p',
+  'aelio-server',
+]);
+
 // ── Start services ──────────────────────────────────────────────────────────
 
 const serverPort = resolveAelioPort();
@@ -149,6 +158,22 @@ if (!(await isPortFree(serverPort))) {
   );
 }
 
+const rustPort =
+  process.env.AELIO_RUNTIME_PORT !== undefined
+    ? Number(process.env.AELIO_RUNTIME_PORT)
+    : await pickPort([8090, 8091, 8094, 8095, 8096, 8097, 8098, 8099]);
+const rustUrl = `http://127.0.0.1:${rustPort}`;
+const internalToken =
+  process.env.AELIO_INTERNAL_TOKEN ?? 'aelio-local-internal-token-32-chars';
+if (internalToken.length < 32) {
+  fail('AELIO_INTERNAL_TOKEN must contain at least 32 characters');
+}
+const configText = readFileSync(resolvedConfig, 'utf8');
+const tenantName =
+  process.env.AELIO_TENANT_ID ??
+  configText.match(/^name:\s*['"]?([^'"\s#]+)['"]?/m)?.[1] ??
+  'aelio-local';
+
 const examplePort =
   process.env.PORT !== undefined
     ? Number(process.env.PORT)
@@ -157,7 +182,7 @@ const examplePort =
 if (examplePort !== 8080) {
   log(
     'setup',
-    `port 8080 busy (often leftover aelio-sunjet-1) — example SDK will use :${examplePort}`,
+    `port 8080 busy (often leftover aelio-aelioDb-1) — example SDK will use :${examplePort}`,
   );
 }
 
@@ -166,6 +191,20 @@ const childEnv = {
   AELIO_CONFIG: resolvedConfig,
   AELIO_SDK_SECRET: secret,
   AELIO_PORT: String(serverPort),
+  AELIO_RUNTIME_BIND: `127.0.0.1:${rustPort}`,
+  AELIO_RUST_RUNTIME_URL: rustUrl,
+  AELIO_RUNTIME_TOKENS: internalToken,
+  AELIO_RUNTIME_TOKEN: internalToken,
+  AELIO_EVENT_KEY_SECRET: internalToken,
+  AELIO_HOST_URL: `http://127.0.0.1:${serverPort}`,
+  AELIO_HOST_TOKEN: internalToken,
+  AELIO_LLM_GATEWAY_TOKEN: internalToken,
+  AELIO_LLM_GATEWAY_URL: `http://127.0.0.1:${serverPort}/internal/aelio/llm/complete`,
+  AELIO_LLM_EMBED_URL: `http://127.0.0.1:${serverPort}/internal/aelio/llm/embed`,
+  AELIO_TENANT_ID: tenantName,
+  AELIO_DATA_DIR: process.env.AELIO_DATA_DIR ?? join(root, 'data/aelio-os'),
+  AELIO_DB_URL: rustUrl,
+  DB_API_KEY: process.env.DB_API_KEY ?? internalToken,
   AELIO_SERVER_URL: process.env.AELIO_SERVER_URL ?? `ws://127.0.0.1:${serverPort}`,
   PORT: String(examplePort),
 };
@@ -223,7 +262,16 @@ const shutdown = () => {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-log('boot', 'starting Aelio server…');
+log('boot', 'starting authoritative Rust runtime and Aelio database…');
+run(
+  'rust',
+  join(root, 'aelio-os/target/debug/aelio-server'),
+  [],
+  root,
+);
+await waitFor(`${rustUrl}/readyz`);
+
+log('boot', 'starting TypeScript channel/model edge…');
 // Use dev:once (no file watchers) — tsx watch hits ENOSPC when IDE/tsserver
 // processes exhaust the kernel inotify limit on Linux.
 run('server', 'pnpm', ['--filter', '@aelio/server', 'dev:once'], root);
@@ -238,6 +286,7 @@ console.log('  Aelio is running');
 console.log(`  Chat demo:    http://localhost:${serverPort}/demo.html`);
 console.log(`  Health:       http://localhost:${serverPort}/health`);
 console.log(`  Ready:        http://localhost:${serverPort}/ready`);
+console.log(`  Rust runtime: ${rustUrl}`);
 console.log(`  Port:         ${serverPort} (set AELIO_PORT to change; default ${DEFAULT_AELIO_PORT})`);
 console.log('  Config:       ' + resolvedConfig);
 console.log('  LLM:          mock (edit config.yaml or .env for a real provider)');

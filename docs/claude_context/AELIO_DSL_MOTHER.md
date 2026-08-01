@@ -17,7 +17,7 @@
 
 ## §1. Problem statement & non-goals — 🔒 LOCKED (2026-07-26)
 
-Aelio is an **agent operating system**: a closed kernel of ops, flows composed from them, Sol Contracts as the wire language, Sunjet as durable store, and an LLM used to *author and repair* logic under a promotion gate — never to be the unsupervised kernel per turn. Warm path = deterministic retrieval + execution; cold path = LLM proposal → gate → reuse.
+Aelio is an **agent operating system**: a closed kernel of ops, flows composed from them, Sol Contracts as the wire language, Aelio DB as durable store, and an LLM used to *author and repair* logic under a promotion gate — never to be the unsupervised kernel per turn. Warm path = deterministic retrieval + execution; cold path = LLM proposal → gate → reuse.
 
 **Scope (A1.1 resolved):** Aelio serves **conversational and agentic flows over declared tools, states, and pathways, deployed multi-tenant B2B**. It refuses: general-purpose computation (no recursion, no unbounded iteration — by design, §8.4), open-ended autonomous planning (all pathways and decision points are declared), and arbitrary code execution (the instruction set is closed; the only executable artifacts are gated, registered, versioned).
 
@@ -73,7 +73,7 @@ Full guarantee × threat × section matrix: Appendix B. *(A3.1, A3.2 resolved �
 ### §4.1 Imprint discipline — 🔒 LOCKED
 
 1. **Two imprint tiers; "missing" does not exist.** Imprints are `declared` (registered `id@version`) or `structural` (system-derived, written `~<hash>`). Every materialized Sol has a structural imprint derivable on demand; absence of the field in memory is permitted, absence of *identity* is not.
-2. **Declared imprints are mandatory at:** (a) persistence to Sunjet; (b) both directions of a `Call` boundary — the registry entry (§10) declares them; (c) Model-class op outputs, which validate against declared imprints **only** (self-derived structural conformance of LLM output is void and forbidden — load-bearing for G4); (d) ~~Park continuation bag snapshots~~ **AMENDED 2026-07-26 (Amendment #3):** park snapshots carry *structural* imprints — park/resume crosses no semantic boundary (same program, point, tenant); integrity via `continuation_hash` (App G/I). Declared imprints remain mandatory at (a)–(c). Intra-flow intermediates may remain anonymous indefinitely.
+2. **Declared imprints are mandatory at:** (a) persistence to Aelio DB; (b) both directions of a `Call` boundary — the registry entry (§10) declares them; (c) Model-class op outputs, which validate against declared imprints **only** (self-derived structural conformance of LLM output is void and forbidden — load-bearing for G4); (d) ~~Park continuation bag snapshots~~ **AMENDED 2026-07-26 (Amendment #3):** park snapshots carry *structural* imprints — park/resume crosses no semantic boundary (same program, point, tenant); integrity via `continuation_hash` (App G/I). Declared imprints remain mandatory at (a)–(c). Intra-flow intermediates may remain anonymous indefinitely.
 3. **Structural imprint = canonical recursive hash** over the materialized body: sorted keys; fundamental-type signatures; nested `sol` hashed recursively; homogeneous lists as `list<T>`, else `list<mixed>`. `var` values are resolved before hashing. Hard dependency: canonical serialization (§4.3/A4.4).
 4. **Program-bearing bags:** any Sol containing `fn` or `flow` values has **no structural imprint** and may not be persisted, converted, or passed across a `Call` boundary. Programs travel as programs (flow storage), never inside data. (Subsumes former A4.3; converters may emit `data`/`list`/`sol` only.)
 5. **Warm converter applicability = `edge_id` match ∧ read-set satisfaction.** A converter's identity includes its read-set signature (the keys+types its rules touch); applicability means the incoming bag satisfies that read set. Full-shape structural imprints are lookup/bucket keys **only** — never application authority (unrelated key additions must not invalidate or misapply edges).
@@ -136,7 +136,7 @@ Typecheck is **structural**: it proves shape, type, instruction-set closure, and
 **Consequence (by design):** an LLM-proposed converter cannot express semantic judgment through `cast`; all meaning-bearing mappings are funneled into the three rule ops the promotion gate audits hardest.
 
 ### §5.3 Imprint declarations (completes §4.1.7)
-Declarations may reference other declared imprints for nested `sol` values (`key: sol<other.imprint@v>`); reference cycles are plan-time rejected. `extra_key_policy` (on conversion targets): `reject` (closed maps — default) | `pass` (open maps: unknown keys copied untouched) | `drop` (open maps: unknown keys removed). `pass` is legal only when the target imprint is open.
+Declarations may reference other declared imprints for nested `sol` values (`key: sol<other.imprint@N>`); reference cycles are plan-time rejected. `extra_key_policy` (on conversion targets): `reject` (closed maps — default) | `pass` (open maps: unknown keys copied untouched) | `drop` (open maps: unknown keys removed). `pass` is legal only when the target imprint is open.
 
 ### §5.4 Refinements
 Format refinements (phone, ISO datetime, …) are **validator Compute ops only** in v0 — no refinement types in the type system. First-class refinements are v2+.
@@ -179,7 +179,7 @@ Skip ⇒ op becomes identity (no write) + `skipped(op_serial, path)` marker appe
 
 Five classes — Control, Compute, I/O, Model, Tool. Every data-facing step is **fixed emit** (`Const`) or **transform**; Control may additionally `Err` or `Park`. `Call` is the bridge; domain never enters the kernel.
 
-**Classification decision procedure *(A7.1)*:** does it alter execution order/scope? → Control (kernel-eternal). Pure function of input Sol? → Compute. Touches Sunjet? → I/O. Touches an LLM? → Model. Touches anything else external? → Tool. Not clearly one of these? → it is a *registered Call target*, never a kernel op — the anti-noun-creep rule (`NormalizePhone` is a registered validator, forever).
+**Classification decision procedure *(A7.1)*:** does it alter execution order/scope? → Control (kernel-eternal). Pure function of input Sol? → Compute. Touches Aelio DB? → I/O. Touches an LLM? → Model. Touches anything else external? → Tool. Not clearly one of these? → it is a *registered Call target*, never a kernel op — the anti-noun-creep rule (`NormalizePhone` is a registered validator, forever).
 
 **`Convert` placement *(A7.2)*:** Convert is a **planner mechanism**, not a user-authorable op — planner-inserted at edges, graph-backed, rule set per §14.
 
@@ -276,11 +276,11 @@ Closed v0 catalog; all pure (§A9.2), checked arithmetic (§5), mandatory limits
 **"The correct prompt always goes in" is thus a structural property, not a hope:** wrong prompts can't be composed (versioned components + pinned composition), wrong data can't leak in (args-only slots), wrong output can't leak out (imprint validation), and prompt drift can't silently invalidate learned behavior (version-bump demotion).
 
 ### §10.4 I/O-class targets — query discipline (added on user direction)
-**Queries are not strings either.** Sunjet reads/writes are expressed one of two ways, both closed:
+**Queries are not strings either.** Aelio DB reads/writes are expressed one of two ways, both closed:
 1. **Registered I/O targets** — prepared, parameterized operations (the common case: `State.Read`, Sense hydrate, Recall, conversion-graph lookup), parameterized from `args`, results landing at `into` under declared imprints.
-2. **Closed query AST** for flexible reads — a Sol-shaped structure, never query text: `{dataset (from a declared dataset registry), op: get | range | topk_vector | topk_bm25 | traverse, params (from args), limit (MANDATORY), into}` — one op per Sunjet modality (tables, vector, full-text, graph). `traverse` carries mandatory `max_depth` + `max_nodes`; every op's `limit` feeds the §8.4 boundedness contract, so I/O can never break the termination theorem.
+2. **Prism** for flexible reads — the closed, Sol-shaped multimodal AST implemented by `aelio-query`: `{from, match[], where[], select, limit, into?}`. `from`, match/where columns, and `select` entries are literal and collection-schema checked. `select` is mandatory and non-empty; `limit` is mandatory and bounded. The v1 match set is `key | text | vector(vector|embed) | graph | fusion(rrf)`, at most one of each ranked/graph modality; combining ranked modalities requires exactly one explicit fusion clause. `graph` carries mandatory `max_depth`, `max_nodes`, and bounded seeds. `where` is a flat AND of scalar `{col, op:eq|ne|gt|ge|lt|le, value}` predicates. No joins, subqueries, expressions, arbitrary query text, ordering, cursor paging, table dump, or model-computed field name exists in v1. The former single-modality `QueryAst` is internal authoring sugar and MUST lower to Prism before storage/execution. When Prism is invoked through `Call`, `into` is mandatory and root is forbidden; the pure database boundary may omit it.
 
-Consequences by construction: no injection surface (no query text exists to inject into); deterministic replay (query results are `read`-class ledger entries, §12.4); plan-time analyzability (the AST's dataset + params are static, so hydration needs are computable before execution — the §22.3 hydration order can be *derived* per flow rather than hand-maintained); tenant isolation (dataset registry entries are tenant-scoped, §17.2 applies to every lookup).
+Consequences by construction: no injection surface (no query text exists to inject into); deterministic replay (`read_result` records args hash + output and replay injects the recorded output, App G); plan-time analyzability (collection, columns, projection, bounds, and embedding/model requirements are static, so hydration needs are derivable per flow); tenant isolation (collection registry entries and physical lookups are tenant-scoped, §17.2 applies to every lookup); bounded execution (Prism limits and graph budgets feed §8.4).
 
 ## §11. Error model — ReasonCode taxonomy — 🔒 LOCKED (2026-07-26)
 
@@ -356,12 +356,6 @@ Ledger appends are the WAL; bag persisted at turn end and at Park. Continuation 
 `on_parse_fail ∈ {error (default) | default(v)}` per edge; `error` propagates `Convert.RuleFail` as a step-originated error at the consumer boundary (catchable, §8.3 Fallback rules apply).
 
 **Attack list:** all resolved — A14.1 → entries above · A14.2 → map_enum entry · A14.3 → fabrication escalation · A14.4 → non-computation by construction + conformance property test.
-
-**Attack list:**
-- [ ] A14.1 Per-rule normative entries (template as §8), incl. rule *ordering* semantics (list = sequential rewrite? conflicts?).
-- [ ] A14.2 `map_enum` unmapped value at warm time → ReasonCode `Convert.RuleFail`, never invent (already agreed) — but define what the *consumer* op sees (Err propagation vs `on_missing`).
-- [ ] A14.3 `const_set` is a semantic landmine (minting data that was never observed). Restrict: only for keys the target imprint marks as defaultable? Debate.
-- [ ] A14.4 Prove the rule set cannot express computation (no loops, no self-reference) — keeps converters analyzable and the promotion gate tractable.
 
 ## §15. Cold path — LLM proposal protocol — 🔒 LOCKED (2026-07-26)
 
@@ -448,7 +442,7 @@ Generate deliberately-wrong converters (swapped mappings, plausible wrong rename
 
 ## §21. Hit-rate economics & instrumentation — 🔒 LOCKED (2026-07-26)
 
-**Metrics (persisted in Sunjet, dashboard ships with the release):** warm-hit rate per artifact class · cold-path cost · promotion survival curves · fallback rate (§18) · mutation-harness catch rates (§16.6). *(A21.1.)*
+**Metrics (persisted in Aelio DB, dashboard ships with the release):** warm-hit rate per artifact class · cold-path cost · promotion survival curves · fallback rate (§18) · mutation-harness catch rates (§16.6). *(A21.1.)*
 
 **Pre-registered kill criteria *(A21.2)* — written before the data exists:**
 - **Converters (the load-bearing bet):** warm-hit < ~60% at 90 days for an integrated tenant ⇒ the conversion-economics claim is falsified; README changes.
@@ -479,7 +473,7 @@ Pathways declare `instantiates_flow: bool`. While a flow is pending: the selecto
 
 Core semantics per §8.4. **Wake routing:** inbound user messages route to the session's parked instance via the flow gate (§22.2). External events route via an **event key minted at Park time** — derived from (tenant, flow_instance, park nid), handed to the external system as its callback token; wake authorization = token possession, nothing guessable. **GC defaults:** event-parks 30 days; ttl-parks self-defining; instant-parks until instant + grace. Termination turns (§8.4) run under a small fixed budget — finally chains only. Continuation serialization pins kernel version (§12.5, §25).
 
-## §24. Storage schema (Sunjet mapping) — 🔒 LOCKED (2026-07-26, outline level; implementation DDL cites this)
+## §24. Storage schema (Aelio DB mapping) — 🔒 LOCKED (2026-07-26, outline level; implementation DDL cites this)
 
 **Tables:** `states` · `flow_instances` · `sessions` · `memories` · `messages`/`turns` · `ledger` (§12.2) · **unified `artifacts`** (one lifecycle + evidence schema across converters/pathways/procedures/imprints — the generic gate's data-model dividend) + per-class detail tables · `registry` (§10.1) · `rejected_proposals` (§13.1) · `metrics` (§21).
 
@@ -516,7 +510,7 @@ Every mechanism locked elsewhere; this section is the traceability page a securi
 1. **Planner** — parses instruction JSON → op tree; runs every static check the spec mandates: schema closure (§4/§5), literal paths + R/W set derivation (§6.2), boundedness incl. DAG check (§8.4), policy-tag presence (§10.2), Park-position legality (§8.4 matrix), Tee dataflow isolation (§8.2), query-AST limits (§10.4), hydration-need derivation (§10.4). A plan that passes is executable by construction.
 2. **Executor** — sequential depth-first tree walk (§12.1) over the checked plan; ledger appends per §12.2; effect protocol per §12.4. Replay mode = same executor, ledger-fed (§12.3).
 
-**Crates:** `aelio-sol` (contracts, types, paths, canonical serialization — zero internal deps) · `aelio-kernel` (Planner, Executor, ledger, replay, op catalog) · `aelio-convert` (graph, rules, gate) · `aelio-learn` (pathways, procedures, attribution, metrics) · `aelio-query` (dataset registry, query AST — §10.4) · `aelio-prompt` (template registry, composition — §10.3) · `aelio-store` (Sunjet bindings) · `aelio-cli` (trace viewer, replay, inspectors — §26). Dependency direction strictly downward.
+**Crates:** `aelio-sol` (contracts, types, paths, canonical serialization — zero internal deps) · `aelio-kernel` (Planner, Executor, ledger, replay, op catalog) · `aelio-convert` (graph, rules, gate) · `aelio-learn` (pathways, procedures, attribution, metrics) · `aelio-query` (dataset registry, query AST — §10.4) · `aelio-prompt` (template registry, composition — §10.3) · `aelio-store` (Aelio DB bindings) · `aelio-cli` (trace viewer, replay, inspectors — §26). Dependency direction strictly downward.
 
 ## §30. Build order & milestones — 🔒 LOCKED (2026-07-26)
 
@@ -540,7 +534,7 @@ Every mechanism locked elsewhere; this section is the traceability page a securi
 **Control plane** (HTTP, deployer keys): SDK registers artifacts — tools, flows, imprints, prompt templates, datasets — as **versioned pushes** into the §10 registry; a push is a new version; pins + §25 doctrine apply automatically (SDK deploys inherit migration safety free). **Data plane** (one persistent WebSocket/gRPC stream per SDK connection, channel/session tokens): turns, wake events, reverse tool channel — multiplexed. **Wire protocol is itself versioned** (sweep addition): handshake negotiates protocol version; server refuses unknown majors (§25 doctrine applied to the wire).
 
 ## §33. Concurrency & scale-out — 🔒 LOCKED
-Per-flow-instance actor model on tokio: one logical single-writer per instance (backed by §24 CAS; per-instance turn serialization is what makes ledger `seq` meaningful); instances multiplex freely across threads. **Per-instance inbound queue + configurable coalescence (RATIFIED):** rapid successive messages within `debounce_ms` coalesce into one turn's input, up to `max_coalesce` messages; tenant-configurable with v0 defaults `debounce_ms=1500`, `max_coalesce=5`, `queue_depth=20`; queue overflow drops-with-notice rather than unbounded buffering; coalesced input arrives as an ordered list Sol so flows see message boundaries. Scale-out = **tenant sharding**: §17.1 isolation means tenants share nothing, so horizontal scale is embarrassingly parallel; embedded Sunjet per node fits exactly. Single-node v0; shard-by-tenant v1+; no hot-path consensus machinery, ever.
+Per-flow-instance actor model on tokio: one logical single-writer per instance (backed by §24 CAS; per-instance turn serialization is what makes ledger `seq` meaningful); instances multiplex freely across threads. **Per-instance inbound queue + configurable coalescence (RATIFIED):** rapid successive messages within `debounce_ms` coalesce into one turn's input, up to `max_coalesce` messages; tenant-configurable with v0 defaults `debounce_ms=1500`, `max_coalesce=5`, `queue_depth=20`; queue overflow drops-with-notice rather than unbounded buffering; coalesced input arrives as an ordered list Sol so flows see message boundaries. Scale-out = **tenant sharding**: §17.1 isolation means tenants share nothing, so horizontal scale is embarrassingly parallel; embedded Aelio DB per node fits exactly. Single-node v0; shard-by-tenant v1+; no hot-path consensus machinery, ever.
 
 ## §34. Model provider layer — 🔒 LOCKED
 Provider trait in `aelio-prompt`'s calling layer (Anthropic / OpenAI / local adapters). **BYO-key from day one**, tenant-scoped, encrypted at rest. Model calls execute **server-side** — the prompt factory composes there; shipping composed prompts outward would leak template IP and add latency. §10.3's pinned `model_id@version` is the trait's contract. Hosted-cloud token/subscription model is v2/v3 product layer above this, requiring no architectural change.
@@ -640,30 +634,30 @@ Predicate = Expr whose result type is `bool` (Planner-checked where statically k
 {"op":"Call",     "id": "<target-id>@<version>", "args": {"<slot>": Expr, ...}, "into": "<path>"}
 ```
 
-**Notes binding schema to locks:** `into` may never be root (§4.2.4). Sunjet flexible reads are not a kernel op: `Call` to target `sunjet.query@v` with `args.ast` = §10.4 query AST `{"dataset":"<id>","qop":"get|range|topk_vector|topk_bm25|traverse","params":{...},"limit":int>0,"max_depth"?:int,"max_nodes"?:int}`. Conversion is Planner-inserted, never authored (§7). Park forbidden in `Tee.side` and all predicate positions (§8.4) — Planner rejects. `Guard.each` + `Map` legal but O(elements×ops) — Planner warns.
+**Notes binding schema to locks:** `into` may never be root (§4.2.4). Aelio DB flexible reads are not a kernel op: `Call` to pinned target `aelio-db.prism@1` projects a closed §10.4 Prism AST in `args.query`; its Call-level `into` is mandatory. The legacy single-modality `QueryAst` is compile-time sugar only. Conversion is Planner-inserted, never authored (§7). Park forbidden in `Tee.side` and all predicate positions (§8.4) — Planner rejects. `Guard.each` + `Map` legal but O(elements×ops) — Planner warns.
 
 **err.v1 (full):** `{"code": str, "detail": str, "op_serial": "<nid>", "edge_id"?: str, "retryable": bool, "cause"?: err.v1}`
 
 ## Appendix F — Elaboration backlog (prose → implementation-grade artifacts)
 
-Decisions are complete; these locked sections still need their minute-detail artifact written. Tracked here so nothing stays prose silently:
+Decisions are complete. The minute-detail annexes are now derived and retained as normative implementation references:
 
 | # | Artifact | Source §§ | Status |
 |---|---|---|---|
 | F1 | Instruction schema (all ops, Expr grammar, err.v1) | §8, §9, §11 | ✅ Appendix E |
-| F2 | Path grammar full EBNF | §6.1 | ⬜ |
-| F3 | Compute op signature table (arg types, ReasonCodes per op) | §9 | ⬜ |
-| F4 | Conversion rule-op JSON shapes + edge/evidence JSON | §13, §14 | ⬜ |
-| F5 | `sense.v1` full field types | §22.1 | ⬜ |
-| F6 | Registry entry JSON (all classes incl. Model template + I/O dataset) | §10 | ⬜ |
+| F2 | Path grammar full EBNF | §6.1 | ✅ [`F2_path_grammar.md`](../annexes/F2_path_grammar.md) |
+| F3 | Compute op signature table (arg types, ReasonCodes per op) | §9 | ✅ [`F3_compute_signatures.md`](../annexes/F3_compute_signatures.md) |
+| F4 | Conversion rule-op JSON shapes + edge/evidence JSON | §13, §14 | ✅ [`F4_conversion_rules.md`](../annexes/F4_conversion_rules.md) |
+| F5 | `sense.v1` full field types | §22.1 | ✅ [`F5_sense_v1.md`](../annexes/F5_sense_v1.md) |
+| F6 | Registry entry JSON (all classes incl. Model template + I/O dataset) | §10 | ✅ [`F6_registry_entries.md`](../annexes/F6_registry_entries.md) |
 | F7 | Prompt template file format (slots, layers, exemplars, composition) | §10.3 | ✅ Appendix J |
 | F8 | Ledger entry payload schema per `kind` | §12.2 | ✅ Appendix G |
 | F9 | Wire protocol messages (control-plane HTTP + data-plane stream frames, handshake, reverse tool channel) | §31–§32 | ✅ Appendix H |
-| F10 | Sunjet DDL per §24 table | §24 | ⬜ |
-| F11 | Conformance vector format + initial vectors for §8 entries | §27 | ⬜ |
+| F10 | Aelio DB DDL per §24 table | §24 | ✅ [`F10_aelio_db_ddl.md`](../annexes/F10_aelio_db_ddl.md) |
+| F11 | Conformance vector format + initial vectors for §8 entries | §27 | ✅ [`F11_conformance_vectors.md`](../annexes/F11_conformance_vectors.md) |
 | F12 | Continuation serialization format | §12.5, §23 | ✅ Appendix I |
 | F13 | Gate/lifecycle state-machine table (exact transition triggers) | §13, §16 | ✅ Appendix K |
-| F14 | Metrics schema (fields, aggregation windows) | §21 | ⬜ |
+| F14 | Metrics schema (fields, aggregation windows) | §21 | ✅ [`F14_metrics_schema.md`](../annexes/F14_metrics_schema.md) |
 
 Rule: an F-item is done when Claude Code can implement from it with zero prose interpretation; each completed item flips here with a Decision Log entry only if it *changed* a decision (pure elaboration needs no ratification).
 
@@ -677,9 +671,9 @@ Rule: an F-item is done when Claude Code can implement from it with zero prose i
 
 **F5 — `sense.v1` field types.** Sources: §22.1, §8.4, §22.3. Output: full field table — type, nullable?, refreshed-on-resume?, plus the reserved-subtree enforcement note (Planner rejects writes under `sense`). Completion check: every step of the §22.3 hydration order names only fields defined here.
 
-**F6 — Registry entry JSON per class.** Sources: §10.1, §10.3, §10.4, App J. Output: concrete JSON for each class — compute / io (prepared + `sunjet.query`) / tool / model (embedding App J ref) / registered-flow / dataset / template_layer. Completion check: every Call target in App A is expressible; boundedness declaration present and class-appropriate; effect_class present on all.
+**F6 — Registry entry JSON per class.** Sources: §10.1, §10.3, §10.4, App J. Output: concrete JSON for each class — compute / io (prepared + `aelio-db.query`) / tool / model (embedding App J ref) / registered-flow / dataset / template_layer. Completion check: every Call target in App A is expressible; boundedness declaration present and class-appropriate; effect_class present on all.
 
-**F10 — Sunjet DDL.** Sources: §24, App G, App I, App K. Output: table definitions in Sunjet's schema language — incl. ledger (gapless `seq` per instance, hash-chain columns), unified `artifacts` + `artifact_history` (App K record), `continuations` (App I blob + pins as queryable columns for the §I.2 retention rule), CAS version columns on `states`/`flow_instances`. Completion check: every App G envelope/payload field has a storage answer; §I.2 retention is answerable by a single query; no table lacks `tenant_id` as leading key (§17.2).
+**F10 — Aelio DB DDL.** Sources: §24, App G, App I, App K. Output: table definitions in Aelio DB's schema language — incl. ledger (gapless `seq` per instance, hash-chain columns), unified `artifacts` + `artifact_history` (App K record), `continuations` (App I blob + pins as queryable columns for the §I.2 retention rule), CAS version columns on `states`/`flow_instances`. Completion check: every App G envelope/payload field has a storage answer; §I.2 retention is answerable by a single query; no table lacks `tenant_id` as leading key (§17.2).
 
 **F11 — Conformance vector format + initial vectors.** Sources: §27, §8, App E, App G. Output: vector file format `{name, plan, initial_bag, injected_ledger?, expected: bag_hash | err.v1 | park_state}` + initial vectors: `Identity` as vector #1; every §8 op ≥2 vectors (happy + error), Park-capable ops + a park/resume vector; one replay-determinism meta-vector (run twice, compare `bag_hash`). Completion check: vectors are executable JSON, not prose; every §8 normative claim that is testable has a vector citing its section.
 
@@ -876,12 +870,13 @@ A flow revision is **collectible only when no parked continuation and no promote
 | 2026-07-26 | §18–§21 | **PART V COMPLETE** + RATIFIED (user): classifier hygiene with mandatory fallback + cap 8; pinned embedding model (Lighthouse bug class impossible); promotion=registration for procedures; mining ≥5/30d; dumb-honest conservative attribution with documented biases; pre-registered kill criteria (60% converters/90d; 10% procedures/6mo) | biases err toward cheap demotion, never expensive promotion; falsifiability over pitch |
 | 2026-07-26 | §10 | **LOCKED** incl. new §10.3 prompt discipline (user-raised gap): prompts are registered versioned artifacts; args-only slot filling; deterministic composition with ledgered prompt_hash; template version bump demotes dependent learned artifacts; slot-level sensitivity masking | "correct prompt always goes in" becomes structural, not aspirational |
 | 2026-07-26 | §22–§28 | **PART VI COMPLETE** + RATIFIED (user): single-flow + read-only detours (no stack v0); normative hydration order; token-based wake routing; unified artifacts table + CAS; 5-point migration doctrine (kernel bump ⇒ canary-all); v1-shipping tooling; §8 entries as conformance vectors; §28 as traceability page | ordering bug made law; deferral over stack complexity |
-| 2026-07-26 | §10.4, §29 | RATIFIED (user): query discipline — closed query AST + registered I/O targets, mandatory limits, no query text anywhere; interpreter formalized as Planner + Executor two-phase machine | user-raised: prompt factory + interpreter + seamless Sunjet query construction — all three now structural |
+| 2026-07-26 | §10.4, §29 | RATIFIED (user): query discipline — closed query AST + registered I/O targets, mandatory limits, no query text anywhere; interpreter formalized as Planner + Executor two-phase machine | user-raised: prompt factory + interpreter + seamless Aelio DB query construction — all three now structural |
 | 2026-07-26 | §1–§3, §9, §30, App A–B | Closing pass: positioning, escape-hatch table with traced guarantees + honest costs, threat matrix; Compute catalog v0; milestones refreshed; login flow worked example; traceability matrix filled. **ALL 30 SECTIONS LOCKED.** | every G-guarantee cites a locked mechanism; doc is implementable end to end |
-| 2026-07-26 | Part VIII (§31–§35) | RATIFIED (user, all five): SDK reverse-channel tool execution (server never holds customer keys); control/data plane split with versioned pushes + versioned wire protocol; per-instance actor + debounce queue; tenant-shard scale-out; server-side BYO-key provider trait; server-side channel adapters; channel-scoped identity; non-streaming v0. License: Apache-2.0 (RATIFIED via delegation). Sunjet committed as the store; `aelio-store` keeps trait boundary for test doubles only. | reverse channel reuses Park/token/ledger locks verbatim; sweep additions: wire versioning, double-text debounce, identity posture, streaming posture |
+| 2026-07-26 | Part VIII (§31–§35) | RATIFIED (user, all five): SDK reverse-channel tool execution (server never holds customer keys); control/data plane split with versioned pushes + versioned wire protocol; per-instance actor + debounce queue; tenant-shard scale-out; server-side BYO-key provider trait; server-side channel adapters; channel-scoped identity; non-streaming v0. License: Apache-2.0 (RATIFIED via delegation). Aelio DB committed as the store; `aelio-store` keeps trait boundary for test doubles only. | reverse channel reuses Park/token/ledger locks verbatim; sweep additions: wire versioning, double-text debounce, identity posture, streaming posture |
 | 2026-07-26 | §33, App E, App F | RATIFIED (user): configurable coalescence (debounce_ms/max_coalesce/queue_depth, coalesced input as ordered list Sol). Elaboration phase opened: Appendix E instruction schema delivered (F1); F2–F14 backlog registered | doc transitions from decision record to build reference; elaboration ≠ ratification |
 | 2026-07-26 | App G (F8) | Elaborated; 3 micro-decisions defaulted (user offered veto): per-instance hash chain; INJECT/VERIFY replay classification with args_hash verification; turn-ledger/artifact-history boundary; durability ordering (intent-before-dispatch, turn_end-before-reply) | replay becomes a proof of the deterministic prefix, not just a re-run |
 | 2026-07-26 | App H (F9) + App G refinement | Elaborated; **spec refinement caught**: deadline expiry on dispatched write/external ⇒ Internal unknown-outcome, never retryable Transient (double-effect hole closed); new `call_dispatch`/`late_result` kinds; at-least-once + corr dedup; push-time Planner validation with reach pre-classification | Transient-on-dispatched-write would have double-fired effects via Fallback; deploy-time rejection beats runtime discovery |
 | 2026-07-26 | App I (F12) + §4.1.2(d) | **AMENDMENT #3** (defaulted, veto offered): park snapshots use structural imprints — park/resume crosses no semantic boundary; declared imprints stay mandatory at real boundaries. Frame-stack schema (incl. Try handler phase, Let shadow-save, Map collected); flow-rev retention rule (collectible only when unpinned) | declared-imprint-on-park bought friction, not safety; in-flight conversations are edit-safe mechanically |
 | 2026-07-26 | App J (F7) | Elaborated; micro-decisions defaulted: **no template logic** (conditional prompting = Branch-selected templates); JSON-literal slot rendering; single json_imprint parse mode; exemplar push-time validation; exact prompt_hash definition | template logic would fork prompt behavior outside the ledger's sight |
 | 2026-07-26 | App K (F13) + §16 refinement | **SPEC REFINEMENT**: reviewed-tier approval moved to shadow→canary (before first consumption) — approval-at-promotion left a 50-use consumption window on write-reaching edges, the exact harm the tier exists to close. Demotion clarified as event (target: shadow, or canary for §25.5). Conservative fast-track re-entry (half-threshold fresh shadow). Transition audit records | canary consumes; consumption before review was the active≡loggedin window reopened |
+| 2026-08-01 | §10.4, App E, App F | **AMENDMENT #4 (RATIFIED, recommended convergence profile):** Prism's implemented closed multimodal envelope replaces the former single-op flexible-read AST; legacy `QueryAst` is compile-time sugar. Mandatory projection/limit, explicit RRF fusion, flat scalar predicates, physical schema validation, graph budgets, and replay-injected read results are normative. All derived annexes marked complete. | one stored/executed query language eliminates semantic drift; implementation and adversarial tests already enforce the stronger bounded envelope; free query text remains impossible |

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Thorough end-to-end Astrolobe database admin test:
- * - spawns ll-server + Aelio (sunjet enabled)
+ * Thorough end-to-end Aelio database database admin test:
+ * - spawns aelio-server + Aelio (aelioDb enabled)
  * - bootstraps all 11 collections
  * - writes real conversation data via processTurn
  * - exercises admin API across multiple tables
@@ -26,8 +26,8 @@ import {
 import { createLLMProviderChain } from '@aelio/llm';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const ASTROLOBE = join(ROOT, 'Sunjet/Astrolobe');
-const LL_SERVER_BIN = join(ASTROLOBE, 'target/release/ll-server');
+const AELIO_OS = join(ROOT, 'aelio-os');
+const AELIO_SERVER_BIN = join(AELIO_OS, 'target/release/aelio-server');
 const SECRET = 'test-secret';
 
 const EXPECTED_TABLE_KEYS = [
@@ -56,6 +56,7 @@ const EXPECTED_TABLE_KEYS = [
   'sdk_connections',
   'archetypes',
   'aspects',
+  'axis_nodes',
 ];
 
 let llServer = null;
@@ -179,30 +180,35 @@ function fakeVector(dim) {
 }
 
 async function main() {
-  const sunjetPort = await getFreePort();
+  const aelioDbPort = await getFreePort();
   const aelioPort = await getFreePort();
-  const sunjetUrl = `http://127.0.0.1:${sunjetPort}`;
+  const aelioDbUrl = `http://127.0.0.1:${aelioDbPort}`;
   const aelioUrl = `http://127.0.0.1:${aelioPort}`;
 
   tmpRoot = mkdtempSync(join(tmpdir(), 'aelio-admin-db-'));
-  const llDataDir = join(tmpRoot, 'sunjet');
+  const llDataDir = join(tmpRoot, 'aelioDb');
+  const internalToken = 'test-runtime-token-at-least-32-characters';
 
   section('Infrastructure');
-  llServer = spawnProcess('ll-server', LL_SERVER_BIN, [], {
-    cwd: ASTROLOBE,
+  llServer = spawnProcess('aelio-server', AELIO_SERVER_BIN, [], {
+    cwd: AELIO_OS,
     env: {
       ...process.env,
-      LL_DATA_DIR: llDataDir,
-      LL_BIND: `127.0.0.1:${sunjetPort}`,
+      AELIO_ALLOW_INSECURE_OPEN: '1',
+      AELIO_DATA_DIR: llDataDir,
+      AELIO_RUNTIME_BIND: `127.0.0.1:${aelioDbPort}`,
+      AELIO_RUNTIME_TOKENS: internalToken,
+      AELIO_EVENT_KEY_SECRET: internalToken,
+      AELIO_TENANT_ID: 'aelio-db-test',
     },
   });
-  await waitForHealth(sunjetUrl, llServer.child, llServer.getOutput, '/v1/health');
-  ok(`ll-server healthy at ${sunjetUrl}`);
+  await waitForHealth(aelioDbUrl, llServer.child, llServer.getOutput, '/v1/health');
+  ok(`aelio-server healthy at ${aelioDbUrl}`);
 
-  const configSrc = readFileSync(join(ROOT, 'config.sunjet-test.yaml'), 'utf8');
+  const configSrc = readFileSync(join(ROOT, 'config.aelio-db-test.yaml'), 'utf8');
   const configPath = join(tmpRoot, 'config.yaml');
   const testConfig = configSrc
-    .replace(/url:\s*http:\/\/127\.0\.0\.1:\d+/m, `url: ${sunjetUrl}`)
+    .replace(/url:\s*http:\/\/127\.0\.0\.1:\d+/m, `url: ${aelioDbUrl}`)
     .replace(/^(\s*port:\s*)\d+\s*$/m, `$1${aelioPort}`);
   writeFileSync(configPath, testConfig);
 
@@ -213,6 +219,10 @@ async function main() {
       AELIO_CONFIG: configPath,
       AELIO_PORT: String(aelioPort),
       AELIO_SDK_SECRET: SECRET,
+      AELIO_RUST_RUNTIME_URL: aelioDbUrl,
+      AELIO_RUNTIME_TOKEN: internalToken,
+      AELIO_HOST_TOKEN: internalToken,
+      DB_API_KEY: internalToken,
       AELIO_PUBLIC_PATH: join(ROOT, 'server/public'),
     },
   });
@@ -223,20 +233,20 @@ async function main() {
   if (ready.status !== 200) {
     fail(`/ready failed: ${ready.status}`);
   }
-  if (ready.data.sunjet?.messageBackend !== 'sunjet') {
-    fail(`expected messageBackend=sunjet, got ${ready.data.sunjet?.messageBackend}`);
+  if (ready.data.aelioDb?.messageBackend !== 'aelioDb') {
+    fail(`expected messageBackend=aelioDb, got ${ready.data.aelioDb?.messageBackend}`);
   }
-  if (!ready.data.checks?.sunjet) {
-    fail('/ready sunjet check failed');
+  if (!ready.data.checks?.aelioDb) {
+    fail('/ready aelioDb check failed');
   }
-  ok('/ready reports sunjet message backend');
+  ok('/ready reports aelioDb message backend');
 
   section('UI shells');
   const dbHtml = await fetch(`${aelioUrl}/admin/db`);
   const dbPage = await dbHtml.text();
   if (dbHtml.status !== 200) fail(`/admin/db status ${dbHtml.status}`);
   for (const needle of [
-    'Astrolobe Database Admin',
+    'Aelio database Database Admin',
     '/api/v1/admin/db/tables',
     'Collections',
     'Flush',
@@ -337,10 +347,10 @@ async function main() {
     archetypes: 'convox_archetypes', aspects: 'convox_aspects', axisNodes: 'convox_axis_nodes',
   };
 
-  // Write conversation data directly to the same ll-server instance via SunjetClient
-  const { SunjetClient } = await import('@aelio/sunjet-client');
-  const sunjetClient = new SunjetClient({ baseUrl: sunjetUrl });
-  const storageConfig = { client: sunjetClient, tables, embedDim: 1536 };
+  // Write conversation data directly to the same aelio-server instance via AelioDbClient
+  const { AelioDbClient } = await import('@aelio/db-client');
+  const aelioDbClient = new AelioDbClient({ baseUrl: aelioDbUrl, apiKey: internalToken });
+  const storageConfig = { client: aelioDbClient, tables, embedDim: 1536 };
   const store = createConvoxMessageStore(storageConfig);
   const sessionStore = createConvoxSessionStore(storageConfig);
   const customerStore = createConvoxCustomerStore(storageConfig);
@@ -351,7 +361,7 @@ async function main() {
   const customerExternalId = `cust-${sessionTag}`;
 
   const tracer = new HarnessTracer({
-    client: sunjetClient,
+    client: aelioDbClient,
     table: tables.harnessTraces,
     tenant: 'admin-db-test',
     embedDim: 1536,
@@ -416,11 +426,11 @@ async function main() {
   ok(`journal timeline has ${decisionRecord.traces.length} structured steps`);
 
   const customer = await customerStore.getByExternalId(customerExternalId);
-  if (!customer) fail('no Sunjet customer after processTurn');
+  if (!customer) fail('no AelioDb customer after processTurn');
   const session = await sessionStore.findOrCreate(customer.id, 'web', 60);
   const sessionId = session.id;
-  if (!sessionId) fail('no Sunjet session after processTurn');
-  ok(`Sunjet session ${sessionId}`);
+  if (!sessionId) fail('no AelioDb session after processTurn');
+  ok(`AelioDb session ${sessionId}`);
 
   section('Admin scan of real data');
   const msgScan = await api(aelioUrl, 'POST', '/api/v1/admin/db/tables/messages/scan', {
@@ -534,7 +544,7 @@ async function main() {
     values: {
       turn_id: { type: 'utf8', value: `turn-${now}` },
       session_id: { type: 'utf8', value: sessionId },
-      tenant: { type: 'utf8', value: 'aelio-sunjet-test' },
+      tenant: { type: 'utf8', value: 'aelio-aelioDb-test' },
       kind: { type: 'utf8', value: 'plan' },
       payload: { type: 'utf8', value: JSON.stringify({ test: true, tag: sessionTag }) },
       embedding: { type: 'vector', value: fakeVector(1536) },
@@ -594,7 +604,7 @@ async function main() {
   if (gone.status !== 404) fail(`expected 404 after delete, got ${gone.status}`);
   ok('deleted row returns 404 on get');
 
-  console.log(`\n✓ All ${passed} Astrolobe database admin checks passed.`);
+  console.log(`\n✓ All ${passed} Aelio database database admin checks passed.`);
   cleanup(0);
 }
 

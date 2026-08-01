@@ -21,7 +21,7 @@
 
 ## Kill criteria computable from metrics alone (§21)
 
-1. **Converters warm-hit @ 90d < 60%** ⇒ core bet falsified — uses `converter_warm_hit_rate`.  
+1. **Converters warm-hit @ 90d < 60%** ⇒ core bet falsified — uses `converter_warm_hit_rate`.
 2. **Procedures share of turns @ 6mo < 10%** ⇒ demote from headline — uses `procedure_turn_share`.
 
 ## §18 fallback rate

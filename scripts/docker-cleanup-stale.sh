@@ -5,8 +5,8 @@
 set -euo pipefail
 
 NAMES=(
-  aelio-sunjet-1
-  aelio-sunjet-daemon-1
+  aelio-aelioDb-1
+  aelio-aelioDb-daemon-1
   aelio-harness-smoke
   aelio-restructure-smoke
   aelio-server-publish-test

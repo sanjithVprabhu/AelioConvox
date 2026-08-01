@@ -4,7 +4,7 @@ Status: locked as of this session. Input to the full architecture document.
 
 Companion artifacts:
 - `aelio_dsl_dictionary.md` — complete instruction set, all rungs
-- `HARNESS_SUNJET_DATA_MODEL.md` — storage spine, 26 current tables, target model
+- `HARNESS_AELIO_DB_DATA_MODEL.md` — storage spine, 26 current tables, target model
 
 ---
 
@@ -56,14 +56,14 @@ This decision eliminates the cold-start problem: no tenant ever meets a real use
 
 | # | Decision | Rationale |
 |---|---|---|
-| S1 | **Per-tenant table names** for tenant-scoped data | Sunjet's isolation unit is the table (single node, one engine, one WAL). Tenant boundary becomes structural — cannot leak by forgetting a filter. |
+| S1 | **Per-tenant table names** for tenant-scoped data | Aelio DB's isolation unit is the table (single node, one engine, one WAL). Tenant boundary becomes structural — cannot leak by forgetting a filter. |
 | S2 | System-owned tables stay **shared and read-only**: operation registry, prompt specs, system docs | avoids N-way duplication of the ability catalog |
 | S3 | Table resolution behind exactly one function `resolveTable(tenant, logical_name)` | decision remains reversible |
 | S4 | **Migration runner required from day one** | per-tenant tables make schema change an N×26 DDL operation |
-| S5 | **Conditional write is being added to Sunjet** — `insertRowIf(table, row, predicate)` and `updateRowIf(row_id, expected_version, patch)` + version column | unblocks four separate races at once; far cheaper than full transactions |
+| S5 | **Conditional write is being added to Aelio DB** — `insertRowIf(table, row, predicate)` and `updateRowIf(row_id, expected_version, patch)` + version column | unblocks four separate races at once; far cheaper than full transactions |
 | S6 | Until CAS lands: **single-writer per tenant** — all writes for a tenant routed through one process | per-tenant tables already supply the shard key; serialization without DB support |
 | S7 | Turn consistency = **saga**, not transaction. Idempotency by logical key or content hash, append-only audit, background reconciler | no multi-row transaction on the current API |
-| S8 | Vector recall: rely on Sunjet's native filtered vector search. Selective filter → exact pre-filter; loose filter → ANN post-filter with over-fetch | confirmed native, cost-model driven, with exact fallback on low recall |
+| S8 | Vector recall: rely on Aelio DB's native filtered vector search. Selective filter → exact pre-filter; loose filter → ANN post-filter with over-fetch | confirmed native, cost-model driven, with exact fallback on low recall |
 | S9 | Graph in hot path only under budget: `maxDepth ≤ 3`, max frontier, max visited rows, max elapsed ms, tenant/customer filter, fallback to vector/text on budget exceed | 3-hop safe only at low fanout |
 
 ### What CAS unblocks (all the same missing primitive)
@@ -211,7 +211,7 @@ Capability confirmed needed. Shape changed: **virtual document store, not filesy
 
 ## 11. Storage amendments required
 
-Beyond the target model already in `HARNESS_SUNJET_DATA_MODEL.md`.
+Beyond the target model already in `HARNESS_AELIO_DB_DATA_MODEL.md`.
 
 ### Amendments to planned tables
 
@@ -282,7 +282,7 @@ Carried forward; not blocking the architecture document but must be resolved dur
 6. **Multi-clause conflict** — resolution order when `SplitClauses` yields contradictory clauses.
 7. **Exploration rate ε** — value, decay schedule, per-flow opt-out.
 8. **Locale/currency formatting** — an ability (needs locale data), not a pure op.
-9. **Whole-system failure** — degradation ladder when Sunjet, the LLM provider, or the tenant's API is down. A conversational interface that hangs is worse than one that says it can't reach the system.
+9. **Whole-system failure** — degradation ladder when Aelio DB, the LLM provider, or the tenant's API is down. A conversational interface that hangs is worse than one that says it can't reach the system.
 10. **Data lifecycle / deletion** — GDPR/DPDP. A user's turns, facts, entities, embeddings are deletable; what about a procedure learned partly from their behavior?
 
 ---

@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { ApiValue } from '@aelio/sunjet-client';
+import type { ApiValue } from '@aelio/db-client';
 import { embed } from '../analyst/embeddings.js';
 import { appendConversationRecord } from './conversations.js';
 import { i64, readI64, readUtf8, utf8 } from './helpers.js';
 import type {
   MessageStoreAppendInput,
   MessageStoreHistoryRow,
-  SunjetStorageConfig,
+  AelioDbStorageConfig,
 } from './types.js';
 
 const L0_TIER = 0;
@@ -24,14 +24,14 @@ export function normalizeEmbedding(vector: number[], dim: number): number[] {
     return vector;
   }
   // A mismatch means the configured embeddings.output_dimension does not match
-  // sunjet.embed_dim — vectors are being silently reshaped, which degrades
+  // aelioDb.embed_dim — vectors are being silently reshaped, which degrades
   // similarity search. Surface it once instead of hiding it.
   const key = `${vector.length}->${dim}`;
   if (!warnedDims.has(key)) {
     warnedDims.add(key);
     console.warn(
       `[aelio] embedding dimension mismatch: provider returned ${vector.length}, table expects ${dim}. ` +
-        'Align embeddings.output_dimension with sunjet.embed_dim to avoid degraded semantic search.',
+        'Align embeddings.output_dimension with aelioDb.embed_dim to avoid degraded semantic search.',
     );
   }
   if (vector.length > dim) {
@@ -41,12 +41,12 @@ export function normalizeEmbedding(vector: number[], dim: number): number[] {
 }
 
 export class ConvoxMessageStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
-  readonly tables: SunjetStorageConfig['tables'];
+  readonly tables: AelioDbStorageConfig['tables'];
   readonly embedDim: number;
 
-  constructor(config: SunjetStorageConfig) {
+  constructor(config: AelioDbStorageConfig) {
     this.client = config.client;
     this.table = config.tables.messages;
     this.tables = config.tables;
@@ -192,6 +192,6 @@ export class ConvoxMessageStore {
   }
 }
 
-export function createConvoxMessageStore(config: SunjetStorageConfig): ConvoxMessageStore {
+export function createConvoxMessageStore(config: AelioDbStorageConfig): ConvoxMessageStore {
   return new ConvoxMessageStore(config);
 }

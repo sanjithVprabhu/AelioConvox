@@ -1,6 +1,6 @@
-import type { SunjetClient } from '@aelio/sunjet-client';
+import type { AelioDbClient } from '@aelio/db-client';
 
-export type SunjetTableNames = {
+export type AelioDbTableNames = {
   messages: string;
   conversations: string;
   memories: string;
@@ -31,9 +31,9 @@ export type SunjetTableNames = {
   axisNodes: string;
 };
 
-export type SunjetStorageConfig = {
-  client: SunjetClient;
-  tables: SunjetTableNames;
+export type AelioDbStorageConfig = {
+  client: AelioDbClient;
+  tables: AelioDbTableNames;
   embedDim: number;
 };
 

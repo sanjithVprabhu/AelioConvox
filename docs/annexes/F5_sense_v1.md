@@ -26,9 +26,9 @@
 
 ## §22.3 hydration order (names only fields above)
 
-1. Load session + user + flow_instance (+ timestamps).  
-2. Compute `last_seen_secs_ago` from loaded timestamps.  
-3. Write full `sense` snapshot (freeze).  
+1. Load session + user + flow_instance (+ timestamps).
+2. Compute `last_seen_secs_ago` from loaded timestamps.
+3. Write full `sense` snapshot (freeze).
 4. Only then proceed to program (no further ambient mutation of sense mid-turn except resume refresh of marked fields).
 
 ## Completion check

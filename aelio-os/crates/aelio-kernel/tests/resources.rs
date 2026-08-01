@@ -5,8 +5,10 @@ use aelio_kernel::{
     registry::{Boundedness, Declaration, EffectClass, Invocation, Origin, Registry, TargetClass},
 };
 use aelio_sol::SolValue;
-use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 #[test]
 fn call_budget_spans_park_and_blocks_the_excess_call_before_dispatch() {
@@ -20,12 +22,12 @@ fn call_budget_spans_park_and_blocks_the_excess_call_before_dispatch() {
         }}"#,
     )
     .unwrap();
-    let calls = Rc::new(Cell::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
     let observed = calls.clone();
     let mut registry = Registry::default();
     registry.register("count@1", EffectClass::Read, move |_| {
-        observed.set(observed.get() + 1);
-        Ok(SolValue::Int(observed.get()))
+        let count = observed.fetch_add(1, Ordering::SeqCst) + 1;
+        Ok(SolValue::Int(count as i64))
     });
     let mut instance = Instance::new(program, &mut registry);
     let parked = match instance.start(SolValue::map::<_, &str>([])).unwrap() {
@@ -37,7 +39,11 @@ fn call_budget_spans_park_and_blocks_the_excess_call_before_dispatch() {
         Ok(_) => panic!("second Call must exceed the persisted call budget"),
     };
     assert_eq!(error.code, ReasonCode::BudgetCalls);
-    assert_eq!(calls.get(), 1, "excess Call must not dispatch");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "excess Call must not dispatch"
+    );
     assert!(instance
         .ledger()
         .entries()
@@ -133,11 +139,11 @@ fn once_default_key_tracks_read_projection_and_replays_recorded_writes() {
         }}"#,
     )
     .unwrap();
-    let calls = Rc::new(Cell::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
     let observed = calls.clone();
     let mut registry = Registry::default();
     registry.register("effect@1", EffectClass::External, move |args| {
-        observed.set(observed.get() + 1);
+        observed.fetch_add(1, Ordering::SeqCst);
         Ok(args
             .as_map()
             .and_then(|map| map.get("input"))
@@ -160,7 +166,7 @@ fn once_default_key_tracks_read_projection_and_replays_recorded_writes() {
         );
     }
     assert_eq!(
-        calls.get(),
+        calls.load(Ordering::SeqCst),
         2,
         "same read projection dedups; corrected input re-executes"
     );
@@ -179,12 +185,12 @@ fn guard_each_checks_after_each_op_and_runs_the_declared_handler() {
         }"#,
     )
     .unwrap();
-    let late_calls = Rc::new(Cell::new(0));
+    let late_calls = Arc::new(AtomicUsize::new(0));
     let observed = late_calls.clone();
     let mut registry = Registry::default();
     registry.register("flip@1", EffectClass::Pure, |_| Ok(SolValue::Bool(false)));
     registry.register("late@1", EffectClass::Pure, move |_| {
-        observed.set(observed.get() + 1);
+        observed.fetch_add(1, Ordering::SeqCst);
         Ok(SolValue::Bool(true))
     });
     registry.register("handler@1", EffectClass::Pure, |_| Ok(SolValue::Bool(true)));
@@ -196,7 +202,7 @@ fn guard_each_checks_after_each_op_and_runs_the_declared_handler() {
         TurnOutcome::Completed { bag, .. } => bag,
         TurnOutcome::Parked(_) => panic!("guard handler does not park"),
     };
-    assert_eq!(late_calls.get(), 0);
+    assert_eq!(late_calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         bag.as_map().and_then(|map| map.get("handled")),
         Some(&SolValue::Bool(true))

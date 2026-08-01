@@ -1,0 +1,32 @@
+[package]
+name = "aelio-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Authoritative Aelio Rust runtime service"
+
+[dependencies]
+aelio-agent = { path = "../aelio-agent" }
+aelio-agent-api = { path = "../aelio-agent-api" }
+aelio-db-api = { path = "../aelio-db-api" }
+aelio-db-query = { path = "../aelio-db-query" }
+aelio-runtime = { path = "../aelio-runtime" }
+aelio-prompt = { path = "../aelio-prompt" }
+aelio-query = { path = "../aelio-query" }
+axum.workspace = true
+blake3.workspace = true
+indexmap = "2"
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+
+[lints.rust]
+warnings = "warn"

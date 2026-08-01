@@ -45,7 +45,7 @@ A `fallback:` block adds a second provider that takes over on the primary's
 failure (see `config.anthropic.yaml`).
 
 > **Embedding dimensions must match storage.** When you switch providers, keep
-> `embeddings.output_dimension` and `sunjet.embed_dim` aligned (1536 for
+> `embeddings.output_dimension` and `aelioDb.embed_dim` aligned (1536 for
 > OpenAI/Voyage, 768 for Gemini) or vector recall silently degrades.
 
 ## Adding a provider

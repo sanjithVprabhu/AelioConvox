@@ -3,6 +3,8 @@ import {
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_TIMEOUT_MS,
   type Channel,
+  type AelioFlowArtifact,
+  type AelioPolicyArtifact,
   type FlowDefinition,
   type FunctionDefinition,
   type IngestMessage,
@@ -68,11 +70,22 @@ export type FunctionSchema = {
   params: Record<string, ParamSpec>;
   safety: SafetyLevel;
   /**
-   * Intent category this tool serves, in YOUR vocabulary (e.g. "order_inquiry").
-   * Drives the runtime's conversation-intent tracking and smart tool selection.
+   * Unique intent/capability this tool serves, in YOUR vocabulary (e.g. "order.status").
+   * It drives deterministic tool resolution, so two tools may not claim the same label.
    * Defaults to the function name.
    */
   intent?: string;
+  /**
+   * Semantic allowlist for tool results. Only declared fields may become evidence,
+   * enter memory, or be shown to an LLM. `path` defaults to the field name.
+   */
+  output?: Record<string, {
+    path?: string;
+    type?: 'auto' | 'string' | 'number' | 'boolean' | 'array' | 'object';
+    sensitivity?: 'none' | 'pii' | 'secret';
+    meaning: string;
+  }>;
+  outputRole?: 'data' | 'effect_confirmation' | 'continuation' | 'error';
 };
 
 export type StateGuardSchema = {
@@ -99,6 +112,8 @@ export type StateSchema = {
 export type PolicySchema = {
   description: string;
   severity?: 'hard' | 'soft';
+  /** Closed rule enforced deterministically by the Rust runtime. */
+  aelio?: AelioPolicyArtifact;
 };
 
 export type FlowStepSchema = {
@@ -110,6 +125,8 @@ export type FlowSchema = {
   state: string;
   description: string;
   steps: Record<string, FlowStepSchema>;
+  /** Closed program executed by the authoritative Rust Aelio runtime. */
+  aelio?: AelioFlowArtifact;
 };
 
 type ExposedHandler = (args: Record<string, unknown>, ctx: InvocationContext) => Promise<unknown>;
@@ -125,6 +142,8 @@ export class Aelio {
   private readonly states = new Map<string, StateSchema>();
   private readonly policies = new Map<string, PolicySchema>();
   private readonly flows = new Map<string, FlowSchema>();
+  private readonly invokeResults = new Map<string, ResultMessage>();
+  private readonly inflightInvokeIds = new Set<string>();
   private sendHandler: SendHandler | null = null;
   private personaText: string | null = null;
   private productBriefText: string | null = null;
@@ -193,22 +212,6 @@ export class Aelio {
       customerId,
       stateId,
       ...(reason ? { reason } : {}),
-    });
-  }
-
-  /** Update guided-flow progress for a customer. */
-  setFlowProgress(
-    customerId: string,
-    flowId: string,
-    stepIndex: number,
-    completedSteps?: string[],
-  ): void {
-    this.send({
-      type: 'set_flow_progress',
-      customerId,
-      flowId,
-      stepIndex,
-      ...(completedSteps ? { completedSteps } : {}),
     });
   }
 
@@ -303,6 +306,21 @@ export class Aelio {
       params: entry.schema.params,
       safety: entry.schema.safety,
       ...(entry.schema.intent ? { intent: entry.schema.intent } : {}),
+      ...(entry.schema.output
+        ? {
+            output: Object.fromEntries(
+              Object.entries(entry.schema.output).map(([field, spec]) => [
+                field,
+                {
+                  ...spec,
+                  type: spec.type ?? 'auto',
+                  sensitivity: spec.sensitivity ?? 'none',
+                },
+              ]),
+            ),
+          }
+        : {}),
+      ...(entry.schema.outputRole ? { outputRole: entry.schema.outputRole } : {}),
     }));
 
     const states: StateDefinition[] = [...this.states.entries()].map(([id, entry]) => ({
@@ -330,6 +348,7 @@ export class Aelio {
       id,
       description: entry.description,
       severity: entry.severity ?? 'soft',
+      ...(entry.aelio ? { aelio: entry.aelio } : {}),
     }));
 
     const flows: FlowDefinition[] = [...this.flows.entries()].map(([id, entry]) => ({
@@ -341,6 +360,7 @@ export class Aelio {
         goal: step.goal,
         ...(step.tool ? { tool: step.tool } : {}),
       })),
+      ...(entry.aelio ? { aelio: entry.aelio } : {}),
     }));
 
     const message: RegisterMessage = {
@@ -438,11 +458,20 @@ export class Aelio {
   }
 
   private async handleInvoke(message: InvokeMessage): Promise<void> {
+    const cached = this.invokeResults.get(message.id);
+    if (cached) {
+      this.send(cached);
+      return;
+    }
+    if (this.inflightInvokeIds.has(message.id)) {
+      return;
+    }
+    this.inflightInvokeIds.add(message.id);
     const started = Date.now();
     const entry = this.handlers.get(message.function);
 
     if (!entry) {
-      this.send({
+      this.finishInvoke({
         type: 'result',
         id: message.id,
         ok: false,
@@ -464,7 +493,7 @@ export class Aelio {
         data,
         durationMs: Date.now() - started,
       };
-      this.send(response);
+      this.finishInvoke(response);
     } catch (error) {
       const response: ResultMessage = {
         type: 'result',
@@ -477,8 +506,18 @@ export class Aelio {
         },
         durationMs: Date.now() - started,
       };
-      this.send(response);
+      this.finishInvoke(response);
     }
+  }
+
+  private finishInvoke(response: ResultMessage): void {
+    this.inflightInvokeIds.delete(response.id);
+    if (this.invokeResults.size >= 10_000) {
+      const oldest = this.invokeResults.keys().next().value;
+      if (oldest) this.invokeResults.delete(oldest);
+    }
+    this.invokeResults.set(response.id, response);
+    this.send(response);
   }
 
   private send(message: Parameters<typeof SdkToServerMessageSchema.parse>[0]): void {

@@ -23,6 +23,11 @@ aelio = Aelio()
     description="Get the status of a customer order",
     params={"orderId": "string"},
     safety="read",
+    intent="get_order_status",
+    output={
+        "status": {"type": "string", "meaning": "Current fulfillment status"},
+        "orderId": {"type": "string", "meaning": "The order identifier"},
+    },
 )
 async def get_order_status(args, ctx):
     return {"status": "shipped", "orderId": args["orderId"]}
@@ -55,7 +60,7 @@ await aelio.ingest(channel="whatsapp", from_=from_number, text=body)
 | `expose(name, description, params, safety)` | Register a tool (decorator) |
 | `persona(text)` / `describe(text)` | Assistant voice + product brief |
 | `state` / `policy` / `flow` | Lifecycle catalog |
-| `set_customer_state` / `set_flow_progress` | Push lifecycle updates |
+| `set_customer_state` | Push lifecycle updates into the authoritative Rust runtime |
 | `on_send` / `ingest` | BYO messaging |
 | `listen(secret=..., url=...)` | Connect (auto-reconnect) |
 | `disconnect()` | Stop reconnecting and close |

@@ -11,6 +11,7 @@ export class AnthropicEmbeddingProvider implements EmbeddingProvider {
     private readonly model: string,
     private readonly baseUrl = 'https://api.voyageai.com/v1/embeddings',
     private readonly outputDimension?: number,
+    private readonly timeoutMs = 5_000,
   ) {}
 
   async embed(text: string): Promise<number[]> {
@@ -30,6 +31,7 @@ export class AnthropicEmbeddingProvider implements EmbeddingProvider {
         authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!response.ok) {

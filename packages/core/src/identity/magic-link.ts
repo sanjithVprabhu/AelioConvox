@@ -31,10 +31,10 @@ export async function createMagicLink(
   magicLinkStore: ConvoxMagicLinkStore,
 ): Promise<MagicLinkResult> {
   if (!customerStore) {
-    throw new Error('Sunjet customerStore is required');
+    throw new Error('AelioDb customerStore is required');
   }
   if (!magicLinkStore) {
-    throw new Error('Sunjet magicLinkStore is required');
+    throw new Error('AelioDb magicLinkStore is required');
   }
 
   const email = normalizeEmail(input.email);
@@ -45,7 +45,7 @@ export async function createMagicLink(
   const expiresAt = new Date(now.getTime() + (input.ttlMinutes ?? 15) * 60_000);
 
   // `ensureCustomer` atomically resolves-or-creates the customer AND records
-  // the (already-verified) web channel address in one Sunjet round trip.
+  // the (already-verified) web channel address in one AelioDb round trip.
   const customerId = await customerStore.ensureCustomer(externalId, 'web', email);
 
   await magicLinkStore.create({
@@ -67,7 +67,7 @@ export async function verifyMagicLink(
   magicLinkStore: ConvoxMagicLinkStore,
 ): Promise<VerifiedMagicLink | null> {
   if (!magicLinkStore) {
-    throw new Error('Sunjet magicLinkStore is required');
+    throw new Error('AelioDb magicLinkStore is required');
   }
 
   const tokenHash = hashToken(token);

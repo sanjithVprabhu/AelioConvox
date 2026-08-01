@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Self-learning aspect taxonomy integration smoke against real Sunjet.
+ * Self-learning aspect taxonomy integration smoke against real AelioDb.
  *
  * Proves the full loop: seed builtin aspects into the mother collection →
  * a message about a NEW "thing" isn't covered → the discovery analyst (stub
@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bootstrapSunjetTables,
+  bootstrapAelioDbTables,
   configureEmbedder,
   createArchetypeEngine,
   createConvoxArchetypeStore,
@@ -23,11 +23,11 @@ import {
   seedBuiltinArchetypes,
   DEFAULT_ARCHETYPES,
 } from '@aelio/core';
-import { SunjetClient } from '@aelio/sunjet-client';
+import { AelioDbClient } from '@aelio/db-client';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ASTROLOBE = join(ROOT, 'Sunjet/Astrolobe');
-const LL_SERVER = join(ASTROLOBE, 'target/release/ll-server');
+const AELIO_OS = join(ROOT, 'aelio-os');
+const AELIO_SERVER = join(AELIO_OS, 'target/release/aelio-server');
 const DIM = 64;
 const TABLES = {
   messages: 'convox_messages', conversations: 'convox_conversations',
@@ -134,7 +134,7 @@ async function healthy(url) {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error('ll-server did not become healthy');
+  throw new Error('aelio-server did not become healthy');
 }
 
 function assert(condition, message) {
@@ -153,16 +153,16 @@ async function main() {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   temp = mkdtempSync(join(tmpdir(), 'aelio-aspect-'));
-  child = spawn(LL_SERVER, [], {
-    cwd: ASTROLOBE,
-    env: { ...process.env, LL_BIND: `127.0.0.1:${port}`, LL_DATA_DIR: join(temp, 'data') },
+  child = spawn(AELIO_SERVER, [], {
+    cwd: AELIO_OS,
+    env: { ...process.env, AELIO_ALLOW_INSECURE_OPEN: '1', AELIO_RUNTIME_BIND: `127.0.0.1:${port}`, AELIO_DATA_DIR: join(temp, 'data') },
     stdio: 'ignore',
   });
   child.on('error', () => {});
   await healthy(url);
 
-  const client = new SunjetClient({ baseUrl: url });
-  await bootstrapSunjetTables(client, TABLES, DIM);
+  const client = new AelioDbClient({ baseUrl: url });
+  await bootstrapAelioDbTables(client, TABLES, DIM);
   configureEmbedder(async (text) => vectorize(text));
 
   const config = { client, tables: TABLES, embedDim: DIM };

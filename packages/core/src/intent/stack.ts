@@ -67,7 +67,7 @@ export async function loadIntentStack(
   sessionStore: ConvoxSessionStore,
 ): Promise<IntentStack> {
   if (!sessionStore) {
-    throw new Error('Sunjet sessionStore is required');
+    throw new Error('AelioDb sessionStore is required');
   }
   const record = await sessionStore.get(sessionId);
   const metadata = (record?.metadata ?? {}) as SessionMetadata;
@@ -80,7 +80,7 @@ export async function saveIntentStack(
   sessionStore: ConvoxSessionStore,
 ): Promise<void> {
   if (!sessionStore) {
-    throw new Error('Sunjet sessionStore is required');
+    throw new Error('AelioDb sessionStore is required');
   }
   const record = await sessionStore.get(sessionId);
   const metadata = (record?.metadata ?? {}) as SessionMetadata;

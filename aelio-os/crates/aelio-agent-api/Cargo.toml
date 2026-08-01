@@ -1,0 +1,26 @@
+[package]
+name = "aelio-agent-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+aelio-agent = { path = "../aelio-agent" }
+aelio-runtime = { path = "../aelio-runtime" }
+aelio-db-query = { path = "../aelio-db-query" }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = { version = "0.3.33", features = ["sink"] }
+sha2 = "0.11.0"
+hex = "0.4.3"
+uuid = { version = "1.24.0", features = ["v4"] }
+indexmap = "2.14.0"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

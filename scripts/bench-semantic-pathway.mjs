@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Latency benchmark for semantic retrieval against a live ll-server.
+ * Latency benchmark for semantic retrieval against a live aelio-server.
  *
  * Separates the three cost centers so we know where time actually goes:
- *   1. embedding generation (excluded from Sunjet — provider dependent)
+ *   1. embedding generation (excluded from AelioDb — provider dependent)
  *   2. a single vector query (VSS)
  *   3. the full parallel pathway decision (memories + tools + policies + flows)
  *
- * Uses a deterministic in-process embedder so the numbers isolate Sunjet +
+ * Uses a deterministic in-process embedder so the numbers isolate AelioDb +
  * engine cost, not OpenAI network time (which is reported separately as a
  * fixed additive constant callers must budget for).
  */
@@ -18,17 +18,17 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bootstrapSunjetTables,
+  bootstrapAelioDbTables,
   configureEmbedder,
   createConvoxMemoryStore,
   createSemanticPathwayEngine,
   embed,
 } from '@aelio/core';
-import { SunjetClient } from '@aelio/sunjet-client';
+import { AelioDbClient } from '@aelio/db-client';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ASTROLOBE = join(ROOT, 'Sunjet/Astrolobe');
-const LL_SERVER = join(ASTROLOBE, 'target/release/ll-server');
+const AELIO_OS = join(ROOT, 'aelio-os');
+const AELIO_SERVER = join(AELIO_OS, 'target/release/aelio-server');
 const DIM = 256;
 const MEMORIES = Number(process.env.BENCH_MEMORIES ?? 2000);
 const ITERATIONS = Number(process.env.BENCH_ITERS ?? 200);
@@ -93,7 +93,7 @@ async function healthy(url) {
     } catch {}
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error('ll-server did not become healthy');
+  throw new Error('aelio-server did not become healthy');
 }
 
 function pct(sorted, p) {
@@ -122,16 +122,16 @@ async function main() {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   temp = mkdtempSync(join(tmpdir(), 'aelio-bench-'));
-  child = spawn(LL_SERVER, [], {
-    cwd: ASTROLOBE,
-    env: { ...process.env, LL_BIND: `127.0.0.1:${port}`, LL_DATA_DIR: join(temp, 'data') },
+  child = spawn(AELIO_SERVER, [], {
+    cwd: AELIO_OS,
+    env: { ...process.env, AELIO_ALLOW_INSECURE_OPEN: '1', AELIO_RUNTIME_BIND: `127.0.0.1:${port}`, AELIO_DATA_DIR: join(temp, 'data') },
     stdio: 'ignore',
   });
   child.on('error', () => {});
   await healthy(url);
 
-  const client = new SunjetClient({ baseUrl: url });
-  await bootstrapSunjetTables(client, TABLES, DIM);
+  const client = new AelioDbClient({ baseUrl: url });
+  await bootstrapAelioDbTables(client, TABLES, DIM);
   configureEmbedder(async (text) => seededVector(hashText(text)));
 
   const memoryStore = createConvoxMemoryStore({ client, tables: TABLES, embedDim: DIM });

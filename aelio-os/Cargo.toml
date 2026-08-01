@@ -3,6 +3,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/aelio-agent",
+    "crates/aelio-agent-api",
     "crates/aelio-sol",
     "crates/aelio-kernel",
     "crates/aelio-store",
@@ -12,17 +14,37 @@ members = [
     "crates/aelio-prompt",
     "crates/aelio-cli",
     "crates/aelio-wire",
+    "crates/aelio-db-format",
+    "crates/aelio-db-wal",
+    "crates/aelio-db-index",
+    "crates/aelio-db-text",
+    "crates/aelio-db-graph",
+    "crates/aelio-db-cost",
+    "crates/aelio-db-engine",
+    "crates/aelio-db-query",
+    "crates/aelio-db-catalog",
+    "crates/aelio-db-storage",
+    "crates/aelio-db-api",
+    "crates/aelio-runtime",
+    "crates/aelio-server",
 ]
 
 [workspace.package]
+version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"          # RATIFIED (Decision Log, Part VIII)
 rust-version = "1.75"
+repository = "https://github.com/sanjithVprabhu/AelioConvox"
+authors = ["Aelio contributors"]
 
 [workspace.dependencies]
 blake3 = "1"
 ryu = "1"
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+axum = { version = "0.8", features = ["json"] }
 aelio-sol = { path = "crates/aelio-sol" }
 aelio-kernel = { path = "crates/aelio-kernel" }
 aelio-store = { path = "crates/aelio-store" }

@@ -17,6 +17,9 @@ pub enum Status {
 /// first *consumption*, i.e. shadow→canary, not promotion).
 #[derive(Debug, Clone, Copy)]
 pub enum Trigger {
+    /// A version-pinned artifact shipped in the signed vendor distribution. Stock artifacts are
+    /// gate-exempt on install, but remain observable and demotable at runtime (mother A17.1).
+    VendorInstall,
     StructuralPass,
     StructuralFail,
     /// distinct_inputs ≥ 20 ∧ validation_rate ≥ 0.95 (§16.4). `approved` = reviewed-tier deployer
@@ -28,6 +31,8 @@ pub enum Trigger {
     CanaryThresholdsMet,
     /// Attributed failure > 2% trailing ∨ any attributed Guard.Violation (§16.4).
     AttributedFailure,
+    /// Explicit operator demotion of a promoted artifact (App K).
+    DemoteManual,
     /// Imprint version bump (§4.1.8) / flow edit (§4.1.6) / evidence-dependent template bump.
     Invalidated,
     /// Kernel version bump ⇒ canary-all (§25.5).
@@ -42,6 +47,7 @@ pub fn transition(from: Status, trigger: Trigger) -> Result<Status, &'static str
     use Status::*;
     use Trigger::*;
     Ok(match (from, trigger) {
+        (Proposed, VendorInstall) => Promoted,
         (Proposed, StructuralPass) => Shadow,
         (Proposed, StructuralFail) => Rejected,
         (Shadow, ShadowThresholdsMet { approved }) => {
@@ -54,7 +60,8 @@ pub fn transition(from: Status, trigger: Trigger) -> Result<Status, &'static str
         (Canary, CanaryThresholdsMet) => Promoted,
         // demotions (event → shadow)
         (Canary | Promoted, AttributedFailure) => Shadow,
-        (Promoted, Invalidated) => Shadow,
+        (Canary | Promoted, Invalidated) => Shadow,
+        (Promoted, DemoteManual) => Shadow,
         // kernel bump: promoted → canary (canary-all)
         (Promoted, KernelBump) => Canary,
         // retirement

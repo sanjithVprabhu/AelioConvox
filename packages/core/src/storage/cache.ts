@@ -2,16 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { cosineSimilarity, embed } from '../analyst/embeddings.js';
 import { i64, readI64, readUtf8, readVector, utf8 } from './helpers.js';
 import { normalizeEmbedding } from './messages.js';
-import type { SunjetStorageConfig } from './types.js';
+import type { AelioDbStorageConfig } from './types.js';
 
 const CANDIDATE_K = 20;
 
 export class ConvoxResponseCacheStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
   readonly embedDim: number;
 
-  constructor(config: SunjetStorageConfig) {
+  constructor(config: AelioDbStorageConfig) {
     this.client = config.client;
     this.table = config.tables.responseCache;
     this.embedDim = config.embedDim;
@@ -100,7 +100,7 @@ export class ConvoxResponseCacheStore {
 }
 
 export function createConvoxResponseCacheStore(
-  config: SunjetStorageConfig,
+  config: AelioDbStorageConfig,
 ): ConvoxResponseCacheStore {
   return new ConvoxResponseCacheStore(config);
 }

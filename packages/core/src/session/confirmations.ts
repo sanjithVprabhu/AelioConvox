@@ -8,7 +8,7 @@ type SessionMetadata = {
 
 function requireSessionStore(sessionStore: ConvoxSessionStore | undefined): ConvoxSessionStore {
   if (!sessionStore) {
-    throw new Error('Sunjet sessionStore is required');
+    throw new Error('AelioDb sessionStore is required');
   }
   return sessionStore;
 }

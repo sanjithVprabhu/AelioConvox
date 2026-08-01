@@ -17,7 +17,7 @@
   "dependencies": {
     "@aelio/llm": "workspace:*",
     "@aelio/protocol": "workspace:*",
-    "@aelio/sunjet-client": "workspace:*",
+    "@aelio/db-client": "workspace:*",
     "zod": "^3.25.67"
   },
   "devDependencies": {

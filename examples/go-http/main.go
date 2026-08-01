@@ -12,6 +12,10 @@ func main() {
 		Description: "Get the status of a customer order",
 		Params:      map[string]interface{}{"orderId": "string"},
 		Safety:      aelio.SafetyRead,
+		Output: map[string]aelio.OutputField{
+			"orderId": {Type: "string", Meaning: "The order identifier"},
+			"status":  {Type: "string", Meaning: "The current fulfillment status"},
+		},
 	}, func(args map[string]interface{}, ctx aelio.InvocationContext) (interface{}, error) {
 		return map[string]interface{}{
 			"orderId":    args["orderId"],
@@ -24,6 +28,11 @@ func main() {
 		Description: "Cancel a pending order",
 		Params:      map[string]interface{}{"orderId": "string"},
 		Safety:      aelio.SafetyWrite,
+		Output: map[string]aelio.OutputField{
+			"cancelled": {Type: "boolean", Meaning: "Whether cancellation succeeded"},
+			"orderId":   {Type: "auto", Meaning: "The cancelled order identifier"},
+		},
+		OutputRole: "effect_confirmation",
 	}, func(args map[string]interface{}, ctx aelio.InvocationContext) (interface{}, error) {
 		return map[string]interface{}{"cancelled": true, "orderId": args["orderId"]}, nil
 	})

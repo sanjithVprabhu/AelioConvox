@@ -20,7 +20,7 @@ export async function applyStateTransition(input: {
   customerStore: ConvoxCustomerStore;
 }): Promise<{ transitionedTo: string } | null> {
   if (!input.customerStore) {
-    throw new Error('Sunjet customerStore is required');
+    throw new Error('AelioDb customerStore is required');
   }
   const transitions = input.state?.transitions;
   if (!transitions || transitions.length === 0) {

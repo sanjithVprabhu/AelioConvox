@@ -12,7 +12,7 @@ export async function loadSessionSummary(
   sessionStore: ConvoxSessionStore,
 ): Promise<string | null> {
   if (!sessionStore) {
-    throw new Error('Sunjet sessionStore is required');
+    throw new Error('AelioDb sessionStore is required');
   }
   return sessionStore.getSummary(sessionId);
 }
@@ -27,10 +27,10 @@ export async function maybeSummarizeSession(input: {
   maxTokens: number;
 }): Promise<string | null> {
   if (!input.sessionStore) {
-    throw new Error('Sunjet sessionStore is required');
+    throw new Error('AelioDb sessionStore is required');
   }
   if (!input.messageStore) {
-    throw new Error('Sunjet messageStore is required');
+    throw new Error('AelioDb messageStore is required');
   }
 
   const messageCount = await input.messageStore.countSessionMessages(input.sessionId);

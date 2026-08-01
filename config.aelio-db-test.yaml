@@ -1,0 +1,62 @@
+name: aelio-db-test
+secret: test-secret
+
+llm:
+  provider: mock
+  model: mock-model
+  max_tokens: 4096
+
+channels:
+  whatsapp:
+    enabled: false
+  web:
+    enabled: true
+    allowed_origins:
+      - http://localhost:3000
+
+safety:
+  default_mode: full
+  require_confirmation_for: [write, destructive]
+
+identity:
+  mapping_function: phone
+  allow_anonymous: true
+
+session:
+  idle_timeout_minutes: 60
+  history_window: 20
+  summarize_after: 50
+
+intent:
+  enabled: true
+  ttl_minutes: 20
+  max_depth: 5
+
+memory:
+  enabled: true
+  recall_limit: 5
+
+aelioDb:
+  enabled: true
+  url: http://127.0.0.1:18080
+  embed_dim: 1536
+  tables:
+    messages: convox_messages
+    conversations: convox_conversations
+    memories: convox_memories
+    compactions: convox_compactions
+    runtime_state: runtime_state
+    harness_tools: harness_tools
+    harness_capabilities: harness_capabilities
+    harness_bindings: harness_bindings
+    harness_suspensions: harness_suspensions
+    harness_ledger: harness_ledger
+    harness_traces: harness_traces
+
+logging:
+  level: warn
+  format: pretty
+
+server:
+  host: 127.0.0.1
+  port: 3001

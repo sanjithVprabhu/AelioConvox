@@ -1,4 +1,4 @@
-import type { ApiValue } from '@aelio/sunjet-client';
+import type { ApiValue } from '@aelio/db-client';
 
 export function utf8(value: string): ApiValue {
   return { type: 'utf8', value };

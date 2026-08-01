@@ -7,7 +7,7 @@ const serverUrl = (process.env.AELIO_WS_URL ?? aelioWsUrl()).replace(/^http/, 'w
 
 /**
  * In-memory stand-in for ConvoxMemoryStore — same store/recall contract,
- * local cosine scoring. Production path is Astrolobe VSS only.
+ * local cosine scoring. Production path is Aelio database VSS only.
  */
 function createInMemoryMemoryStore() {
   /** @type {Array<{ memoryId: string, customerId: string, content: string, category: string | null, embedding: number[] }>} */

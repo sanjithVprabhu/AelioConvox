@@ -1,4 +1,4 @@
-import type { ApiValue, SunjetClient } from '@aelio/sunjet-client';
+import type { ApiValue, AelioDbClient } from '@aelio/db-client';
 import { embed } from '../analyst/embeddings.js';
 import { normalizeEmbedding } from '../storage/messages.js';
 
@@ -24,7 +24,7 @@ export type TraceKind =
   | 'budget';
 
 export type HarnessTracerConfig = {
-  client: SunjetClient;
+  client: AelioDbClient;
   table: string;
   tenant: string;
   embedDim: number;
@@ -38,7 +38,7 @@ function i64(value: number): ApiValue {
 }
 
 /**
- * Append-only trace firehose into Sunjet (tier 0 — the existing compaction
+ * Append-only trace firehose into AelioDb (tier 0 — the existing compaction
  * daemon rolls traces up the L0–L3 ladder like any other tiered content).
  * Strictly fire-and-forget: tracing never blocks or fails a turn, and traces
  * are never fed back into prompts — they exist for audit, replay, and the

@@ -8,6 +8,6 @@ export {
   summarizeTurnApiCalls,
   type TurnApiCallPurpose,
   type TurnApiCallRecord,
-  type TurnApiCallsSunjetConfig,
+  type TurnApiCallsAelioDbConfig,
   type TurnContext,
 } from './turn-calls.js';

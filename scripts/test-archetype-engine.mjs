@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Archetype valence engine integration smoke against real Sunjet.
+ * Archetype valence engine integration smoke against real AelioDb.
  *
  * Seeds the default archetype buckets (positive/negative/neutral per category)
- * into Astrolobe, then asserts that incoming messages are classified into the
+ * into Aelio database, then asserts that incoming messages are classified into the
  * right per-category valence with confident guidance fed into the prompt — and
  * that ambiguous messages feed nothing. Uses a deterministic in-process
  * embedder that encodes category+valence concept dimensions so the recomputed
- * cosine (not Sunjet's RRF score) is the thing under test.
+ * cosine (not AelioDb's RRF score) is the thing under test.
  */
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -16,18 +16,18 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bootstrapSunjetTables,
+  bootstrapAelioDbTables,
   configureEmbedder,
   createArchetypeEngine,
   createConvoxArchetypeStore,
   DEFAULT_ARCHETYPES,
   embed,
 } from '@aelio/core';
-import { SunjetClient } from '@aelio/sunjet-client';
+import { AelioDbClient } from '@aelio/db-client';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ASTROLOBE = join(ROOT, 'Sunjet/Astrolobe');
-const LL_SERVER = join(ASTROLOBE, 'target/release/ll-server');
+const AELIO_OS = join(ROOT, 'aelio-os');
+const AELIO_SERVER = join(AELIO_OS, 'target/release/aelio-server');
 const DIM = 64;
 const TABLES = {
   messages: 'convox_messages', conversations: 'convox_conversations',
@@ -101,7 +101,7 @@ async function healthy(url) {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error('ll-server did not become healthy');
+  throw new Error('aelio-server did not become healthy');
 }
 
 function assert(condition, message) {
@@ -124,21 +124,21 @@ async function main() {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   temp = mkdtempSync(join(tmpdir(), 'aelio-archetype-'));
-  child = spawn(LL_SERVER, [], {
-    cwd: ASTROLOBE,
-    env: { ...process.env, LL_BIND: `127.0.0.1:${port}`, LL_DATA_DIR: join(temp, 'data') },
+  child = spawn(AELIO_SERVER, [], {
+    cwd: AELIO_OS,
+    env: { ...process.env, AELIO_ALLOW_INSECURE_OPEN: '1', AELIO_RUNTIME_BIND: `127.0.0.1:${port}`, AELIO_DATA_DIR: join(temp, 'data') },
     stdio: 'ignore',
   });
   child.on('error', () => {});
   await healthy(url);
 
-  const client = new SunjetClient({ baseUrl: url });
-  await bootstrapSunjetTables(client, TABLES, DIM);
+  const client = new AelioDbClient({ baseUrl: url });
+  await bootstrapAelioDbTables(client, TABLES, DIM);
   configureEmbedder(async (text) => vectorize(text));
 
   const store = createConvoxArchetypeStore({ client, tables: TABLES, embedDim: DIM });
   const seeded = await store.seedIfEmpty(DEFAULT_ARCHETYPES);
-  assert(seeded === DEFAULT_ARCHETYPES.length, `seeded ${seeded} archetype buckets into Sunjet`);
+  assert(seeded === DEFAULT_ARCHETYPES.length, `seeded ${seeded} archetype buckets into AelioDb`);
   assert((await store.seedIfEmpty(DEFAULT_ARCHETYPES)) === 0, 'seedIfEmpty is idempotent');
 
   const engine = createArchetypeEngine({ store });

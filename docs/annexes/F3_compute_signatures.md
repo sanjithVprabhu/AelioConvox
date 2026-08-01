@@ -1,6 +1,6 @@
 # F3 — Compute op signature table (§9)
 
-**Sources:** §9, §5 (cast matrix + checked arithmetic), §11.  
+**Sources:** §9, §5 (cast matrix + checked arithmetic), §11.
 **Status:** pure elaboration.
 
 Convention: all ops are **pure**. Checked i64 arithmetic: overflow ⇒ `Type`. ÷0 ⇒ `Type`. Non-finite float results ⇒ `Type`. Comparisons **type-strict** (int vs float requires cast). No op may produce NaN/±∞.

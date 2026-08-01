@@ -10,15 +10,16 @@ llm:
   api_key: ${OPENAI_API_KEY}
   max_tokens: 4096
 
-# Semantic embeddings for memory + Sunjet vectors (hash = local, no API).
+# Semantic embeddings for memory + AelioDb vectors (hash = local, no API).
 # openai: text-embedding-3-small (1536d) — default for solid semantic search
-# gemini: text-embedding-004 (768d — set sunjet.embed_dim: 768)
+# gemini: text-embedding-004 (768d — set aelioDb.embed_dim: 768)
 # anthropic: voyage-3-lite via Voyage API (set VOYAGE_API_KEY)
 embeddings:
   provider: openai
   model: text-embedding-3-small
   api_key: ${OPENAI_API_KEY}
   output_dimension: 1536
+  timeout_ms: 5000
 
 channels:
   whatsapp:
@@ -88,26 +89,25 @@ harness:
     ambiguity_gap: 0.08  # top hit must beat runner-up by this to auto-bind
     cache_ttl_minutes: 1440
 
-# Sunjet (ll-server) — the sole message/state store. Aelio is Sunjet-only: there
-# is no SQLite fallback, so ll-server must be running before Aelio starts.
-# Start ll-server first: LL_DATA_DIR=./data/sunjet LL_API_KEYS=secret cargo run --release -p ll-server
+# Aelio DB is served by the same authoritative Rust aelio-server as the DSL runtime.
+# There is no SQLite or secondary database fallback.
 #
 # Segment storage (immutable .vss index blobs — local disk or S3-compatible cloud):
 # Set these in the Aelio/.env only (never commit secrets). Forward the same vars
-# into the ll-server process; LL_* aliases are also accepted by Astrolobe.
-#   AELIO_SUNJET_SEGMENT_BACKEND=local|s3          (default local)
-#   AELIO_SUNJET_SEGMENT_PREFIX=prod/aelio/         (optional object-key prefix)
-#   AELIO_SUNJET_S3_BUCKET=my-bucket
-#   AELIO_SUNJET_S3_REGION=us-east-1
-#   AELIO_SUNJET_S3_ENDPOINT=http://127.0.0.1:9000 # MinIO / R2 / custom
-#   AELIO_SUNJET_S3_ACCESS_KEY_ID=...
-#   AELIO_SUNJET_S3_SECRET_ACCESS_KEY=...
-#   AELIO_SUNJET_S3_ALLOW_HTTP=1                   # local MinIO
-#   AELIO_SUNJET_S3_PATH_STYLE=1                   # MinIO path-style
-sunjet:
+# into the Rust aelio-server process.
+#   AELIO_DB_SEGMENT_BACKEND=local|s3          (default local)
+#   AELIO_DB_SEGMENT_PREFIX=prod/aelio/         (optional object-key prefix)
+#   AELIO_DB_S3_BUCKET=my-bucket
+#   AELIO_DB_S3_REGION=us-east-1
+#   AELIO_DB_S3_ENDPOINT=http://127.0.0.1:9000 # MinIO / R2 / custom
+#   AELIO_DB_S3_ACCESS_KEY_ID=...
+#   AELIO_DB_S3_SECRET_ACCESS_KEY=...
+#   AELIO_DB_S3_ALLOW_HTTP=1                   # local MinIO
+#   AELIO_DB_S3_PATH_STYLE=1                   # MinIO path-style
+aelioDb:
   enabled: true
-  url: http://127.0.0.1:8080
-  api_key: ${SUNJET_API_KEY}
+  url: http://127.0.0.1:8090
+  api_key: ${DB_API_KEY}
   embed_dim: 1536
   segment_storage:
     backend: local

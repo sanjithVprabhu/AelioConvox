@@ -6,7 +6,7 @@ export type RateLimitConfig = {
 };
 
 /**
- * Rate limits are counted from Sunjet message rows (VSS store), not SQLite.
+ * Rate limits are counted from AelioDb message rows (VSS store), not SQLite.
  */
 export async function assertWithinRateLimit(
   messageStore: ConvoxMessageStore | undefined,

@@ -2,7 +2,7 @@
 
 Use this against **your Aelio server** + **job-portal backend (Convox SDK)** + **job-portal frontend (Chat SDK)**.
 
-**Pass rule:** every box is ✅ with evidence (screenshot, `/admin/db` row, curl output, or log line).  
+**Pass rule:** every box is ✅ with evidence (screenshot, `/admin/db` row, curl output, or log line).
 If anything fails, stop and fix before calling the stack production-ready.
 
 **Recommended env for this trial**
@@ -12,9 +12,9 @@ If anything fails, stop and fix before calling the stack production-ready.
 AELIO_SDK_SECRET=<strong-secret>
 AELIO_LLM_PROVIDER=openai|anthropic|gemini   # real LLM, not mock
 OPENAI_API_KEY=… / ANTHROPIC_API_KEY=… / GEMINI_API_KEY=…
-AELIO_SUNJET_ENABLED=1
-AELIO_SUNJET_DUAL_WRITE_SQLITE=0              # Sunjet sole message store
-AELIO_SUNJET_SEGMENT_BACKEND=local|s3
+AELIO_AELIO DB_ENABLED=1
+AELIO_AELIO DB_DUAL_WRITE_SQLITE=0              # Aelio DB sole message store
+AELIO_AELIO DB_SEGMENT_BACKEND=local|s3
 AELIO_WEB_ALLOWED_ORIGINS=https://your-job-portal-origin
 AELIO_REQUIRE_LLM_KEY=1
 ```
@@ -26,8 +26,8 @@ URLs (adjust port): server `http://127.0.0.1:3010`, DB admin `/admin/db`, demo o
 ## 0. Preconditions
 
 - [ ] Server image/process boots; `curl /health` → `ok`
-- [ ] `curl /ready` → `ready:true`, `checks.sunjet:true`, `checks.database:true`, `checks.widget:true`
-- [ ] `/ready` shows `sunjet.messageBackend: "sunjet"` (not sqlite-only)
+- [ ] `curl /ready` → `ready:true`, `checks.aelio-db:true`, `checks.database:true`, `checks.widget:true`
+- [ ] `/ready` shows `aelio-db.messageBackend: "aelio-db"` (not sqlite-only)
 - [ ] `/ready` shows `segmentStorage.backend` = `local` or `s3` as intended
 - [ ] Strong `AELIO_SDK_SECRET` set; not `change-me` / `test` in any shared env
 - [ ] Real LLM key present; mock provider **not** used for this checklist
@@ -41,7 +41,7 @@ URLs (adjust port): server `http://127.0.0.1:3010`, DB admin `/admin/db`, demo o
 ### 1.1 Process & config
 - [ ] Config loads without schema errors (no boot crash)
 - [ ] LLM provider matches env (`/ready` → `llm`)
-- [ ] Sunjet URL reachable from server process (`127.0.0.1:8080` in all-in-one)
+- [ ] Aelio DB URL reachable from server process (`127.0.0.1:8080` in all-in-one)
 - [ ] `AELIO_WEB_ALLOWED_ORIGINS` rejects a random origin (widget connect fails); allows job-portal origin
 - [ ] `/admin/db` loads; secret unlock works; collections list visible at any viewport width
 
@@ -49,7 +49,7 @@ URLs (adjust port): server `http://127.0.0.1:3010`, DB admin `/admin/db`, demo o
 - [ ] Telemetry page loads (`/telemetry`)
 - [ ] DB admin can Scan **Messages** / **Conversations** / **Harness Tools**
 - [ ] Flush succeeds (memtable → `.vss`); Compact succeeds without error
-- [ ] After Flush, Astrolobe still serves prior rows (no data loss)
+- [ ] After Flush, Aelio DB engine still serves prior rows (no data loss)
 
 ### 1.3 Failure modes
 - [ ] Kill/restart container → `/ready` green again; previous Messages still present (volume persisted)
@@ -134,14 +134,14 @@ Run as **Applicant A** in browser + job-portal SDK connected.
 
 ---
 
-## 5. Sunjet storage (write path)
+## 5. Aelio DB storage (write path)
 
 Do these **after** several chat turns with `dual_write_sqlite=0`.
 
 ### 5.1 Durability
-- [ ] Messages exist in Astrolobe (`convox_messages`) with correct `customer_id`, `session_id`, `role`, `content`, `channel`
+- [ ] Messages exist in Aelio DB engine (`convox_messages`) with correct `customer_id`, `session_id`, `role`, `content`, `channel`
 - [ ] Restart server/container → same message `row_id`s / contents still there
-- [ ] Flush → segment files appear under Sunjet data dir (or S3 keys if cloud backend)
+- [ ] Flush → segment files appear under Aelio DB data dir (or S3 keys if cloud backend)
 - [ ] WAL / manifest stay healthy (server ready; no corrupt-open loop)
 
 ### 5.2 Cloud segment mode (if `backend=s3`)
@@ -151,12 +151,12 @@ Do these **after** several chat turns with `dual_write_sqlite=0`.
 - [ ] Secrets never appear in `/ready` or logs
 
 ### 5.3 What must NOT depend on SQLite for this trial
-- [ ] With dual-write off, deleting/renaming SQLite message tables (or using fresh sqlite file) still allows chat history from Sunjet for that session after restart  
+- [ ] With dual-write off, deleting/renaming SQLite message tables (or using fresh sqlite file) still allows chat history from Aelio DB for that session after restart
   *(sessions/identity metadata may still use SQLite — note any gap)*
 
 ---
 
-## 6. Sunjet retrieval (read path)
+## 6. Aelio DB retrieval (read path)
 
 ### 6.1 History retrieval (chat continuity)
 - [ ] Long thread (20+ turns): model still sees recent history (`history_window`)
@@ -169,12 +169,12 @@ Do these **after** several chat turns with `dual_write_sqlite=0`.
 - [ ] Unrelated token returns empty / no false hit
 
 ### 6.3 Semantic / vector (if embeddings enabled)
-- [ ] Embeddings provider configured; `sunjet.embed_dim` matches embedding dim
+- [ ] Embeddings provider configured; `aelio-db.embed_dim` matches embedding dim
 - [ ] Semantically similar query retrieves the planted message/job memory better than random
 - [ ] Wrong embed dim → boot warning / failed semantic path (no silent garbage)
 
 ### 6.4 Hybrid filters (tenant / customer)
-- [ ] Any Sunjet query used for tools/memory includes hard filter on `customer_id` (and tenant id if you have multi-tenant SaaS)
+- [ ] Any Aelio DB query used for tools/memory includes hard filter on `customer_id` (and tenant id if you have multi-tenant SaaS)
 - [ ] Admin scan with filter `customer_id = A` never shows B’s rows
 
 ### 6.5 Conversations / telemetry retrieval
@@ -211,7 +211,7 @@ Use **two browsers** (or two profiles): **Applicant A** and **Applicant B** (and
 
 ### 7.5 Multi-tenant (if one Aelio serves multiple job-portal companies)
 - [ ] Tools registered for Tenant X are not callable in Tenant Y context
-- [ ] Sunjet filters include `tenant_id` (or equivalent) on every retrieval
+- [ ] Aelio DB filters include `tenant_id` (or equivalent) on every retrieval
 - [ ] Separate SDK connections / secrets per tenant **or** cryptographically enforced tenant claim — no shared-secret free-for-all in prod
 
 ---
@@ -233,7 +233,7 @@ Use **two browsers** (or two profiles): **Applicant A** and **Applicant B** (and
 - [ ] One slow tool for A does not stall B’s next message indefinitely
 - [ ] SDK disconnect mid-tool: user sees failure; no half-applied write without compensation/idempotency
 - [ ] Server restart mid-session: client reconnects; user can continue (document session loss if any)
-- [ ] `/ready` goes false if Sunjet dies while enabled; recovers when Sunjet returns (or falls back only if configured)
+- [ ] `/ready` goes false if Aelio DB dies while enabled; recovers when Aelio DB returns (or falls back only if configured)
 
 ---
 
@@ -243,7 +243,7 @@ At least one full apply-flow per provider you ship:
 
 - [ ] OpenAI
 - [ ] Anthropic
-- [ ] Gemini  
+- [ ] Gemini
 Document model ids; tool calling + confirmations must work on each.
 
 ---
@@ -254,7 +254,7 @@ Document model ids; tool calling + confirmations must work on each.
 - [ ] `AELIO_REQUIRE_LLM_KEY=1`
 - [ ] `identity.allow_anonymous: false` (or equivalent hardened auth)
 - [ ] `AELIO_WEB_ALLOWED_ORIGINS` exact allowlist (no `*`)
-- [ ] Rotated strong `AELIO_SDK_SECRET` / `SUNJET_API_KEY`
+- [ ] Rotated strong `AELIO_SDK_SECRET` / `AELIO DB_API_KEY`
 - [ ] TLS/`wss://` in front of server
 - [ ] Backups for remaining SQLite state (sessions/ledger/memories) scheduled and restore-tested
 - [ ] Segment backend decision documented (local disk volume vs S3) + restore drill
@@ -269,7 +269,7 @@ From Aelio repo (against your running stack when applicable):
 
 - [ ] `pnpm test:all` (or documented subset green)
 - [ ] `pnpm test:admin-db`
-- [ ] `pnpm test:sunjet` / segment storage test if cloud path used
+- [ ] `pnpm test:aelio-db` / segment storage test if cloud path used
 - [ ] `pnpm test:harness` / LLM provider unit tests
 - [ ] Job-portal’s **own** e2e (Playwright/Cypress) covering apply + isolation A vs B
 
@@ -280,10 +280,10 @@ From Aelio repo (against your running stack when applicable):
 Only check when **all sections above** are ✅:
 
 - [ ] Chat SDK ⟂ Server ⟂ Convox SDK work alone and together on the job portal
-- [ ] Sunjet stores and retrieves messages/telemetry correctly (local and/or S3)
+- [ ] Aelio DB stores and retrieves messages/telemetry correctly (local and/or S3)
 - [ ] Tool calls are correct, confirmed writes are safe, job-portal DB matches chat claims
 - [ ] No cross-customer / cross-tenant leakage of messages, tools data, confirmations, flows, or suspensions
-- [ ] Failure modes (restart, bad secret, Sunjet blip, injection) were exercised
+- [ ] Failure modes (restart, bad secret, Aelio DB blip, injection) were exercised
 - [ ] Prod config gate (§11) complete
 
 **Sign-off**
@@ -293,5 +293,5 @@ Only check when **all sections above** are ✅:
 | Engineer |  |  |  |
 | Reviewer |  |  |  |
 
-Evidence pack location: ______________________  
+Evidence pack location: ______________________
 (nicks of `/ready` JSON, admin DB screenshots A vs B, apply confirmation recording, S3 listing if used)

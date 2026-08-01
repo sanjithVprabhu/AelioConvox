@@ -1,9 +1,9 @@
 # Aelio L0 — Normative Agnostic Substrate Glossary
 
-**Status:** normative living contract (v0.1)  
-**Kernel v0:** **ADOPTED** (see §4 and [`AELIO_L0_KERNEL_COMPOSITION_LAB.md`](./AELIO_L0_KERNEL_COMPOSITION_LAB.md))  
-**Supersedes for L0 decisions:** rows in `aelio_dsl_dictionary.md` §§0–3 where this doc conflicts  
-**Companions:** `AELIO_L0A_COMBINATORS_GUIDE.md`, Rust `Sunjet/Astrolobe/crates/aelio/src/ops/`  
+**Status:** normative living contract (v0.1)
+**Kernel v0:** **ADOPTED** (see §4 and [`AELIO_L0_KERNEL_COMPOSITION_LAB.md`](./AELIO_L0_KERNEL_COMPOSITION_LAB.md))
+**Supersedes for L0 decisions:** rows in `aelio_dsl_dictionary.md` §§0–3 where this doc conflicts
+**Companions:** `AELIO_L0A_COMBINATORS_GUIDE.md`, Rust `aelio-os/crates/aelio/src/ops/`
 **Out of scope here:** L1 ability semantics (except the buildability gap check in §5)
 
 ---

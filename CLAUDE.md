@@ -10,7 +10,7 @@ You are implementing **Aelio**, an agent operating system, from a completed norm
 
 ## Flags (how you raise findings)
 
-Maintain `FLAGS.md` in repo root. When anything requires interpretation, seems contradictory, or breaks against reality (library limits, async lifetimes, Sunjet behavior), append an entry: `{id, section(s), what you found, options you see, your recommendation}`. **Flags are findings, not failures** — the spec's authors expect amendments #4+ to come from implementation. Do not block on a flag unless it gates correctness; otherwise take your recommended option, mark it `PROVISIONAL` in code comments, and continue.
+Maintain `FLAGS.md` in repo root. When anything requires interpretation, seems contradictory, or breaks against reality (library limits, async lifetimes, Aelio DB behavior), append an entry: `{id, section(s), what you found, options you see, your recommendation}`. **Flags are findings, not failures** — the spec's authors expect amendments #4+ to come from implementation. Do not block on a flag unless it gates correctness; otherwise take your recommended option, mark it `PROVISIONAL` in code comments, and continue.
 
 ## Phase 0 — Onboarding (before any code)
 
@@ -38,7 +38,7 @@ P0 sequence:
 3. **Executor + ledger + replay**: §12 sequential walk; App G entries with hash chain; INJECT/VERIFY replay; §12.4 intent/dispatch/result protocol. *Exit: replay-determinism property test green; divergence hard-refuses.*
 4. **Control ops** (§8, all 17) against conformance vectors; then Compute v0 (§9/F3).
 5. **Park/resume**: App I continuation format, §8.4 resume sequence, termination turns. *Exit: park/resume vectors + continuation_hash verification green.*
-6. **Once/CAS** (§8.4, §24), minimal `aelio-store` behind a trait (Sunjet backend + in-memory test double — the double exists for tests only, Sunjet is the store).
+6. **Once/CAS** (§8.4, §24), minimal `aelio-store` behind a trait (Aelio DB backend + in-memory test double — the double exists for tests only, Aelio DB is the store).
 7. **Golden test: the App A login flow end-to-end** with stub tool/model targets. *This is P0's definition of done.*
 
 P1 and P2 follow §30 after P0 is green. Do not start P1 early.

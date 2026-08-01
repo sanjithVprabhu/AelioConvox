@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Harness scenario matrix: runs realistic sample chats through the real
- * processTurn path against a temporary Sunjet ll-server and validates both the
+ * processTurn path against a temporary AelioDb aelio-server and validates both the
  * reply and the decision journal. This is not a unit test of one component; it
  * is an auditor's sweep across generic gate, semantic pathway, stance,
  * immediate context, memory recall, cache, flow/policy guidance, and traces.
@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bootstrapSunjetTables,
+  bootstrapAelioDbTables,
   configureEmbedder,
   createArchetypeEngine,
   createConvoxArchetypeStore,
@@ -30,11 +30,11 @@ import {
   HarnessTracer,
   processTurn,
 } from '@aelio/core';
-import { SunjetClient } from '@aelio/sunjet-client';
+import { AelioDbClient } from '@aelio/db-client';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ASTROLOBE = join(ROOT, 'Sunjet/Astrolobe');
-const LL_SERVER = join(ASTROLOBE, 'target/release/ll-server');
+const AELIO_OS = join(ROOT, 'aelio-os');
+const AELIO_SERVER = join(AELIO_OS, 'target/release/aelio-server');
 const DIM = 96;
 
 const TABLES = {
@@ -127,7 +127,7 @@ async function waitHealthy(url) {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`ll-server did not become healthy at ${url}`);
+  throw new Error(`aelio-server did not become healthy at ${url}`);
 }
 
 function cleanup(code) {
@@ -136,7 +136,7 @@ function cleanup(code) {
     try {
       child.kill('SIGTERM');
     } catch (error) {
-      console.warn(`WARN: unable to stop temporary ll-server: ${error.message}`);
+      console.warn(`WARN: unable to stop temporary aelio-server: ${error.message}`);
     }
   }
   if (temp) rmSync(temp, { recursive: true, force: true });
@@ -314,16 +314,16 @@ async function main() {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   temp = mkdtempSync(join(tmpdir(), 'aelio-scenario-matrix-'));
-  child = spawn(LL_SERVER, [], {
-    cwd: ASTROLOBE,
-    env: { ...process.env, LL_BIND: `127.0.0.1:${port}`, LL_DATA_DIR: join(temp, 'data') },
+  child = spawn(AELIO_SERVER, [], {
+    cwd: AELIO_OS,
+    env: { ...process.env, AELIO_ALLOW_INSECURE_OPEN: '1', AELIO_RUNTIME_BIND: `127.0.0.1:${port}`, AELIO_DATA_DIR: join(temp, 'data') },
     stdio: 'ignore',
   });
   await waitHealthy(url);
   configureEmbedder(async (text) => vectorize(text));
 
-  const client = new SunjetClient({ baseUrl: url });
-  await bootstrapSunjetTables(client, TABLES, DIM);
+  const client = new AelioDbClient({ baseUrl: url });
+  await bootstrapAelioDbTables(client, TABLES, DIM);
   const storage = { client, tables: TABLES, embedDim: DIM };
 
   const messageStore = createConvoxMessageStore(storage);

@@ -43,7 +43,7 @@ memory:
   enabled: true
   recall_limit: 5
 
-sunjet:
+aelioDb:
   enabled: false
   embed_dim: 1536
 

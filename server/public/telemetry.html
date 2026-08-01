@@ -510,7 +510,7 @@
     <header>
       <div>
         <h1>Conversation Telemetry</h1>
-        <p>Live Sunjet archive — intent, lifecycle state, flows, and tools per message</p>
+        <p>Live AelioDb archive — intent, lifecycle state, flows, and tools per message</p>
       </div>
       <div class="header-actions">
         <span class="pill" id="status-pill"><span class="dot"></span><span id="status-text">Connecting…</span></span>
@@ -660,7 +660,7 @@
             ? `<details><summary>Intent stack (${event.intentStack.length} layers)</summary><div style="padding:12px">${renderStack(event.intentStack)}</div></details>`
             : '';
 
-        const raw = `<details><summary>Raw Sunjet row</summary><pre>${escapeHtml(JSON.stringify(event, null, 2))}</pre></details>`;
+        const raw = `<details><summary>Raw AelioDb row</summary><pre>${escapeHtml(JSON.stringify(event, null, 2))}</pre></details>`;
 
         return `
           <article class="event" data-event-id="${escapeHtml(event.eventId)}">
@@ -718,8 +718,8 @@
         }
 
         if (!body.enabled) {
-          feed.innerHTML = `<div class="empty"><strong>Sunjet not enabled</strong><br>Turn on <code>sunjet.enabled</code> in config and restart the server. Messages from the chat widget will appear here in real time.</div>`;
-          setStatus('off', 'Sunjet disabled');
+          feed.innerHTML = `<div class="empty"><strong>AelioDb not enabled</strong><br>Turn on <code>aelioDb.enabled</code> in config and restart the server. Messages from the chat widget will appear here in real time.</div>`;
+          setStatus('off', 'AelioDb disabled');
           return;
         }
 

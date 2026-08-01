@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { FunctionDefinition } from '@aelio/protocol';
-import type { SunjetClient } from '@aelio/sunjet-client';
+import type { AelioDbClient } from '@aelio/db-client';
 import type { LighthouseService } from '../lighthouse/index.js';
 import { embed } from '../analyst/embeddings.js';
 import { i64, readI64, readUtf8, utf8 } from '../storage/helpers.js';
@@ -13,7 +13,7 @@ export type BindResult =
   | { ok: false; unbound: PlanInstruction[]; bound: BoundInstruction[] };
 
 export type BindingCacheConfig = {
-  client: SunjetClient;
+  client: AelioDbClient;
   table: string;
   tenant: string;
   registryHash: string;
@@ -78,7 +78,7 @@ async function storeCachedTool(
 /**
  * Bind capability-level instructions to concrete tools. Sources, in order:
  *   1. Planner `tool` suggestion (trusted if in registry)
- *   2. Sunjet binding cache (when configured)
+ *   2. AelioDb binding cache (when configured)
  *   3. Lighthouse semantic search with score/ambiguity gates
  */
 export async function bindInstructions(

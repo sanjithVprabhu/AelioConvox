@@ -2,7 +2,7 @@
 
 Open-source conversational runtime for SaaS products. Give your customers a production-grade chat experience on Web and WhatsApp — with an always-on analytical agent that understands each user over time.
 
-**Stack:** TypeScript decision plane · Rust storage engine (Sunjet/Astrolobe `.vss` — vectors, BM25, graph; Sunjet-only, no SQLite) · single-container deployment
+**Stack:** authoritative Rust Aelio OS + embedded Aelio DB · TypeScript LLM/embedding/channel host edge · single-container deployment
 
 ## Three products, one system
 
@@ -11,9 +11,9 @@ Aelio ships as three cleanly separated pieces that talk to each other over WebSo
 ```
 ┌────────────────────────┐        outbound WS /sdk        ┌──────────────────────────┐
 │  Your backend          │ ─────────(Bearer secret)─────▶ │  Aelio Server            │
-│  @aelio/sdk (Convox)   │ ◀──── invoke / send frames ─── │  agentic runtime         │
-│  your auth · DB · logic│                                │  tool loop · safety      │
-└────────────────────────┘                                │  memory · Sunjet storage │
+│  @aelio/sdk (Convox)   │ ◀──── invoke / send frames ─── │  TypeScript edge         │
+│  your auth · DB · logic│                                │  channels · model calls  │
+└────────────────────────┘                                │  Rust OS + Aelio DB      │
                                                           └──────────────────────────┘
 ┌────────────────────────┐        browser WS /widget/ws            ▲
 │  Your website          │ ──────────────────────────────────────┘
@@ -38,14 +38,14 @@ AelioConvox/
 │   ├── python/        # aelio-sdk — Python SDK (PyPI)
 │   └── go/            # Go SDK module
 ├── chat/              # @aelio/chat — embeddable browser widget (npm) → dist/{index.js, widget.js}
-├── server/            # @aelio/server — Fastify runtime + Dockerfile + deploy templates
+├── aelio-os/          # authoritative Rust DSL kernel, runtime service, and Aelio database
+├── server/            # thin Fastify channel/LLM/embedding/SDK host edge
 ├── packages/          # internal workspace libs (not published on their own):
 │   ├── protocol/      #   wire protocol types + Zod schemas
-│   ├── core/          #   turn pipeline, harness, context/pathway/stance engines, decision journal, memory
+│   ├── core/          #   host-side stores, adapters, and migration utilities
 │   ├── llm/           #   LLM providers (mock, Anthropic, OpenAI, Gemini, Groq, Ollama)
 │   ├── channels/      #   WhatsApp adapter
-│   └── sunjet-client/ #   HTTP client for the Sunjet (ll-server) Rust engine
-├── Sunjet/Astrolobe/  # Rust storage engine (git submodule) — the .vss database + ll-server
+│   └── db-client/     #   HTTP client for the Rust Aelio database API
 ├── examples/          # nodejs-express, sample-saas, python-fastapi, python-django, go-http
 ├── docs/  scripts/  Blueprint/
 └── config.yaml        # single source of runtime config
@@ -58,13 +58,14 @@ docker pull sanjithvprabhu/aelio-server:latest
 
 docker run -d --name aelio -p 3010:3000 -v aelio-data:/data \
   -e AELIO_SDK_SECRET=change-me \
+  -e AELIO_INTERNAL_TOKEN=replace-with-at-least-32-random-characters \
   -e AELIO_LLM_PROVIDER=openai \
   -e OPENAI_API_KEY=sk-... \
   sanjithvprabhu/aelio-server:latest
 ```
 
-One image runs **Aelio + Sunjet**. Swap LLM with `AELIO_LLM_PROVIDER` / provider API key;
-cloud `.vss` with `AELIO_SUNJET_SEGMENT_BACKEND=s3` + `AELIO_SUNJET_S3_*`.
+One image runs the **Rust Aelio OS/database plus its TypeScript edge**. Swap LLM with `AELIO_LLM_PROVIDER` / provider API key;
+cloud `.vss` with `AELIO_DB_SEGMENT_BACKEND=s3` + `AELIO_DB_S3_*`.
 Full matrix: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
 
@@ -78,16 +79,27 @@ try everything with zero config.
 pnpm install
 pnpm build
 
-# Terminal 1 — Aelio server
+# Terminal 1 — authoritative Rust OS/database
+export AELIO_RUNTIME_TOKENS=local-internal-token-at-least-32-chars
+export AELIO_EVENT_KEY_SECRET=local-event-secret-at-least-32-chars
+export AELIO_HOST_URL=http://127.0.0.1:3000
+export AELIO_HOST_TOKEN=local-internal-token-at-least-32-chars
+cargo run --manifest-path aelio-os/Cargo.toml -p aelio-server
+
+# Terminal 2 — TypeScript edge
 export AELIO_SDK_SECRET=change-me-in-production
+export AELIO_RUST_RUNTIME_URL=http://127.0.0.1:8090
+export AELIO_RUNTIME_TOKEN=local-internal-token-at-least-32-chars
+export AELIO_HOST_TOKEN=local-internal-token-at-least-32-chars
+export DB_API_KEY=local-internal-token-at-least-32-chars
 export OPENAI_API_KEY=sk-...        # optional; omit to run on the mock LLM
 pnpm --filter @aelio/server dev
 
-# Terminal 2 — example SaaS backend wired with the Convox SDK
+# Terminal 3 — example SaaS backend wired with the Convox SDK
 export AELIO_SDK_SECRET=change-me-in-production
 pnpm --filter aelio-example-express start
 
-# Terminal 3 — run the automated phase tests
+# Terminal 4 — run the automated phase tests
 AELIO_TEST_MODE=1 pnpm test:all
 ```
 
@@ -162,13 +174,13 @@ Deploy templates for [Railway](server/railway.toml), [Render](server/render.yaml
 
 ## Conversational intelligence engines
 
-Every turn runs through a Sunjet-backed decision layer before the LLM sees a word:
+Every turn is compiled, planned, executed, ledgered, and persisted by the Rust Aelio OS. TypeScript can only fulfill registered model, embedding, and SDK-tool calls requested by Rust.
 
 - **Generic gate** — bare greetings/thanks/farewells answered from templates: zero embeddings, zero LLM calls.
 - **Immediate Context Engine** — hot 5-minute verbatim window sliding through condensed 15m/30m/1h/24h tiers, per customer, across sessions and channels.
 - **Semantic Pathway Engine** — one message embedding fanned out in parallel to tool/memory/policy/flow ranking; picks the intent and response strategy (`reply`/`execute`/`guide`/`resume`/`disengage`).
 - **Archetype stance engine** — positive/negative/neutral valence per category with sentence-span attribution, plus a self-learning aspect taxonomy (discovered aspects are staged as candidates and only steer replies once promoted).
-- **Decision journal** — every decision (`pathway`, `stance`, `prompt`, `reply`, `cache`, `generic`, `confirmation`, `proactive`) is journaled to Sunjet; reconstruct any turn via `GET /api/v1/admin/harness/turns/:turnId`. Set `logging.trace_prompt: redacted` to keep prompt PII out of traces.
+- **Decision journal** — every decision (`pathway`, `stance`, `prompt`, `reply`, `cache`, `generic`, `confirmation`, `proactive`) is journaled to Aelio DB; reconstruct any turn via `GET /api/v1/admin/harness/turns/:turnId`. Set `logging.trace_prompt: redacted` to keep prompt PII out of traces.
 
 The LLM only words the completed decision — hard policies, confirmations, and lifecycle gates stay deterministic. Roadmap and audit map: [docs/harness-recall-audit-checklist.md](docs/harness-recall-audit-checklist.md).
 

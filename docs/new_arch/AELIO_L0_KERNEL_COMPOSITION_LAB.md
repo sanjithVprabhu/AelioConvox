@@ -1,7 +1,7 @@
 # L0 Kernel Composition Lab
 
-**Purpose:** Strengthen the Kernel v0 glossary by pairing building blocks and recording what **meaningful higher operation** emerges — without inventing domain ops.  
-**Method:** For each pair `(A, B)`, ask: wrap? sequence? invalid? already named sugar? gap?  
+**Purpose:** Strengthen the Kernel v0 glossary by pairing building blocks and recording what **meaningful higher operation** emerges — without inventing domain ops.
+**Method:** For each pair `(A, B)`, ask: wrap? sequence? invalid? already named sugar? gap?
 **Status:** Wave 1 complete (structural pairs). Further waves discuss with design owner before glossary amendments.
 
 Kernel v0 set: see `AELIO_L0_GLOSSARY.md` §4.
@@ -100,10 +100,10 @@ These are **L2-shaped macros** over Kernel v0 — candidates for a later pattern
 
 ## Forbidden / sharp edges (strengthen glossary)
 
-1. **`Loop` + `Park` inside the same in-eval Loop** — Park suspends the turn; do not model human-wait as Loop. Human wait = `Park` + next turn resume.  
-2. **`Timeout` ≠ `Park`** — Timeout fails a running subtree; Park intentionally waits.  
-3. **`Branch` ≠ `Guard`** — else-path vs hard Err.  
-4. **`Try` ≠ `Fallback`** — reason-keyed recovery vs alternate strategies on same input.  
+1. **`Loop` + `Park` inside the same in-eval Loop** — Park suspends the turn; do not model human-wait as Loop. Human wait = `Park` + next turn resume.
+2. **`Timeout` ≠ `Park`** — Timeout fails a running subtree; Park intentionally waits.
+3. **`Branch` ≠ `Guard`** — else-path vs hard Err.
+4. **`Try` ≠ `Fallback`** — reason-keyed recovery vs alternate strategies on same input.
 5. **`Once` key design** is part of the contract — pairing with `Uuid` without a stable key scheme is footgun, not a new op.
 
 ---
@@ -112,7 +112,7 @@ These are **L2-shaped macros** over Kernel v0 — candidates for a later pattern
 
 Pair each Kernel op with **`Call`** as the second block systematically (Call is the bridge):
 
-- `Guard + Call(Policy.*)`, `Once + Call(Invoke.*)`, `Fallback + Call(Understand.*)` …  
+- `Guard + Call(Policy.*)`, `Once + Call(Invoke.*)`, `Fallback + Call(Understand.*)` …
 
 That wave validates L1 buildability without expanding Kernel.
 
@@ -120,5 +120,5 @@ That wave validates L1 buildability without expanding Kernel.
 
 ## Verdict after Wave 1
 
-Kernel v0 is **compositionally closed** for the pairs that matter: meaningful “next operations” appear as **patterns**, not missing syscalls.  
+Kernel v0 is **compositionally closed** for the pairs that matter: meaningful “next operations” appear as **patterns**, not missing syscalls.
 Next: design owner reviews Wave 1 table → accept patterns list → then Wave 2 (`* × Call`) in conversation.

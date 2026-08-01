@@ -1,6 +1,6 @@
 # Aelio Server
 
-The `@aelio/server` runtime — the agentic harness your Convox SDK and chat widget both connect to. Fastify + `@fastify/websocket`, wrapping the runtime in [`packages/core`](../packages/core): the LLM tool loop, safety rails, identity, memory/recall, and the **Sunjet/Astrolobe** Rust storage engine (with SQLite + `sqlite-vec` fallback).
+The `@aelio/server` runtime — the agentic harness your Convox SDK and chat widget both connect to. Fastify + `@fastify/websocket`, wrapping the runtime in [`packages/core`](../packages/core): the LLM tool loop, safety rails, identity, memory/recall, and the **Aelio DB** Rust storage engine (with SQLite + `sqlite-vec` fallback).
 
 This is meant to ship as a **Docker image** you pull and run; the SDKs point at it.
 
@@ -22,7 +22,7 @@ export AELIO_SDK_SECRET=change-me-in-production
 pnpm --filter @aelio/server dev      # tsx watch, reads ../config.yaml
 ```
 
-Config is `config.yaml` at the repo root (schema in [`src/config.ts`](src/config.ts), `${ENV}` interpolation). Key knobs: `llm`, `embeddings`, `channels.web.allowed_origins`, `channels.whatsapp`, `safety`, `sunjet`, `storage`.
+Config is `config.yaml` at the repo root (schema in [`src/config.ts`](src/config.ts), `${ENV}` interpolation). Key knobs: `llm`, `embeddings`, `channels.web.allowed_origins`, `channels.whatsapp`, `safety`, `aelioDb`, `storage`.
 
 ## Docker
 

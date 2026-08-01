@@ -26,6 +26,11 @@ func main() {
 		Description: "Get the status of a customer order",
 		Params:      map[string]interface{}{"orderId": "string"},
 		Safety:      aelio.SafetyRead,
+		Intent:      "get_order_status",
+		Output: map[string]aelio.OutputField{
+			"status":  {Type: "string", Meaning: "Current fulfillment status"},
+			"orderId": {Type: "string", Meaning: "The order identifier"},
+		},
 	}, func(args map[string]interface{}, ctx aelio.InvocationContext) (interface{}, error) {
 		return map[string]interface{}{
 			"orderId": args["orderId"],
@@ -60,7 +65,7 @@ func envOr(k, d string) string {
 | `Expose` | Register a tool |
 | `Persona` / `Describe` | Assistant voice + product brief |
 | `State` / `Policy` / `Flow` | Lifecycle catalog |
-| `SetCustomerState` / `SetFlowProgress` | Push lifecycle updates |
+| `SetCustomerState` | Push lifecycle updates into the authoritative Rust runtime |
 | `OnSend` / `Ingest` | BYO messaging |
 | `Listen` | Connect (blocks, auto-reconnect) |
 | `Disconnect` | Stop and close |

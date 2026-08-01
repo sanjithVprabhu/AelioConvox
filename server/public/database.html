@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AelioConvox — Astrolobe Database</title>
+    <title>AelioConvox — Aelio database Database</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -204,8 +204,8 @@
   <body>
     <header>
       <div>
-        <h1>Astrolobe Database Admin</h1>
-        <p>Browse &amp; edit the Sunjet (Astrolobe) collections — live via ll-server</p>
+        <h1>Aelio database Database Admin</h1>
+        <p>Browse &amp; edit the AelioDb (Aelio database) collections — live via Rust Aelio server</p>
       </div>
       <div class="header-actions">
         <span class="pill" id="status-pill"><span class="dot"></span><span id="status-text">Connecting…</span></span>
@@ -389,9 +389,9 @@
           const data = await api('GET', '/api/v1/admin/db/tables');
           catalog = data.tables || [];
           if (!data.enabled) {
-            setStatus('off', 'Sunjet disabled');
+            setStatus('off', 'AelioDb disabled');
             renderCollections();
-            $('scroll').innerHTML = `<div class="empty"><strong>Sunjet is not enabled</strong><br>Set <code>sunjet.enabled: true</code> in <code>config.yaml</code>, start <code>ll-server</code>, and restart Aelio to browse the Astrolobe database.</div>`;
+            $('scroll').innerHTML = `<div class="empty"><strong>AelioDb is not enabled</strong><br>Set <code>aelioDb.enabled: true</code> in <code>config.yaml</code>, start <code>Rust Aelio server</code>, and restart Aelio to browse the Aelio database database.</div>`;
             return;
           }
           setStatus('live', `Live · ${esc(data.dataset)} · ${esc(data.url)}`);
@@ -422,7 +422,7 @@
             .join('');
 
         if (!current.exists) {
-          $('scroll').innerHTML = `<div class="empty"><strong>Table not created yet</strong><br>This collection has a defined schema but has not been created in Astrolobe (no rows written).</div>`;
+          $('scroll').innerHTML = `<div class="empty"><strong>Table not created yet</strong><br>This collection has a defined schema but has not been created in Aelio database (no rows written).</div>`;
           return;
         }
         await scan();
@@ -436,7 +436,7 @@
         if (kind === 'vector') {
           const t = s.trim();
           if (t.startsWith('[')) return { type: 'vector', value: JSON.parse(t) };
-          return { type: 'embed', value: s }; // let ll-server embed the text
+          return { type: 'embed', value: s }; // let Rust Aelio server embed the text
         }
         if (kind === 'edge') return { type: 'edges', value: JSON.parse(s.trim() || '[]') };
         return { type: 'utf8', value: s }; // utf8 + text

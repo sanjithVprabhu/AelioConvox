@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Immediate Context Engine smoke test against a live ll-server.
+ * Immediate Context Engine smoke test against a live aelio-server.
  *
  * Verifies:
  *  1. Hot window (last 5 min) renders verbatim
@@ -17,17 +17,17 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import {
-  bootstrapSunjetTables,
+  bootstrapAelioDbTables,
   createImmediateContextEngine,
   buildTurnSystemPrompt,
   HOT_WINDOW_MS,
   CONTEXT_TIERS,
 } from '@aelio/core';
-import { SunjetClient } from '@aelio/sunjet-client';
+import { AelioDbClient } from '@aelio/db-client';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ASTROLOBE = join(ROOT, 'Sunjet/Astrolobe');
-const LL_SERVER_BIN = join(ASTROLOBE, 'target/release/ll-server');
+const AELIO_OS = join(ROOT, 'aelio-os');
+const AELIO_SERVER_BIN = join(AELIO_OS, 'target/release/aelio-server');
 
 const TABLES = {
   messages: 'convox_messages',
@@ -119,7 +119,7 @@ async function waitForHealth(url, timeoutMs = 20_000) {
     }
     await new Promise((r) => setTimeout(r, 200));
   }
-  throw new Error(`ll-server not healthy at ${url}`);
+  throw new Error(`aelio-server not healthy at ${url}`);
 }
 
 async function insertMessage(client, table, { customerId, role, content, createdAt }) {
@@ -137,27 +137,28 @@ async function insertMessage(client, table, { customerId, role, content, created
 
 async function main() {
   const port = await getFreePort();
-  const sunjetUrl = `http://127.0.0.1:${port}`;
+  const aelioDbUrl = `http://127.0.0.1:${port}`;
   tmpRoot = mkdtempSync(join(tmpdir(), 'aelio-ice-'));
-  const llDataDir = join(tmpRoot, 'sunjet');
+  const llDataDir = join(tmpRoot, 'aelioDb');
 
-  llChild = spawn(LL_SERVER_BIN, [], {
-    cwd: ASTROLOBE,
+  llChild = spawn(AELIO_SERVER_BIN, [], {
+    cwd: AELIO_OS,
     env: {
       ...process.env,
-      LL_DATA_DIR: llDataDir,
-      LL_BIND: `127.0.0.1:${port}`,
+      AELIO_ALLOW_INSECURE_OPEN: '1',
+      AELIO_DATA_DIR: llDataDir,
+      AELIO_RUNTIME_BIND: `127.0.0.1:${port}`,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   llChild.stderr?.on('data', () => {});
   llChild.stdout?.on('data', () => {});
 
-  await waitForHealth(sunjetUrl);
-  ok(`ll-server healthy at ${sunjetUrl}`);
+  await waitForHealth(aelioDbUrl);
+  ok(`aelio-server healthy at ${aelioDbUrl}`);
 
-  const client = new SunjetClient({ baseUrl: sunjetUrl });
-  await bootstrapSunjetTables(client, TABLES, EMBED_DIM);
+  const client = new AelioDbClient({ baseUrl: aelioDbUrl });
+  await bootstrapAelioDbTables(client, TABLES, EMBED_DIM);
   ok('tables bootstrapped');
 
   const storage = { client, tables: TABLES, embedDim: EMBED_DIM };
@@ -255,14 +256,14 @@ async function main() {
   }
   ok(`all ${CONTEXT_TIERS.length} tiers present + hot window (${HOT_WINDOW_MS / MINUTE}m)`);
 
-  // Persistence: fresh engine should reload buckets from Sunjet
+  // Persistence: fresh engine should reload buckets from AelioDb
   const engine2 = createImmediateContextEngine({ storage, snapshotTtlMs: 1 });
   const snap2 = await engine2.getContext(customerId, now + 1_000);
   if (snap2.buckets.length < 4) {
     fail(`fresh engine only saw ${snap2.buckets.length} buckets (expected ≥4)`);
   }
   if (!snap2.prompt.includes('12 Oak Street')) {
-    fail('fresh engine lost tier-1 content from Sunjet');
+    fail('fresh engine lost tier-1 content from AelioDb');
   }
   ok('buckets reloaded from convox_compactions');
 

@@ -33,14 +33,18 @@ async function sleep(ms) {
 
 async function waitForOutbox(predicate, timeoutMs = 15000) {
   const started = Date.now();
+  let lastMessages = [];
   while (Date.now() - started < timeoutMs) {
     const response = await fetch(`${baseUrl}/__test__/whatsapp/outbox`);
     const data = await response.json();
-    const match = (data.messages ?? []).find(predicate);
+    lastMessages = data.messages ?? [];
+    const match = lastMessages.find(predicate);
     if (match) return match;
     await sleep(300);
   }
-  throw new Error('Timed out waiting for WhatsApp outbound message');
+  throw new Error(
+    `Timed out waiting for WhatsApp outbound message; observed ${JSON.stringify(lastMessages)}`,
+  );
 }
 
 try {

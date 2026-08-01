@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { processTurn, verifySessionToken, withSessionLock } from '@aelio/core';
+import { verifySessionToken, withSessionLock } from '@aelio/core';
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { resolvePublicDir } from '../paths.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
-import { buildTurnInput } from '../turn-options.js';
+import { executeConversationTurn } from '../conversation-turn.js';
 import { z } from 'zod';
 import { MAX_WS_FRAME_BYTES } from '@aelio/protocol';
 
@@ -21,6 +21,7 @@ const ClientMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('message'),
+    id: z.string().min(1).max(256).optional(),
     content: z.string().min(1).max(MAX_MESSAGE_LENGTH),
   }),
 ]);
@@ -185,13 +186,15 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
         socket.send(JSON.stringify({ type: 'typing', active: true }));
 
         try {
-          const { reply, turnId, awaitingConfirmation } = await processTurn(
-            buildTurnInput(deps, {
+          const { reply, turnId, awaitingConfirmation } = await executeConversationTurn(
+            deps,
+            {
               customerExternalId: customerId,
               channel: 'web',
               channelAddress,
               message: message.content,
-            }),
+              sourceTurnId: message.id,
+            },
           );
 
           const isConfirmation =

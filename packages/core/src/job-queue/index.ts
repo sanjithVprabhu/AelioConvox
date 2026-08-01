@@ -8,7 +8,7 @@ export type JobRecord = {
 
 function requireJobStore(jobStore: ConvoxJobStore | undefined): ConvoxJobStore {
   if (!jobStore) {
-    throw new Error('Sunjet jobStore is required');
+    throw new Error('AelioDb jobStore is required');
   }
   return jobStore;
 }

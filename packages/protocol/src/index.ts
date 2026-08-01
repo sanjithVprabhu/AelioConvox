@@ -13,16 +13,28 @@ export const ChannelSchema = z.string().min(1);
 export type Channel = z.infer<typeof ChannelSchema>;
 export type KnownChannel = 'whatsapp' | 'web';
 
+export const OutputFieldDefinitionSchema = z.object({
+  path: z.string().min(1).optional(),
+  type: z.enum(['auto', 'string', 'number', 'boolean', 'array', 'object']).default('auto'),
+  sensitivity: z.enum(['none', 'pii', 'secret']).default('none'),
+  meaning: z.string().min(1),
+}).strict();
+export type OutputFieldDefinition = z.infer<typeof OutputFieldDefinitionSchema>;
+
 export const FunctionDefinitionSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
   params: z.record(z.unknown()),
   safety: SafetyLevelSchema,
-  // Client-declared intent category (e.g. "order_inquiry"). Drives the runtime's
-  // intent stack and tool retrieval using the TENANT's vocabulary — the core never
-  // hardcodes domain topics. Falls back to the function name when omitted.
+  // Client-declared executable intent (e.g. "order.status"). It must resolve to
+  // exactly one tool; the core never hardcodes domain topics. Falls back to the
+  // function name when omitted.
   intent: z.string().min(1).optional(),
-});
+  // Closed semantic allowlist for data that may become runtime evidence. Paths use
+  // the Rust runtime's JSON-path subset (for example "$.status").
+  output: z.record(OutputFieldDefinitionSchema).optional(),
+  outputRole: z.enum(['data', 'effect_confirmation', 'continuation', 'error']).optional(),
+}).strict();
 export type FunctionDefinition = z.infer<typeof FunctionDefinitionSchema>;
 
 // Guard conditions a customer must satisfy for a state (or transition) to apply.
@@ -56,10 +68,79 @@ export type StateDefinition = z.infer<typeof StateDefinitionSchema>;
 export const PolicySeveritySchema = z.enum(['hard', 'soft']);
 export type PolicySeverity = z.infer<typeof PolicySeveritySchema>;
 
+export type AelioJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | AelioJsonValue[]
+  | { [key: string]: AelioJsonValue };
+
+export const AelioJsonValueSchema: z.ZodType<AelioJsonValue> = z.lazy(() =>
+  z.union([
+    z.null(),
+    z.boolean(),
+    z.number().finite(),
+    z.string(),
+    z.array(AelioJsonValueSchema),
+    z.record(AelioJsonValueSchema),
+  ]),
+);
+
+export type AelioPredicate =
+  | { op: 'true' | 'false' }
+  | { op: 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte'; path: string; value: AelioJsonValue }
+  | { op: 'in'; path: string; values: AelioJsonValue[] }
+  | { op: 'present' | 'absent'; path: string }
+  | { op: 'and' | 'or'; of: AelioPredicate[] }
+  | { op: 'not'; of: AelioPredicate };
+
+export const AelioPredicateSchema: z.ZodType<AelioPredicate> = z.lazy(() =>
+  z.discriminatedUnion('op', [
+    z.object({ op: z.literal('true') }).strict(),
+    z.object({ op: z.literal('false') }).strict(),
+    ...(['eq', 'ne', 'gt', 'gte', 'lt', 'lte'] as const).map((op) =>
+      z.object({ op: z.literal(op), path: z.string().min(1), value: AelioJsonValueSchema }).strict(),
+    ),
+    z.object({
+      op: z.literal('in'),
+      path: z.string().min(1),
+      values: z.array(AelioJsonValueSchema).max(256),
+    }).strict(),
+    z.object({ op: z.literal('present'), path: z.string().min(1) }).strict(),
+    z.object({ op: z.literal('absent'), path: z.string().min(1) }).strict(),
+    z.object({ op: z.literal('and'), of: z.array(AelioPredicateSchema).min(1).max(64) }).strict(),
+    z.object({ op: z.literal('or'), of: z.array(AelioPredicateSchema).min(1).max(64) }).strict(),
+    z.object({ op: z.literal('not'), of: AelioPredicateSchema }).strict(),
+  ]),
+);
+
+export const AelioPolicyArtifactSchema = z.object({
+  effect: z.enum(['allow', 'deny']),
+  subject: z.object({
+    role: z.string().min(1).optional(),
+    state: z.string().min(1).optional(),
+    tenant: z.string().min(1).optional(),
+    segment: z.string().min(1).optional(),
+  }).strict().default({}),
+  action: z.object({
+    capability: z.string().min(1).optional(),
+    tool_id: z.string().min(1).optional(),
+    transition: z.string().min(1).optional(),
+    flow_id: z.string().min(1).optional(),
+  }).strict(),
+  condition: AelioPredicateSchema.default({ op: 'true' }),
+  reason_code: z.string().min(1),
+  priority: z.number().int().min(-1_000_000).max(1_000_000).default(100),
+}).strict();
+export type AelioPolicyArtifact = z.infer<typeof AelioPolicyArtifactSchema>;
+
 export const PolicyDefinitionSchema = z.object({
   id: z.string().min(1),
   description: z.string().min(1),
   severity: PolicySeveritySchema.default('soft'),
+  /** Closed policy enforced by the authoritative Rust runtime. */
+  aelio: AelioPolicyArtifactSchema.optional(),
 });
 export type PolicyDefinition = z.infer<typeof PolicyDefinitionSchema>;
 
@@ -70,11 +151,61 @@ export const FlowStepDefinitionSchema = z.object({
 });
 export type FlowStepDefinition = z.infer<typeof FlowStepDefinitionSchema>;
 
+const AelioTargetSchema = z.object({
+  id: z.string().min(1),
+  class: z.enum(['compute', 'io', 'model', 'tool', 'flow']),
+  effect: z.enum(['pure', 'read', 'write', 'external']),
+  input_imprint: z.string().min(1),
+  output_imprint: z.string().min(1),
+  bounded: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('cost'), max_units: z.number().int().positive() }),
+    z.object({ kind: z.literal('deadline'), max_ms: z.number().int().positive() }),
+    z.object({ kind: z.literal('registered_flow') }),
+  ]),
+  policy_tags: z.array(z.string().min(1)).optional(),
+  origin: z.enum(['tenant', 'vendor']).optional(),
+});
+
+const AelioPromptSchema = z.object({
+  target_id: z.string().min(1),
+  template_id: z.string().min(1),
+  version: z.string().min(1),
+  body: z.string().min(1).max(65_536),
+  slots: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        ty: z.enum(['null', 'bool', 'int', 'float', 'str', 'list', 'map']),
+        sensitivity: z.enum(['public', 'internal', 'pii', 'secret']),
+      }),
+    )
+    .optional(),
+  layers: z
+    .array(
+      z.object({
+        id: z.string().min(3),
+        text: z.string().min(1).max(65_536),
+      }),
+    )
+    .optional(),
+});
+
+export const AelioFlowArtifactSchema = z.object({
+  flow_id: z.string().min(1),
+  flow_rev: z.string().min(1),
+  program: z.unknown(),
+  targets: z.array(AelioTargetSchema),
+  prompts: z.array(AelioPromptSchema).optional(),
+});
+export type AelioFlowArtifact = z.infer<typeof AelioFlowArtifactSchema>;
+
 export const FlowDefinitionSchema = z.object({
   id: z.string().min(1),
   state: z.string().min(1),
   description: z.string().min(1),
   steps: z.array(FlowStepDefinitionSchema).min(1),
+  /** Closed, versioned program consumed only by the authoritative Rust runtime. */
+  aelio: AelioFlowArtifactSchema.optional(),
 });
 export type FlowDefinition = z.infer<typeof FlowDefinitionSchema>;
 
@@ -115,15 +246,6 @@ export const SetStateMessageSchema = z.object({
   reason: z.string().optional(),
 });
 export type SetStateMessage = z.infer<typeof SetStateMessageSchema>;
-
-export const SetFlowProgressMessageSchema = z.object({
-  type: z.literal('set_flow_progress'),
-  customerId: z.string().min(1),
-  flowId: z.string().min(1),
-  stepIndex: z.number().int().nonnegative(),
-  completedSteps: z.array(z.string().min(1)).optional(),
-});
-export type SetFlowProgressMessage = z.infer<typeof SetFlowProgressMessageSchema>;
 
 export const InvokeMessageSchema = z.object({
   type: z.literal('invoke'),
@@ -193,7 +315,6 @@ export const SdkToServerMessageSchema = z.discriminatedUnion('type', [
   PongMessageSchema,
   IngestMessageSchema,
   SetStateMessageSchema,
-  SetFlowProgressMessageSchema,
 ]);
 export type SdkToServerMessage = z.infer<typeof SdkToServerMessageSchema>;
 
@@ -209,7 +330,7 @@ export type ServerErrorMessage = z.infer<typeof ServerErrorMessageSchema>;
 
 export const AckMessageSchema = z.object({
   type: z.literal('ack'),
-  op: z.enum(['set_state', 'set_flow_progress', 'ingest']),
+  op: z.enum(['set_state', 'ingest']),
 });
 export type AckMessage = z.infer<typeof AckMessageSchema>;
 

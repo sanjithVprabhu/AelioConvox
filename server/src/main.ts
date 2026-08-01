@@ -35,7 +35,7 @@ try {
       host,
       port,
       llm: config.llm.provider,
-      sunjet: { url: config.sunjet.url },
+      aelioDb: { url: config.aelioDb.url },
       widget: `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/widget.js`,
       demo: `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/demo.html`,
     },

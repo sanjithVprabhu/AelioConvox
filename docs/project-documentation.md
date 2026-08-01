@@ -1,7 +1,7 @@
 # Aelio-Convox — Complete Project Documentation
 
-> **Last updated:** 2026-07-09  
-> **Repository:** Aelio-Convox (product name: **Aelio**)  
+> **Last updated:** 2026-07-09
+> **Repository:** Aelio-Convox (product name: **Aelio**)
 > **License intent:** Apache-2.0
 
 This document is a comprehensive reference for the Aelio-Convox monorepo — architecture, packages, configuration, APIs, data model, flows, testing, and deployment. For step-by-step setup, see [MANUAL.md](./MANUAL.md). For fix history, see [fix-log.md](./fix-log.md).
@@ -40,7 +40,7 @@ This document is a comprehensive reference for the Aelio-Convox monorepo — arc
 
 **Key design principle:** The **Aelio SDK** runs inside *your* backend and dials *out* to the Aelio server over WebSocket. The server never calls your APIs directly and never holds your business credentials.
 
-**Tech stack:** TypeScript · pnpm monorepo · Fastify · SQLite + Drizzle + sqlite-vec · optional Sunjet (ll-server) archival · single-container Docker deployment.
+**Tech stack:** TypeScript · pnpm monorepo · Fastify · SQLite + Drizzle + sqlite-vec · optional Aelio DB (ll-server) archival · single-container Docker deployment.
 
 ```
 Customer (Web widget / WhatsApp)
@@ -77,7 +77,7 @@ Aelio-Convox/
 │   ├── channels/            # @aelio/channels — WhatsApp Meta/mock adapters
 │   ├── sdk-node/            # @aelio/sdk — Published Node.js SDK
 │   ├── sdk-python/          # Minimal Python SDK
-│   └── sunjet-client/       # @aelio/sunjet-client — Sunjet ll-server HTTP client
+│   └── aelio-db-client/       # @aelio/db-client — Aelio DB ll-server HTTP client
 ├── examples/
 │   ├── nodejs-express/      # Minimal Express + SDK (used by phase tests)
 │   ├── sample-saas/         # ShopCo realistic SaaS demo
@@ -99,10 +99,10 @@ Aelio-Convox/
 | `packages/protocol` | `@aelio/protocol` | SDK↔server message types, Zod validation, constants |
 | `packages/db` | `@aelio/db` | Drizzle schema, migrations, `createDatabase()` with sqlite-vec |
 | `packages/llm` | `@aelio/llm` | Providers: mock, anthropic, openai, gemini, groq, ollama + fallback chain |
-| `packages/core` | `@aelio/core` | `processTurn()`, memory, intent, lifecycle, job queue, Sunjet storage |
+| `packages/core` | `@aelio/core` | `processTurn()`, memory, intent, lifecycle, job queue, Aelio DB storage |
 | `packages/channels` | `@aelio/channels` | WhatsApp webhook parser, HMAC verify, Meta/mock senders |
 | `packages/sdk-node` | `@aelio/sdk` | Node SDK: `expose()`, `listen()`, `onSend()`, `ingest()`, lifecycle APIs |
-| `packages/sunjet-client` | `@aelio/sunjet-client` | HTTP client for Sunjet ll-server |
+| `packages/aelio-db-client` | `@aelio/db-client` | HTTP client for Aelio DB ll-server |
 
 ---
 
@@ -117,7 +117,7 @@ Entry point: `apps/server/src/main.ts` → `createApp()` in `apps/server/src/app
 3. Wire LLM provider chain (with optional fallback)
 4. Configure embedding provider (hash or real model)
 5. Initialize `ServerSdkBridge` for SDK communication
-6. Optionally initialize Sunjet client (with SQLite fallback on failure)
+6. Optionally initialize Aelio DB client (with SQLite fallback on failure)
 7. Create WhatsApp sender (Meta, mock, or SDK BYO)
 8. Register Fastify routes (health, SDK, widget, WhatsApp, auth, telemetry, proactive)
 9. Start background workers:
@@ -135,13 +135,13 @@ apps/server
   ├── @aelio/llm       (LLM + embeddings)
   ├── @aelio/channels  (WhatsApp)
   ├── @aelio/protocol  (message schemas)
-  └── @aelio/sunjet-client (optional archival)
+  └── @aelio/db-client (optional archival)
 
 packages/core
   ├── @aelio/db
   ├── @aelio/llm
   ├── @aelio/protocol
-  └── @aelio/sunjet-client
+  └── @aelio/db-client
 
 packages/sdk-node
   ├── ws
@@ -181,7 +181,7 @@ Incoming message
 | SDK bridge | `src/sdk-bridge.ts` | In-memory SDK connection registry, invoke/send routing |
 | Routes | `src/routes/*.ts` | HTTP/WS endpoints per channel |
 | Workers | `src/workers/*.ts` | Async job processing (inbound, outbound, backup, daemon) |
-| Sunjet init | `src/sunjet.ts` | Optional ll-server connection + message store |
+| Aelio DB init | `src/aelio-db.ts` | Optional ll-server connection + message store |
 | Static assets | `public/` | `widget.js`, `demo.html` |
 
 ### 4.2 Core Runtime (`packages/core`)
@@ -195,7 +195,7 @@ Incoming message
 | Intent | `src/intent/stack.ts` | Conversational focus tracking |
 | Lifecycle | `src/lifecycle/` | States, policies, flows from SDK |
 | Job queue | `src/job-queue/` | Async inbound/outbound job management |
-| Storage | `src/storage/` | Sunjet dual-write message store |
+| Storage | `src/storage/` | Aelio DB dual-write message store |
 | Telemetry | `src/telemetry/` | Turn-level LLM/API call logging |
 | Proactive | `src/runtime/proactive.ts` | Opt-in outbound messaging |
 | Response cache | `src/runtime/response-cache.ts` | Semantic response caching |
@@ -343,7 +343,7 @@ Primary file: `config.yaml` (validated by Zod in `apps/server/src/config.ts`).
 | `config.proactive.yaml` | Proactive messaging enabled |
 | `config.followup.yaml` | Proactive follow-up config |
 | `config.cache.yaml` | Response cache enabled |
-| `config.sunjet-test.yaml` | Sunjet integration testing |
+| `config.aelio-db-test.yaml` | Aelio DB integration testing |
 
 ### Full Schema Sections
 
@@ -362,7 +362,7 @@ Primary file: `config.yaml` (validated by Zod in `apps/server/src/config.ts`).
 | `daemon` | `enabled`, `interval_minutes`, `max_per_cycle`, `reflect_min_messages`, `proactive_followup` |
 | `proactive` | `enabled`, `require_opt_in`, `max_per_customer_per_day`, `window_hours` |
 | `cache` | `enabled`, `similarity_threshold`, `ttl_minutes` |
-| `sunjet` | `enabled`, `url`, `api_key`, `embed_dim`, `timeout_ms`, `dual_write_sqlite`, `fallback_sqlite_on_error`, `tables.*` |
+| `aelio-db` | `enabled`, `url`, `api_key`, `embed_dim`, `timeout_ms`, `dual_write_sqlite`, `fallback_sqlite_on_error`, `tables.*` |
 | `storage` | `database_path`, `backup.enabled/interval_hours/retain_count` |
 | `logging` | `level`, `format` |
 | `server` | `host`, `port` |
@@ -392,8 +392,8 @@ Env refs in YAML use `${VAR_NAME}` syntax, resolved at load time.
 | `GEMINI_API_KEY` | Google Gemini API key |
 | `GROQ_API_KEY` | Groq API key |
 | `VOYAGE_API_KEY` | Voyage embedding API key (Anthropic embeddings) |
-| `SUNJET_API_KEY` | Sunjet ll-server authentication |
-| `SUNJET_URL` | Sunjet test server URL |
+| `AELIO DB_API_KEY` | Aelio DB ll-server authentication |
+| `AELIO DB_URL` | Aelio DB test server URL |
 
 ---
 
@@ -404,12 +404,12 @@ Env refs in YAML use `${VAR_NAME}` syntax, resolved at load time.
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | GET | `/health` | None | Liveness probe |
-| GET | `/ready` | None | Readiness (db, migrations, widget, sunjet, sdk) |
+| GET | `/ready` | None | Readiness (db, migrations, widget, aelio-db, sdk) |
 | GET | `/diagnostics` | None (diag mode) | Memory, paths, SDK functions |
 | GET | `/widget.js` | None | Serve widget bundle |
 | GET | `/demo.html` | None | Static demo page |
 | GET | `/telemetry` | None | Telemetry HTML UI |
-| GET | `/api/v1/telemetry/events` | None | Sunjet conversation events |
+| GET | `/api/v1/telemetry/events` | None | Aelio DB conversation events |
 | GET | `/api/v1/telemetry/turn-calls` | None | Turn API call records |
 | GET | `/wa/webhook` | Meta verify token | WhatsApp subscription challenge |
 | POST | `/wa/webhook` | Optional HMAC | WhatsApp inbound messages |
@@ -431,7 +431,7 @@ Env refs in YAML use `${VAR_NAME}` syntax, resolved at load time.
 
 ## 9. Database Schema
 
-Schema definition: `packages/db/src/schema.ts`  
+Schema definition: `packages/db/src/schema.ts`
 Migrations: `packages/db/drizzle/` (0000–0003)
 
 ### Tables
@@ -605,12 +605,12 @@ Phone numbers map to persistent customer records via `identity.mapping_function:
 - Semantic similarity cache for repeated questions
 - **Config:** `cache.enabled`, `cache.similarity_threshold`
 
-### Sunjet Archival (opt-in)
+### Aelio DB Archival (opt-in)
 
-- Primary message store in Sunjet ll-server
+- Primary message store in Aelio DB ll-server
 - Dual-write to SQLite for fast reads
-- Graceful fallback on Sunjet outage
-- **Config:** `sunjet.enabled`, `sunjet.dual_write_sqlite`, `sunjet.fallback_sqlite_on_error`
+- Graceful fallback on Aelio DB outage
+- **Config:** `aelio-db.enabled`, `aelio-db.dual_write_sqlite`, `aelio-db.fallback_sqlite_on_error`
 
 ---
 
@@ -620,7 +620,7 @@ Phone numbers map to persistent customer records via `identity.mapping_function:
 
 - Node.js ≥ 20 (22 LTS recommended)
 - pnpm 9
-- Optional: Docker, Python ≥ 3.9, Sunjet ll-server (Rust)
+- Optional: Docker, Python ≥ 3.9, Aelio DB ll-server (Rust)
 
 ### Quick Start
 
@@ -684,7 +684,7 @@ AELIO_SERVER_URL=ws://127.0.0.1:3000 pnpm --filter aelio-example-express start
 | `test-phase4-whatsapp-identity.mjs` | `test:phase4:identity` | Persistent phone identity |
 | `test-phase5-memory.mjs` | `test:phase5` | Memory extract + recall |
 | `test-phase6-lifecycle.mjs` | `test:phase6:lifecycle` | Lifecycle catalog (manual) |
-| `test-sunjet-integration.mjs` | `test:sunjet` | Sunjet ll-server E2E |
+| `test-aelio-db-integration.mjs` | `test:aelio-db` | Aelio DB ll-server E2E |
 | `diagnostic.mjs` | `diagnostic` | Build, artifacts, health, shutdown, all phases |
 | `docker-verify.mjs` | `docker:verify` | Container build + phase tests |
 
@@ -743,7 +743,7 @@ The project is organized into incremental development phases, each with automate
 | Package | Purpose |
 |---------|---------|
 | drizzle-orm | DB queries |
-| Workspace packages | db, llm, protocol, sunjet-client |
+| Workspace packages | db, llm, protocol, aelio-db-client |
 
 ### Database (`@aelio/db`)
 

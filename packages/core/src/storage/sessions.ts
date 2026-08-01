@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { RowValueResponse } from '@aelio/sunjet-client';
+import type { RowValueResponse } from '@aelio/db-client';
 import { i64, parseJson, readI64, readUtf8, utf8 } from './helpers.js';
-import type { SunjetStorageConfig } from './types.js';
+import type { AelioDbStorageConfig } from './types.js';
 
 const SCAN_CAP = 2_000;
 
@@ -23,10 +23,10 @@ export type ClosedSessionRecord = {
 };
 
 export class ConvoxSessionStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
 
-  constructor(config: SunjetStorageConfig) {
+  constructor(config: AelioDbStorageConfig) {
     this.client = config.client;
     this.table = config.tables.sessions;
   }
@@ -187,6 +187,6 @@ export class ConvoxSessionStore {
   }
 }
 
-export function createConvoxSessionStore(config: SunjetStorageConfig): ConvoxSessionStore {
+export function createConvoxSessionStore(config: AelioDbStorageConfig): ConvoxSessionStore {
   return new ConvoxSessionStore(config);
 }

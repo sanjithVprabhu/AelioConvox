@@ -9,12 +9,12 @@ the recall spine is considered production-complete.
 - [x] Atomic operation vocabulary v0: `docs/HARNESS_ATOMIC_OPERATIONS_VOCABULARY.md`
   defines 100 independent harness primitives across sense, transform, query,
   retrieve, evaluate, reason, act, control, learn, and observe/govern families.
-- [x] Sunjet data model v0: `docs/HARNESS_SUNJET_DATA_MODEL.md` maps all 26
-  current Sunjet tables into identity, conversation, memory, harness runtime,
+- [x] Aelio DB data model v0: `docs/HARNESS_AELIO_DB_DATA_MODEL.md` maps all 26
+  current Aelio DB tables into identity, conversation, memory, harness runtime,
   learning graph, execution audit, async control, and SDK catalog spaces, with
   keys, vector fields, edge fields, decay rules, and missing future tables.
 - [x] Full turn decision journal: `pathway`, `stance`, `prompt`, `reply`, `cache`,
-  `confirmation`, and `proactive` trace kinds are written to Sunjet
+  `confirmation`, and `proactive` trace kinds are written to Aelio DB
   `harness_traces`.
 - [x] Turn reconstruction API:
   `GET /api/v1/admin/harness/turns/:turnId` returns pathway, stance, prompt,
@@ -74,12 +74,12 @@ the recall spine is considered production-complete.
 - [ ] Centroid/BM25 atom matching.
   - Done means atom candidates are retrieved by hybrid text + vector search, not
     vector-only archetype search.
-  - Done means Sunjet returns candidates with BM25/RRF where available, and
+  - Done means Aelio DB returns candidates with BM25/RRF where available, and
     TypeScript recomputes cosine for comparable final scores.
   - Done means tests cover lexical-only, semantic-only, and mixed cases.
 
 - [ ] User-specific Harness Axis graph.
-  - Done means aspects/archetypes are connected through Sunjet graph edges, not
+  - Done means aspects/archetypes are connected through Aelio DB graph edges, not
     only scalar `aspect_id`.
   - Done means user-specific occurrences attach to axes with timestamp, message
     span, valence, confidence, and source turn.

@@ -2,7 +2,7 @@
 
 The product shape:
 
-1. **Pull & run** a single Aelio image (server + Sunjet inside)
+1. **Pull & run** a single Aelio image (server + Aelio DB inside)
 2. **Install** an SDK (`npm` / `pip` / `go get`)
 3. **Expose** tools and `listen()`
 
@@ -23,10 +23,10 @@ docker run -d --name aelio \
 That one container runs:
 
 - **Aelio** on port 3000 (map to 3010)
-- **Sunjet / ll-server** on `127.0.0.1:8080` inside the container (local `.vss` under `/data/sunjet`)
+- **Aelio DB / ll-server** on `127.0.0.1:8080` inside the container (local `.vss` under `/data/aelio-db`)
 
-Health: `curl http://127.0.0.1:3010/health`  
-Demo: http://127.0.0.1:3010/demo.html  
+Health: `curl http://127.0.0.1:3010/health`
+Demo: http://127.0.0.1:3010/demo.html
 Hub: https://hub.docker.com/r/sanjithvprabhu/aelio-server
 
 ### Pick an LLM
@@ -44,18 +44,18 @@ Optional: `-e AELIO_LLM_MODEL=...`
 
 ```bash
 # Local (default) — already on with the image
--e AELIO_SUNJET_SEGMENT_BACKEND=local
+-e AELIO_AELIO DB_SEGMENT_BACKEND=local
 
 # Cloud (AWS S3 / MinIO / R2 / …)
--e AELIO_SUNJET_SEGMENT_BACKEND=s3 \
--e AELIO_SUNJET_S3_BUCKET=my-bucket \
--e AELIO_SUNJET_S3_REGION=us-east-1 \
--e AELIO_SUNJET_S3_ENDPOINT=https://s3.amazonaws.com \
--e AELIO_SUNJET_S3_ACCESS_KEY_ID=... \
--e AELIO_SUNJET_S3_SECRET_ACCESS_KEY=...
+-e AELIO_AELIO DB_SEGMENT_BACKEND=s3 \
+-e AELIO_AELIO DB_S3_BUCKET=my-bucket \
+-e AELIO_AELIO DB_S3_REGION=us-east-1 \
+-e AELIO_AELIO DB_S3_ENDPOINT=https://s3.amazonaws.com \
+-e AELIO_AELIO DB_S3_ACCESS_KEY_ID=... \
+-e AELIO_AELIO DB_S3_SECRET_ACCESS_KEY=...
 ```
 
-SQLite-only (no Astrolobe): `-e AELIO_SUNJET_ENABLED=0`
+SQLite-only (no Aelio DB engine): `-e AELIO_AELIO DB_ENABLED=0`
 
 ### Env reference
 
@@ -65,11 +65,11 @@ SQLite-only (no Astrolobe): `-e AELIO_SUNJET_ENABLED=0`
 | `AELIO_LLM_PROVIDER` / `AELIO_LLM_MODEL` | Chat provider + model |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `GROQ_API_KEY` | Provider key |
 | `AELIO_WEB_ALLOWED_ORIGINS` | Widget origins in prod |
-| `AELIO_SUNJET_ENABLED` | `1` (default) or `0` for SQLite-only |
-| `AELIO_SUNJET_SEGMENT_BACKEND` | `local` or `s3` |
-| `AELIO_SUNJET_S3_*` | Cloud credentials / bucket / endpoint |
+| `AELIO_AELIO DB_ENABLED` | `1` (default) or `0` for SQLite-only |
+| `AELIO_AELIO DB_SEGMENT_BACKEND` | `local` or `s3` |
+| `AELIO_AELIO DB_S3_*` | Cloud credentials / bucket / endpoint |
 
-Details: [Sunjet/Astrolobe/docs/segment-storage.md](../Sunjet/Astrolobe/docs/segment-storage.md).
+Details: [aelio-os/docs/segment-storage.md](../aelio-os/docs/segment-storage.md).
 
 ## 2. Connect an SDK
 
@@ -77,7 +77,7 @@ Same `AELIO_SDK_SECRET`. Node: `npm i @aelio/sdk` → `aelio.listen({ secret, ur
 
 ## 3. Advanced: split containers
 
-Only if you want to scale Sunjet separately — image `sanjithvprabhu/aelio-sunjet` + compose:
+Only if you want to scale Aelio DB separately — image `sanjithvprabhu/aelio-aelio-db` + compose:
 
 ```bash
 docker compose -f server/docker-compose.yml up -d

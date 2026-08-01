@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { ApiValue } from '@aelio/sunjet-client';
+import type { ApiValue } from '@aelio/db-client';
 import { embed } from '../analyst/embeddings.js';
 import type { ConversationTurnContext } from './context.js';
-import type { MessageStoreAppendInput, SunjetStorageConfig } from './types.js';
+import type { MessageStoreAppendInput, AelioDbStorageConfig } from './types.js';
 
 function utf8(value: string): ApiValue {
   return { type: 'utf8', value };
@@ -31,14 +31,14 @@ function normalizeEmbedding(vector: number[], dim: number): number[] {
     return vector;
   }
   // A mismatch means the configured embeddings.output_dimension does not match
-  // sunjet.embed_dim — vectors are being silently reshaped, which degrades
+  // aelioDb.embed_dim — vectors are being silently reshaped, which degrades
   // similarity search. Surface it once instead of hiding it.
   const key = `${vector.length}->${dim}`;
   if (!warnedDims.has(key)) {
     warnedDims.add(key);
     console.warn(
       `[aelio] embedding dimension mismatch: provider returned ${vector.length}, table expects ${dim}. ` +
-        'Align embeddings.output_dimension with sunjet.embed_dim to avoid degraded semantic search.',
+        'Align embeddings.output_dimension with aelioDb.embed_dim to avoid degraded semantic search.',
     );
   }
   if (vector.length > dim) {
@@ -48,7 +48,7 @@ function normalizeEmbedding(vector: number[], dim: number): number[] {
 }
 
 export async function appendConversationRecord(
-  config: Pick<SunjetStorageConfig, 'client' | 'tables' | 'embedDim'>,
+  config: Pick<AelioDbStorageConfig, 'client' | 'tables' | 'embedDim'>,
   input: MessageStoreAppendInput & {
     messageId: string;
     createdAt: number;

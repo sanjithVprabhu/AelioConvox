@@ -210,8 +210,8 @@ Lighthouse builds derived artifacts from the live registry:
 
 - stable registry hash;
 - product/capability brief;
-- Sunjet tool mirror;
-- Sunjet capability taxonomy;
+- Aelio DB tool mirror;
+- Aelio DB capability taxonomy;
 - semantic search;
 - prerequisite-expansion graph.
 
@@ -230,7 +230,7 @@ When the registry changes:
 
 1. the hash changes;
 2. capability brief is rebuilt;
-3. Sunjet mirror refreshes asynchronously;
+3. Aelio DB mirror refreshes asynchronously;
 4. binding-cache keys naturally change;
 5. an old suspended plan can be rejected as stale.
 
@@ -248,7 +248,7 @@ Example:
 refund_order — order_refund — Start a refund for an eligible order.
 ```
 
-### 5.3 Sunjet tool mirror
+### 5.3 Aelio DB tool mirror
 
 The mirror stores:
 
@@ -274,11 +274,11 @@ These graph edges improve retrieval recall only.
 
 ### 5.5 Score calibration
 
-Sunjet hybrid query results use reciprocal-rank fusion. Those scores are not cosine
+Aelio DB hybrid query results use reciprocal-rank fusion. Those scores are not cosine
 probabilities. Lighthouse hydrates matched rows and recomputes cosine similarity against
 stored embeddings before binder thresholds are applied.
 
-If the Sunjet mirror is unavailable, Lighthouse falls back to in-process embedding and cosine
+If the Aelio DB mirror is unavailable, Lighthouse falls back to in-process embedding and cosine
 ranking over the live registry.
 
 ---
@@ -470,7 +470,7 @@ The binder checks:
 
 A suggestion is accepted only if it exists in the already scoped live registry.
 
-### 9.2 Sunjet binding cache
+### 9.2 Aelio DB binding cache
 
 Cache identity is derived from:
 
@@ -658,7 +658,7 @@ Executor state contains:
 ```
 
 Before executing a new plan with a `turnId`, the harness loads existing ledger rows from
-Sunjet for:
+Aelio DB for:
 
 ```text
 session ID + turn ID
@@ -1158,7 +1158,7 @@ Ledger entry:
 }
 ```
 
-The row is persisted to Sunjet asynchronously.
+The row is persisted to Aelio DB asynchronously.
 
 The function-call audit is written with:
 
@@ -1608,7 +1608,7 @@ external execution.
 Important limitations:
 
 1. ledger writes are asynchronous;
-2. Sunjet has no unique constraint for ledger identity;
+2. Aelio DB has no unique constraint for ledger identity;
 3. a process can fail after SDK success but before ledger persistence;
 4. a new inbound turn normally receives a new `turnId`;
 5. external SDK handlers may not be idempotent;
@@ -1644,38 +1644,38 @@ default configuration enables the harness.
 
 ## 35. Current implementation caveats
 
-1. **No active segment replan**  
+1. **No active segment replan**
    `ExecOutcome` contains a `replan` variant, but execution does not produce it.
 
-2. **Resolve failure is not repaired**  
+2. **Resolve failure is not repaired**
    Duplicate IDs/cycles lead to a static response, despite comments mentioning replanning.
 
-3. **Harness coercion errors are ignored**  
+3. **Harness coercion errors are ignored**
    Coercion runs, but its error list is not acted upon before gating/invocation.
 
-4. **Dependency inference depends on `produces`**  
+4. **Dependency inference depends on `produces`**
    The planner must name produced fields that match later required parameters. Narrative order
    alone does not create dependencies.
 
-5. **Scalar producer fallback is permissive**  
+5. **Scalar producer fallback is permissive**
    A scalar producer output can satisfy any requested output field. This is convenient but can
    hide an incorrect field contract.
 
-6. **Write classification uses safety**  
+6. **Write classification uses safety**
    Both `write` and `destructive` become executor write effects; destructive denial occurs
    later in the safety gate.
 
-7. **Hard prompt policies are not executor gates**  
+7. **Hard prompt policies are not executor gates**
    Only lifecycle boundaries and configured safety policy are deterministic invocation gates.
 
-8. **Pending and completed audits are separate rows**  
+8. **Pending and completed audits are separate rows**
    A resumed success record is not linked to the original pending row by a shared audit ID.
 
-9. **Hydrated ledger loses audit detail**  
-   Sunjet ledger rows do not store tool name or duration; hydrated entries use empty/zero
+9. **Hydrated ledger loses audit detail**
+   Aelio DB ledger rows do not store tool name or duration; hydrated entries use empty/zero
    placeholders. Idempotency survives, but later synthesis/audit fidelity can be weaker.
 
-10. **Ledger persistence is not atomic with the side effect**  
+10. **Ledger persistence is not atomic with the side effect**
     This leaves a crash window for duplicate external execution.
 
 ---
@@ -1729,7 +1729,7 @@ server/src/sdk-bridge.ts                     Live registry and SDK invocation
 server/src/turn-options.ts                   Harness configuration wiring
 
 packages/core/src/lighthouse/index.ts        Registry hash, brief, search
-packages/core/src/lighthouse/mirror.ts       Sunjet mirror and graph expansion
+packages/core/src/lighthouse/mirror.ts       Aelio DB mirror and graph expansion
 packages/core/src/pathway/index.ts           Pre-planner tool scoping
 packages/core/src/runtime/tool-retrieval.ts  Fallback semantic selection
 packages/core/src/runtime/tool-schema.ts     Parameter schemas and coercion
@@ -1752,7 +1752,7 @@ packages/core/src/harness/index.ts           Complete harness orchestration
 packages/core/src/safety/policy.ts            Safety evaluation
 packages/core/src/safety/confirmations.ts     Confirmation text and parsing
 packages/core/src/audit/function-calls.ts     Audit API
-packages/core/src/storage/audit.ts            Sunjet function-call records
+packages/core/src/storage/audit.ts            Aelio DB function-call records
 packages/core/src/runtime/tool-loop.ts         Legacy comparison path
 ```
 
@@ -1775,4 +1775,4 @@ Tool execution in AelioConvox is intentionally separated into stages:
 11. a separate no-tools LLM call converts verified results into the final customer response.
 
 The LLM proposes and explains. The harness verifies and controls. The tenant SDK performs the
-business operation. Sunjet preserves execution state, recovery data, and audit history.
+business operation. Aelio DB preserves execution state, recovery data, and audit history.

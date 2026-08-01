@@ -1,0 +1,14 @@
+[package]
+name = "aelio-db-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LL engine spine: memtable (MVCC write absorber) tying the WAL to the VSS file."
+
+[dependencies]
+aelio-db-format = { path = "../aelio-db-format" }
+aelio-db-wal = { path = "../aelio-db-wal" }
+# Flush builds the embedded index sections from the memtable's columns.
+aelio-db-index = { path = "../aelio-db-index" }
+aelio-db-text = { path = "../aelio-db-text" }
+aelio-db-graph = { path = "../aelio-db-graph" }

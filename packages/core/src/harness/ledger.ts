@@ -1,9 +1,9 @@
-import type { SunjetClient } from '@aelio/sunjet-client';
+import type { AelioDbClient } from '@aelio/db-client';
 import { i64, parseJson, readUtf8, utf8 } from '../storage/helpers.js';
 import type { LedgerEntry } from './schema.js';
 
-export type LedgerSunjetConfig = {
-  client: SunjetClient;
+export type LedgerAelioDbConfig = {
+  client: AelioDbClient;
   table: string;
 };
 
@@ -11,12 +11,12 @@ export type LedgerSunjetConfig = {
 export async function loadLedgerForTurn(
   sessionId: string,
   turnId: string,
-  sunjet: LedgerSunjetConfig,
+  aelioDb: LedgerAelioDbConfig,
 ): Promise<LedgerEntry[]> {
-  if (!sunjet) {
-    throw new Error('Sunjet ledger config is required');
+  if (!aelioDb) {
+    throw new Error('AelioDb ledger config is required');
   }
-  const scan = await sunjet.client.scanRows(sunjet.table, {
+  const scan = await aelioDb.client.scanRows(aelioDb.table, {
     k: 2_000,
     filters: [
       { col: 'session_id', op: 'eq', value: utf8(sessionId) },
@@ -38,13 +38,13 @@ export async function persistLedgerEntry(
   sessionId: string,
   turnId: string,
   entry: LedgerEntry,
-  sunjet: LedgerSunjetConfig,
+  aelioDb: LedgerAelioDbConfig,
 ): Promise<void> {
-  if (!sunjet) {
-    throw new Error('Sunjet ledger config is required');
+  if (!aelioDb) {
+    throw new Error('AelioDb ledger config is required');
   }
   try {
-    await sunjet.client.insertRow(sunjet.table, {
+    await aelioDb.client.insertRow(aelioDb.table, {
       session_id: utf8(sessionId),
       turn_id: utf8(turnId),
       instruction_id: utf8(entry.instructionId),
@@ -54,7 +54,7 @@ export async function persistLedgerEntry(
       created_at: i64(Date.now()),
     });
   } catch {
-    // Sunjet has no unique-constraint enforcement over HTTP — a rare
+    // AelioDb has no unique-constraint enforcement over HTTP — a rare
     // same-turn double-write just adds a redundant row; idempotency at
     // read time (loadLedgerForTurn) still holds because the executor
     // de-dupes by (instructionId, argsHash) before re-invoking.

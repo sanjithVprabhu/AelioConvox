@@ -18,7 +18,7 @@ function run(command, args, env = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: 'inherit',
-      env: { ...process.env, ...env },
+      env: { ...process.env, AELIO_ALLOW_INSECURE_OPEN: '1', ...env },
     });
     child.on('exit', (code) => {
       if (code === 0) resolve();
@@ -58,6 +58,22 @@ async function waitForHealth(url, child, getLogs, attempts = 40) {
   throw new Error(`Server not healthy at ${url}`);
 }
 
+async function waitForRust(url, child, getLogs, attempts = 60) {
+  for (let i = 0; i < attempts; i += 1) {
+    if (child.exitCode !== null) {
+      throw new Error(`Rust runtime exited before becoming ready:\n${getLogs()}`);
+    }
+    try {
+      const response = await fetch(`${url}/readyz`);
+      if (response.ok) return;
+    } catch {
+      // retry
+    }
+    await sleep(250);
+  }
+  throw new Error(`Rust runtime not ready at ${url}`);
+}
+
 async function waitForSdk(url, attempts = 40) {
   for (let i = 0; i < attempts; i += 1) {
     try {
@@ -79,7 +95,17 @@ async function waitForSdk(url, attempts = 40) {
 
 const root = process.cwd();
 
-// Standalone suites: each spawns its own Sunjet (ll-server) and needs no Aelio
+console.log('\n=== Building authoritative Rust Aelio server ===');
+await run('cargo', [
+  'build',
+  '--release',
+  '--manifest-path',
+  'aelio-os/Cargo.toml',
+  '-p',
+  'aelio-server',
+]);
+
+// Standalone suites: each spawns its own AelioDb (aelio-server) and needs no Aelio
 // server — run them first so engine regressions fail fast.
 const standalone = [
   { name: 'Harness executor', script: 'scripts/test-harness-executor.mjs' },
@@ -90,32 +116,79 @@ const standalone = [
   { name: 'Reply relevance + decision journal', script: 'scripts/test-turn-relevance.mjs' },
   { name: 'Admin DB + journal endpoint', script: 'scripts/test-admin-db.mjs' },
 ];
-for (const test of standalone) {
-  console.log(`\n=== Running ${test.name} ===`);
-  await run('node', [test.script]);
+if (process.env.AELIO_SKIP_STANDALONE !== '1') {
+  for (const test of standalone) {
+    console.log(`\n=== Running ${test.name} ===`);
+    await run('node', [test.script]);
+  }
 }
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'aelio-test-run-'));
 const testPort = await getFreePort();
+const rustPort = await getFreePort();
 const baseUrl = `http://127.0.0.1:${testPort}`;
 const wsUrl = `ws://127.0.0.1:${testPort}`;
+const rustUrl = `http://127.0.0.1:${rustPort}`;
 const configPath = join(tmpRoot, 'config.yaml');
+const internalToken = 'aelio-test-internal-token-at-least-32-characters';
 
 const configTemplate = readFileSync(join(root, 'config.yaml'), 'utf8');
 const testConfig = configTemplate
   .replace(/port:\s*\d+$/m, `port: ${testPort}`)
   .replace(/provider:\s*\w+/m, 'provider: mock')
+  // End-to-end tests must be deterministic and offline. The first replacement
+  // above selects the mock chat provider; target the embeddings block
+  // separately so it cannot silently retain the production remote provider.
+  .replace(/(\nembeddings:\s*\n\s*provider:)\s*\w+/m, '$1 hash')
   .replace(/- http:\/\/localhost:\d+$/m, `- ${baseUrl}`);
 writeFileSync(configPath, testConfig);
+
+const rust = spawn(join(root, 'aelio-os/target/release/aelio-server'), [], {
+  stdio: ['ignore', 'pipe', 'pipe'],
+  env: {
+    ...process.env,
+    AELIO_RUNTIME_BIND: `127.0.0.1:${rustPort}`,
+    AELIO_DATA_DIR: join(tmpRoot, 'data'),
+    AELIO_HOST_URL: baseUrl,
+    AELIO_HOST_TOKEN: internalToken,
+    AELIO_LLM_GATEWAY_URL: `${baseUrl}/internal/aelio/llm/complete`,
+    AELIO_LLM_EMBED_URL: `${baseUrl}/internal/aelio/llm/embed`,
+    AELIO_LLM_GATEWAY_TOKEN: internalToken,
+    AELIO_LLM_EMBED_DIM: '1536',
+    AELIO_TENANT_ID: 'aelio-local',
+    AELIO_RUNTIME_TOKENS: internalToken,
+    AELIO_EVENT_KEY_SECRET: internalToken,
+  },
+});
+let rustOutput = '';
+rust.stdout.on('data', (chunk) => {
+  const text = chunk.toString();
+  rustOutput += text;
+  process.stdout.write(text);
+});
+rust.stderr.on('data', (chunk) => {
+  const text = chunk.toString();
+  rustOutput += text;
+  process.stderr.write(text);
+});
+const getRustLogs = () => rustOutput.slice(-8000);
+await waitForRust(rustUrl, rust, getRustLogs);
 
 const server = spawn('npx', ['tsx', 'src/main.ts'], {
   cwd: join(root, 'server'),
   stdio: ['ignore', 'pipe', 'pipe'],
   env: {
     ...process.env,
+    AELIO_ALLOW_INSECURE_OPEN: '1',
+    AELIO_PORT: String(testPort),
     AELIO_CONFIG: configPath,
     AELIO_SDK_SECRET: process.env.AELIO_SDK_SECRET ?? 'change-me-in-production',
     AELIO_TEST_MODE: '1',
+    AELIO_RUST_RUNTIME_URL: rustUrl,
+    AELIO_RUNTIME_TOKEN: internalToken,
+    AELIO_HOST_TOKEN: internalToken,
+    AELIO_DB_URL: rustUrl,
+    DB_API_KEY: internalToken,
   },
 });
 
@@ -151,6 +224,7 @@ try {
     stdio: 'inherit',
     env: {
       ...process.env,
+      AELIO_ALLOW_INSECURE_OPEN: '1',
       AELIO_SDK_SECRET: process.env.AELIO_SDK_SECRET ?? 'change-me-in-production',
       AELIO_SERVER_URL: wsUrl,
     },
@@ -177,5 +251,6 @@ try {
 } finally {
   server.kill('SIGTERM');
   sdk?.kill('SIGTERM');
+  rust.kill('SIGTERM');
   rmSync(tmpRoot, { recursive: true, force: true });
 }

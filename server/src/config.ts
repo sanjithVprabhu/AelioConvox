@@ -165,8 +165,17 @@ export const ConfigSchema = z.object({
       require_opt_in: z.boolean().default(true),
       max_per_customer_per_day: z.number().int().positive().default(5),
       window_hours: z.number().int().positive().default(24),
+      min_cadence_minutes: z.number().int().positive().default(1),
+      suppression_minutes: z.number().int().nonnegative().default(1),
     })
-    .default({ enabled: false, require_opt_in: true, max_per_customer_per_day: 5, window_hours: 24 }),
+    .default({
+      enabled: false,
+      require_opt_in: true,
+      max_per_customer_per_day: 5,
+      window_hours: 24,
+      min_cadence_minutes: 1,
+      suppression_minutes: 1,
+    }),
   embeddings: z
     .object({
       // hash = built-in local (no API). openai | gemini | anthropic (Voyage) | ollama.
@@ -174,10 +183,13 @@ export const ConfigSchema = z.object({
       model: z.string().default('text-embedding-3-small'),
       api_key: z.string().optional(),
       base_url: z.string().url().optional(),
-      // Match sunjet.embed_dim when using Sunjet vector columns (e.g. 1536 openai, 768 gemini).
+      // Match aelioDb.embed_dim when using AelioDb vector columns (e.g. 1536 openai, 768 gemini).
       output_dimension: z.number().int().positive().optional(),
+      // Hard wall-clock budget for one remote embedding request. On timeout,
+      // the core falls back to its deterministic local embedding.
+      timeout_ms: z.number().int().min(100).max(120_000).default(5_000),
     })
-    .default({ provider: 'hash', model: 'text-embedding-3-small' })
+    .default({ provider: 'hash', model: 'text-embedding-3-small', timeout_ms: 5_000 })
     .superRefine((value, ctx) => {
       if (!['hash', 'ollama'].includes(value.provider) && !value.api_key) {
         ctx.addIssue({
@@ -219,9 +231,9 @@ export const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
-  sunjet: z
+  aelioDb: z
     .object({
-      // Aelio is Sunjet-only — there is no SQLite fallback, so this must be true.
+      // Aelio is AelioDb-only — there is no SQLite fallback, so this must be true.
       // Kept as a field (rather than hardcoded) so config.yaml stays self-documenting;
       // the server force-enables it at boot regardless (see app.ts).
       enabled: z.boolean().default(true),
@@ -229,15 +241,15 @@ export const ConfigSchema = z.object({
       api_key: z.string().optional(),
       embed_dim: z.number().int().positive().default(1536),
       timeout_ms: z.number().int().positive().default(30_000),
-      // Segment durability for Astrolobe `.vss` files. Secrets must stay in env —
+      // Segment durability for Aelio `.vss` files. Secrets must stay in env —
       // never commit cloud credentials to YAML.
       segment_storage: z
         .object({
-          // local = disk only under LL_DATA_DIR; s3 = S3-compatible write-through cache.
-          // Override at deploy time with AELIO_SUNJET_SEGMENT_BACKEND — applied after parse.
+          // local = disk under AELIO_DATA_DIR; s3 = S3-compatible write-through cache.
+          // Override at deploy time with AELIO_DB_SEGMENT_BACKEND — applied after parse.
           backend: z.enum(['local', 's3']).default('local'),
           prefix: z.string().optional(),
-          // Non-secret hints only; credentials stay in AELIO_SUNJET_S3_* / LL_S3_* env.
+          // Non-secret hints only; credentials stay in AELIO_DB_S3_* env.
           bucket: z.string().optional(),
           region: z.string().optional(),
           endpoint: z.string().optional(),
@@ -331,7 +343,7 @@ export function loadConfig(configPath = process.env.AELIO_CONFIG ?? './config.ya
 
   applyLlmEnvOverrides(config);
   applyEmbeddingsEnvOverrides(config);
-  applySunjetEnvOverrides(config);
+  applyAelioDbEnvOverrides(config);
   applySegmentStorageEnvOverrides(config);
 
   // Restrict widget origins at deploy time without rebuilding the image/config
@@ -444,10 +456,10 @@ function applyEmbeddingsEnvOverrides(config: AelioConfig): void {
       config.embeddings.model = DEFAULT_EMBEDDING_MODELS[providerRaw];
       if (providerRaw === 'gemini') {
         config.embeddings.output_dimension = 768;
-        config.sunjet.embed_dim = 768;
+        config.aelioDb.embed_dim = 768;
       } else if (providerRaw === 'openai' || providerRaw === 'anthropic') {
         config.embeddings.output_dimension = 1536;
-        config.sunjet.embed_dim = 1536;
+        config.aelioDb.embed_dim = 1536;
       }
     }
     config.embeddings.provider = providerRaw;
@@ -463,7 +475,7 @@ function applyEmbeddingsEnvOverrides(config: AelioConfig): void {
     const dim = Number.parseInt(dimRaw, 10);
     if (Number.isFinite(dim) && dim > 0) {
       config.embeddings.output_dimension = dim;
-      config.sunjet.embed_dim = dim;
+      config.aelioDb.embed_dim = dim;
     }
   }
 
@@ -473,42 +485,42 @@ function applyEmbeddingsEnvOverrides(config: AelioConfig): void {
   }
 }
 
-/** Point at ll-server without editing YAML (Docker Compose). Sunjet is always required. */
-function applySunjetEnvOverrides(config: AelioConfig): void {
-  config.sunjet.enabled = true;
+/** Point at the Rust Aelio database API without editing YAML. */
+function applyAelioDbEnvOverrides(config: AelioConfig): void {
+  config.aelioDb.enabled = true;
 
-  const url = process.env.AELIO_SUNJET_URL?.trim();
+  const url = process.env.AELIO_DB_URL?.trim();
   if (url) {
-    config.sunjet.url = url;
+    config.aelioDb.url = url;
   }
 
   const apiKey =
-    process.env.AELIO_SUNJET_API_KEY?.trim() || process.env.SUNJET_API_KEY?.trim() || undefined;
+    process.env.AELIO_DB_API_KEY?.trim() || process.env.DB_API_KEY?.trim() || undefined;
   if (apiKey) {
-    config.sunjet.api_key = apiKey;
+    config.aelioDb.api_key = apiKey;
   }
 }
 
 function applySegmentStorageEnvOverrides(config: AelioConfig): void {
   // Env wins for segment backend so secrets never need to live in YAML.
-  const segmentBackend = process.env.AELIO_SUNJET_SEGMENT_BACKEND?.trim().toLowerCase();
+  const segmentBackend = process.env.AELIO_DB_SEGMENT_BACKEND?.trim().toLowerCase();
   if (segmentBackend === 'local' || segmentBackend === 's3') {
-    config.sunjet.segment_storage.backend = segmentBackend;
+    config.aelioDb.segment_storage.backend = segmentBackend;
   }
-  const segmentPrefix = process.env.AELIO_SUNJET_SEGMENT_PREFIX?.trim();
+  const segmentPrefix = process.env.AELIO_DB_SEGMENT_PREFIX?.trim();
   if (segmentPrefix) {
-    config.sunjet.segment_storage.prefix = segmentPrefix;
+    config.aelioDb.segment_storage.prefix = segmentPrefix;
   }
-  const segmentBucket = process.env.AELIO_SUNJET_S3_BUCKET?.trim();
+  const segmentBucket = process.env.AELIO_DB_S3_BUCKET?.trim();
   if (segmentBucket) {
-    config.sunjet.segment_storage.bucket = segmentBucket;
+    config.aelioDb.segment_storage.bucket = segmentBucket;
   }
-  const segmentRegion = process.env.AELIO_SUNJET_S3_REGION?.trim();
+  const segmentRegion = process.env.AELIO_DB_S3_REGION?.trim();
   if (segmentRegion) {
-    config.sunjet.segment_storage.region = segmentRegion;
+    config.aelioDb.segment_storage.region = segmentRegion;
   }
-  const segmentEndpoint = process.env.AELIO_SUNJET_S3_ENDPOINT?.trim();
+  const segmentEndpoint = process.env.AELIO_DB_S3_ENDPOINT?.trim();
   if (segmentEndpoint) {
-    config.sunjet.segment_storage.endpoint = segmentEndpoint;
+    config.aelioDb.segment_storage.endpoint = segmentEndpoint;
   }
 }

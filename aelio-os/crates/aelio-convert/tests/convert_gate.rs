@@ -278,6 +278,8 @@ fn edge_advances_through_lifecycle_and_honors_on_parse_fail() {
     assert_eq!(edge.status, Status::Canary);
     edge.advance(Trigger::CanaryThresholdsMet).unwrap();
     assert_eq!(edge.status, Status::Promoted);
+    edge.advance(Trigger::DemoteManual).unwrap();
+    assert_eq!(edge.status, Status::Shadow);
 
     // Warm use: the rename applies.
     let out = edge

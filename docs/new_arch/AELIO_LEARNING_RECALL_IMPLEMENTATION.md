@@ -165,7 +165,7 @@ The authenticated server surfaces are:
 
 ## Verification
 
-From `Sunjet/Astrolobe`:
+From `aelio-os`:
 
 ```bash
 cargo test --workspace

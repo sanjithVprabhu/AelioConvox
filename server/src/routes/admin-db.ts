@@ -2,14 +2,14 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { listTurnApiCalls } from '@aelio/core';
-import { SunjetHttpError } from '@aelio/sunjet-client';
+import { AelioDbHttpError } from '@aelio/db-client';
 import type {
   ApiValue,
   QueryRequest,
   RowValues,
   ScanResponse,
   SchemaResponse,
-} from '@aelio/sunjet-client';
+} from '@aelio/db-client';
 import { resolvePublicDir } from '../paths.js';
 import { requireSecret } from '../auth.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
@@ -19,7 +19,7 @@ type TableStatus = 'active' | 'mirror' | 'schema-only';
 type TableCatalogEntry = {
   /** Stable config key. */
   key: string;
-  /** Actual table name in Astrolobe (configurable). */
+  /** Actual table name in Aelio database (configurable). */
   name: string;
   label: string;
   description: string;
@@ -28,13 +28,13 @@ type TableCatalogEntry = {
 };
 
 /**
- * Human-facing metadata for each logical Sunjet/Astrolobe table. Keys map to
- * `config.sunjet.tables.*`; the real table name is resolved at request time so
+ * Human-facing metadata for each logical Aelio DB table. Keys map to
+ * `config.aelioDb.tables.*`; the real table name is resolved at request time so
  * customised table names still work. `status` reflects what actually writes to
  * the table today (audit of the Aelio codebase).
  */
 const TABLE_META: Array<{
-  key: keyof RuntimeDeps['config']['sunjet']['tables'];
+  key: keyof RuntimeDeps['config']['aelioDb']['tables'];
   label: string;
   description: string;
   status: TableStatus;
@@ -44,7 +44,7 @@ const TABLE_META: Array<{
     key: 'messages',
     label: 'Messages',
     description:
-      'Raw conversation messages (L0). BM25 + embedding. Primary store: Sunjet/Astrolobe (not SQLite).',
+      'Raw conversation messages (L0). BM25 + embedding. Primary store: Aelio DB (not SQLite).',
     status: 'active',
     writtenBy: 'ConvoxMessageStore.appendMessage',
   },
@@ -52,7 +52,7 @@ const TABLE_META: Array<{
     key: 'conversations',
     label: 'Conversations',
     description:
-      'Per-turn telemetry (intent, flows, tools). Written to Astrolobe — powers the telemetry dashboard.',
+      'Per-turn telemetry (intent, flows, tools). Written to Aelio database — powers the telemetry dashboard.',
     status: 'active',
     writtenBy: 'appendConversationRecord',
   },
@@ -60,7 +60,7 @@ const TABLE_META: Array<{
     key: 'memories',
     label: 'Memories',
     description:
-      'Long-term customer memories (profile, preferences, insights). Written and recalled via Astrolobe vector search.',
+      'Long-term customer memories (profile, preferences, insights). Written and recalled via Aelio database vector search.',
     status: 'active',
     writtenBy: 'ConvoxMemoryStore (extractMemories / reflectOnSession)',
   },
@@ -75,7 +75,7 @@ const TABLE_META: Array<{
   {
     key: 'runtime_state',
     label: 'Runtime State',
-    description: 'Ephemeral scoped state with TTL. Swept by sunjet-daemon.',
+    description: 'Ephemeral scoped state with TTL. Swept by aelioDb-daemon.',
     status: 'schema-only',
     writtenBy: '(planned / daemon sweep)',
   },
@@ -96,7 +96,7 @@ const TABLE_META: Array<{
   {
     key: 'harness_bindings',
     label: 'Harness Bindings',
-    description: 'Instruction→tool binding cache. Written by bindInstructions when Sunjet is enabled.',
+    description: 'Instruction→tool binding cache. Written by bindInstructions when AelioDb is enabled.',
     status: 'active',
     writtenBy: 'bindInstructions (binding cache)',
   },
@@ -104,7 +104,7 @@ const TABLE_META: Array<{
     key: 'harness_suspensions',
     label: 'Harness Suspensions',
     description:
-      'Suspended plans awaiting user input. Sunjet is the source of truth when configured; SQLite is a fallback only for non-Sunjet deployments.',
+      'Suspended plans awaiting user input. AelioDb is the source of truth when configured; SQLite is a fallback only for non-AelioDb deployments.',
     status: 'active',
     writtenBy: 'SuspensionStore',
   },
@@ -112,21 +112,21 @@ const TABLE_META: Array<{
     key: 'harness_ledger',
     label: 'Harness Ledger',
     description:
-      'Per-instruction idempotency ledger. Written to Sunjet exclusively when configured (turn-scoped scan/insert).',
+      'Per-instruction idempotency ledger. Written to AelioDb exclusively when configured (turn-scoped scan/insert).',
     status: 'active',
     writtenBy: 'loadLedgerForTurn / persistLedgerEntry',
   },
   {
     key: 'harness_traces',
     label: 'Harness Traces',
-    description: 'Append-only harness trace firehose. Written to Astrolobe.',
+    description: 'Append-only harness trace firehose. Written to Aelio database.',
     status: 'active',
     writtenBy: 'HarnessTracer.trace',
   },
   {
     key: 'customers',
     label: 'Customers',
-    description: 'Customer records (external id, display name, metadata). Primary store when Sunjet is configured.',
+    description: 'Customer records (external id, display name, metadata). Primary store when AelioDb is configured.',
     status: 'active',
     writtenBy: 'ConvoxCustomerStore',
   },
@@ -170,7 +170,7 @@ const TABLE_META: Array<{
     label: 'Turn API Calls',
     description: 'Per-turn LLM/embedding call telemetry (prompt summary, tokens, duration).',
     status: 'active',
-    writtenBy: 'recordTurnApiCall (TurnApiCallsSunjetConfig)',
+    writtenBy: 'recordTurnApiCall (TurnApiCallsAelioDbConfig)',
   },
   {
     key: 'reflections',
@@ -238,7 +238,7 @@ const DEFAULT_SCAN_LIMIT = 100;
 const VECTOR_PREVIEW = 6;
 
 function buildCatalog(deps: RuntimeDeps): TableCatalogEntry[] {
-  const tables = deps.config.sunjet.tables;
+  const tables = deps.config.aelioDb.tables;
   return TABLE_META.map((meta) => ({
     key: meta.key,
     name: tables[meta.key],
@@ -257,13 +257,13 @@ function resolveTable(deps: RuntimeDeps, requested: string): TableCatalogEntry |
   );
 }
 
-/** 503 helper for when Sunjet is disabled or unreachable. */
-function sunjetUnavailable(deps: RuntimeDeps, reply: FastifyReply) {
+/** 503 helper for when AelioDb is disabled or unreachable. */
+function aelioDbUnavailable(deps: RuntimeDeps, reply: FastifyReply) {
   return reply.status(503).send({
     enabled: false,
-    message: deps.config.sunjet.enabled
-      ? 'Sunjet is enabled but the client is not connected — check that ll-server is reachable.'
-      : 'Sunjet is not enabled. Set sunjet.enabled: true in config.yaml and restart to browse the Astrolobe database.',
+    message: deps.config.aelioDb.enabled
+      ? 'AelioDb is enabled but the client is not connected — check that Rust Aelio server is reachable.'
+      : 'AelioDb is not enabled. Set aelioDb.enabled: true in config.yaml and restart to browse the Aelio database database.',
   });
 }
 
@@ -312,13 +312,13 @@ function parsePayload(value: string): unknown {
   }
 }
 
-/** Translate a SunjetHttpError into an equivalent HTTP reply. */
+/** Translate a AelioDbHttpError into an equivalent HTTP reply. */
 function forwardError(error: unknown, reply: FastifyReply) {
-  if (error instanceof SunjetHttpError) {
+  if (error instanceof AelioDbHttpError) {
     return reply.status(error.status).send({ error: error.body || error.message });
   }
   const message = error instanceof Error ? error.message : String(error);
-  return reply.status(502).send({ error: `Sunjet request failed: ${message}` });
+  return reply.status(502).send({ error: `AelioDb request failed: ${message}` });
 }
 
 export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeDeps) {
@@ -340,18 +340,18 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
     const catalog = buildCatalog(deps);
     const base = {
       dataset: deps.config.name,
-      embedDim: deps.config.sunjet.embed_dim,
-      url: deps.config.sunjet.url,
+      embedDim: deps.config.aelioDb.embed_dim,
+      url: deps.config.aelioDb.url,
     };
 
-    const client = deps.sunjetClient;
+    const client = deps.aelioDbClient;
     const tables = await Promise.all(
       catalog.map(async (entry) => {
         try {
           const schema: SchemaResponse = await client.getSchema(entry.name);
           return { ...entry, exists: true, columns: schema.columns };
         } catch (error) {
-          if (error instanceof SunjetHttpError && error.status === 404) {
+          if (error instanceof AelioDbHttpError && error.status === 404) {
             return { ...entry, exists: false, columns: [] };
           }
           return {
@@ -376,11 +376,11 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
     if (!entry) {
       return reply.status(404).send({ error: 'Unknown table' });
     }
-    if (!deps.config.sunjet.enabled || !deps.sunjetClient) {
-      return sunjetUnavailable(deps, reply);
+    if (!deps.config.aelioDb.enabled || !deps.aelioDbClient) {
+      return aelioDbUnavailable(deps, reply);
     }
     try {
-      const schema = await deps.sunjetClient.getSchema(entry.name);
+      const schema = await deps.aelioDbClient.getSchema(entry.name);
       return reply.status(200).send({ ...entry, columns: schema.columns });
     } catch (error) {
       return forwardError(error, reply);
@@ -396,8 +396,8 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
     if (!entry) {
       return reply.status(404).send({ error: 'Unknown table' });
     }
-    if (!deps.config.sunjet.enabled || !deps.sunjetClient) {
-      return sunjetUnavailable(deps, reply);
+    if (!deps.config.aelioDb.enabled || !deps.aelioDbClient) {
+      return aelioDbUnavailable(deps, reply);
     }
 
     const body = (request.body ?? {}) as {
@@ -417,7 +417,7 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
     }
 
     try {
-      const result: ScanResponse = await deps.sunjetClient.scanRows(entry.name, query);
+      const result: ScanResponse = await deps.aelioDbClient.scanRows(entry.name, query);
       const sortCol = body.sort?.col ?? 'created_at';
       const dir = body.sort?.dir ?? 'desc';
       const rows = [...result.rows];
@@ -452,15 +452,15 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
     if (!entry) {
       return reply.status(404).send({ error: 'Unknown table' });
     }
-    if (!deps.config.sunjet.enabled || !deps.sunjetClient) {
-      return sunjetUnavailable(deps, reply);
+    if (!deps.config.aelioDb.enabled || !deps.aelioDbClient) {
+      return aelioDbUnavailable(deps, reply);
     }
     const rowId = Number.parseInt(params.id, 10);
     if (!Number.isFinite(rowId)) {
       return reply.status(400).send({ error: 'Invalid row id' });
     }
     try {
-      const row = await deps.sunjetClient.getRow(entry.name, rowId);
+      const row = await deps.aelioDbClient.getRow(entry.name, rowId);
       return reply.status(200).send(row);
     } catch (error) {
       return forwardError(error, reply);
@@ -472,13 +472,13 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
     if (!requireSecret(request, reply, secret)) {
       return reply;
     }
-    if (!deps.config.sunjet.enabled || !deps.sunjetClient) {
-      return sunjetUnavailable(deps, reply);
+    if (!deps.config.aelioDb.enabled || !deps.aelioDbClient) {
+      return aelioDbUnavailable(deps, reply);
     }
 
     const turnId = (request.params as { turnId: string }).turnId;
     try {
-      const traceScan = await deps.sunjetClient.scanRows(deps.config.sunjet.tables.harness_traces, {
+      const traceScan = await deps.aelioDbClient.scanRows(deps.config.aelioDb.tables.harness_traces, {
         k: 1000,
         filters: [{ col: 'turn_id', op: 'eq', value: queryUtf8(turnId) }],
       });
@@ -499,8 +499,8 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
       const apiCalls = await listTurnApiCalls(
         { turnId, limit: 200 },
         {
-          client: deps.sunjetClient,
-          table: deps.config.sunjet.tables.turn_api_calls,
+          client: deps.aelioDbClient,
+          table: deps.config.aelioDb.tables.turn_api_calls,
         },
       );
 
@@ -534,15 +534,15 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
     if (!entry) {
       return reply.status(404).send({ error: 'Unknown table' });
     }
-    if (!deps.config.sunjet.enabled || !deps.sunjetClient) {
-      return sunjetUnavailable(deps, reply);
+    if (!deps.config.aelioDb.enabled || !deps.aelioDbClient) {
+      return aelioDbUnavailable(deps, reply);
     }
     const values = (request.body as { values?: RowValues })?.values;
     if (!values || typeof values !== 'object') {
       return reply.status(400).send({ error: 'Body must be { values: { column: ApiValue } }' });
     }
     try {
-      const result = await deps.sunjetClient.insertRow(entry.name, values);
+      const result = await deps.aelioDbClient.insertRow(entry.name, values);
       return reply.status(201).send(result);
     } catch (error) {
       return forwardError(error, reply);
@@ -559,8 +559,8 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
     if (!entry) {
       return reply.status(404).send({ error: 'Unknown table' });
     }
-    if (!deps.config.sunjet.enabled || !deps.sunjetClient) {
-      return sunjetUnavailable(deps, reply);
+    if (!deps.config.aelioDb.enabled || !deps.aelioDbClient) {
+      return aelioDbUnavailable(deps, reply);
     }
     const rowId = Number.parseInt(params.id, 10);
     if (!Number.isFinite(rowId)) {
@@ -571,7 +571,7 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
       return reply.status(400).send({ error: 'Body must be { values: { column: ApiValue } }' });
     }
     try {
-      const result = await deps.sunjetClient.updateRow(entry.name, rowId, values);
+      const result = await deps.aelioDbClient.updateRow(entry.name, rowId, values);
       return reply.status(200).send(result);
     } catch (error) {
       return forwardError(error, reply);
@@ -588,15 +588,15 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
     if (!entry) {
       return reply.status(404).send({ error: 'Unknown table' });
     }
-    if (!deps.config.sunjet.enabled || !deps.sunjetClient) {
-      return sunjetUnavailable(deps, reply);
+    if (!deps.config.aelioDb.enabled || !deps.aelioDbClient) {
+      return aelioDbUnavailable(deps, reply);
     }
     const rowId = Number.parseInt(params.id, 10);
     if (!Number.isFinite(rowId)) {
       return reply.status(400).send({ error: 'Invalid row id' });
     }
     try {
-      const result = await deps.sunjetClient.deleteRow(entry.name, rowId);
+      const result = await deps.aelioDbClient.deleteRow(entry.name, rowId);
       return reply.status(200).send(result);
     } catch (error) {
       return forwardError(error, reply);
@@ -608,11 +608,11 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
     if (!requireSecret(request, reply, secret)) {
       return reply;
     }
-    if (!deps.config.sunjet.enabled || !deps.sunjetClient) {
-      return sunjetUnavailable(deps, reply);
+    if (!deps.config.aelioDb.enabled || !deps.aelioDbClient) {
+      return aelioDbUnavailable(deps, reply);
     }
     try {
-      const result = await deps.sunjetClient.flush();
+      const result = await deps.aelioDbClient.flush();
       return reply.status(200).send(result);
     } catch (error) {
       return forwardError(error, reply);
@@ -623,11 +623,11 @@ export async function registerAdminDbRoutes(app: FastifyInstance, deps: RuntimeD
     if (!requireSecret(request, reply, secret)) {
       return reply;
     }
-    if (!deps.config.sunjet.enabled || !deps.sunjetClient) {
-      return sunjetUnavailable(deps, reply);
+    if (!deps.config.aelioDb.enabled || !deps.aelioDbClient) {
+      return aelioDbUnavailable(deps, reply);
     }
     try {
-      const result = await deps.sunjetClient.compact();
+      const result = await deps.aelioDbClient.compact();
       return reply.status(200).send(result);
     } catch (error) {
       return forwardError(error, reply);

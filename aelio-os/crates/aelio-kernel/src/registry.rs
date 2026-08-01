@@ -90,8 +90,20 @@ impl EffectClass {
     }
 }
 
+/// Stable identity supplied by the kernel for one logical call. Host adapters must forward
+/// `corr` unchanged so retries are deduplicated while distinct calls remain distinct.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallContext {
+    pub corr: String,
+    pub tenant: String,
+    pub instance_id: String,
+    pub turn_id: String,
+    pub nid: String,
+    pub deadline_ms: Option<u64>,
+}
+
 /// A registered target: `args` in (least-privilege projection), Sol out.
-pub type TargetFn = Box<dyn FnMut(&SolValue) -> Result<Invocation, ErrV1>>;
+pub type TargetFn = Box<dyn FnMut(&SolValue, &CallContext) -> Result<Invocation, ErrV1> + Send>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Invocation {
@@ -117,14 +129,14 @@ impl Registry {
         &mut self,
         id: impl Into<String>,
         effect_class: EffectClass,
-        mut func: impl FnMut(&SolValue) -> Result<SolValue, ErrV1> + 'static,
+        mut func: impl FnMut(&SolValue) -> Result<SolValue, ErrV1> + Send + 'static,
     ) {
         self.entries.insert(
             id.into(),
             Entry {
                 effect_class,
                 declaration: None,
-                func: Box::new(move |args| {
+                func: Box::new(move |args, _context| {
                     func(args).map(|output| Invocation {
                         output,
                         usage_tokens: 0,
@@ -137,7 +149,7 @@ impl Registry {
     pub fn register_declared(
         &mut self,
         declaration: Declaration,
-        mut func: impl FnMut(&SolValue) -> Result<SolValue, ErrV1> + 'static,
+        mut func: impl FnMut(&SolValue) -> Result<SolValue, ErrV1> + Send + 'static,
     ) -> Result<(), String> {
         declaration.validate()?;
         let id = declaration.id.clone();
@@ -150,7 +162,7 @@ impl Registry {
             Entry {
                 effect_class: declaration.effect_class,
                 declaration: Some(declaration),
-                func: Box::new(move |args| {
+                func: Box::new(move |args, _context| {
                     func(args).map(|output| Invocation {
                         output,
                         usage_tokens: 0,
@@ -167,7 +179,63 @@ impl Registry {
     pub fn register_model_declared(
         &mut self,
         declaration: Declaration,
-        func: impl FnMut(&SolValue) -> Result<Invocation, ErrV1> + 'static,
+        mut func: impl FnMut(&SolValue) -> Result<Invocation, ErrV1> + Send + 'static,
+    ) -> Result<(), String> {
+        if declaration.class != TargetClass::Model {
+            return Err("model registration requires TargetClass::Model".into());
+        }
+        declaration.validate()?;
+        let id = declaration.id.clone();
+        if self.entries.contains_key(&id) {
+            return Err(format!("registry target `{id}` already exists"));
+        }
+        self.entries.insert(
+            id,
+            Entry {
+                effect_class: declaration.effect_class,
+                declaration: Some(declaration),
+                func: Box::new(move |args, _context| func(args)),
+            },
+        );
+        Ok(())
+    }
+
+    /// Register a declared target that needs the kernel's stable call correlation identity.
+    pub fn register_contextual_declared(
+        &mut self,
+        declaration: Declaration,
+        mut func: impl FnMut(&SolValue, &CallContext) -> Result<SolValue, ErrV1> + Send + 'static,
+    ) -> Result<(), String> {
+        declaration.validate()?;
+        let id = declaration.id.clone();
+        let is_flow = declaration.class == TargetClass::Flow;
+        if self.entries.contains_key(&id) {
+            return Err(format!("registry target `{id}` already exists"));
+        }
+        self.entries.insert(
+            id.clone(),
+            Entry {
+                effect_class: declaration.effect_class,
+                declaration: Some(declaration),
+                func: Box::new(move |args, context| {
+                    func(args, context).map(|output| Invocation {
+                        output,
+                        usage_tokens: 0,
+                    })
+                }),
+            },
+        );
+        if is_flow {
+            self.flow_edges.insert(id, Vec::new());
+        }
+        Ok(())
+    }
+
+    /// Model variant of [`Self::register_contextual_declared`], preserving usage accounting.
+    pub fn register_contextual_model_declared(
+        &mut self,
+        declaration: Declaration,
+        func: impl FnMut(&SolValue, &CallContext) -> Result<Invocation, ErrV1> + Send + 'static,
     ) -> Result<(), String> {
         if declaration.class != TargetClass::Model {
             return Err("model registration requires TargetClass::Model".into());
@@ -272,14 +340,46 @@ impl Registry {
         self.declaration(id).map(|declaration| declaration.class)
     }
 
+    pub fn boundedness_of(&self, id: &str) -> Option<&Boundedness> {
+        self.declaration(id)
+            .map(|declaration| &declaration.boundedness)
+    }
+
     pub fn call(&mut self, id: &str, args: &SolValue) -> Option<Result<SolValue, ErrV1>> {
+        let context = CallContext {
+            corr: "direct-call".into(),
+            tenant: String::new(),
+            instance_id: String::new(),
+            turn_id: String::new(),
+            nid: String::new(),
+            deadline_ms: None,
+        };
         self.entries
             .get_mut(id)
-            .map(|e| (e.func)(args).map(|result| result.output))
+            .map(|e| (e.func)(args, &context).map(|result| result.output))
     }
 
     pub fn invoke(&mut self, id: &str, args: &SolValue) -> Option<Result<Invocation, ErrV1>> {
-        self.entries.get_mut(id).map(|entry| (entry.func)(args))
+        let context = CallContext {
+            corr: "direct-invoke".into(),
+            tenant: String::new(),
+            instance_id: String::new(),
+            turn_id: String::new(),
+            nid: String::new(),
+            deadline_ms: None,
+        };
+        self.invoke_contextual(id, args, &context)
+    }
+
+    pub fn invoke_contextual(
+        &mut self,
+        id: &str,
+        args: &SolValue,
+        context: &CallContext,
+    ) -> Option<Result<Invocation, ErrV1>> {
+        self.entries
+            .get_mut(id)
+            .map(|entry| (entry.func)(args, context))
     }
 
     pub fn contains(&self, id: &str) -> bool {

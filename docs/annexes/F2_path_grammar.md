@@ -1,6 +1,6 @@
 # F2 — Path grammar EBNF (§6.1)
 
-**Sources:** §6.1, §4.2.5, §4.4.  
+**Sources:** §6.1, §4.2.5, §4.4.
 **Status:** pure elaboration of locked text. No design decisions.
 
 ## EBNF

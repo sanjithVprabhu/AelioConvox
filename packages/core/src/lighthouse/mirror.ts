@@ -1,11 +1,11 @@
-import type { ApiValue, SunjetClient } from '@aelio/sunjet-client';
+import type { ApiValue, AelioDbClient } from '@aelio/db-client';
 import type { FunctionDefinition } from '@aelio/protocol';
 import { cosineSimilarity, embed } from '../analyst/embeddings.js';
 import { normalizeEmbedding } from '../storage/messages.js';
 import type { RegistrySnapshot } from './hash.js';
 
 export type LighthouseMirrorConfig = {
-  client: SunjetClient;
+  client: AelioDbClient;
   toolsTable: string;
   capabilitiesTable: string;
   embedDim: number;
@@ -194,7 +194,7 @@ export class LighthouseMirror {
       const name = readUtf8(row?.values, 'name');
       const fn = registryByName.get(name);
       if (fn) {
-        // Sunjet query scores are RRF ranks (~0.016 ceiling), not similarities.
+        // AelioDb query scores are RRF ranks (~0.016 ceiling), not similarities.
         // Binder gates (scoreMin/ambiguityGap) are calibrated on cosine, so
         // recompute cosine against the stored embedding — same convention as
         // the archetype store and the in-process fallback ranker.
@@ -216,7 +216,7 @@ export class LighthouseMirror {
       vector: { col: 'embedding', query: vector },
       filters: [{ col: 'tenant', op: 'eq', value: utf8(tenant) }],
     });
-    // Recompute cosine per hit: Sunjet query scores are RRF ranks, but the
+    // Recompute cosine per hit: AelioDb query scores are RRF ranks, but the
     // planner's feasibility challenge threshold is calibrated on cosine.
     let best = 0;
     for (const hit of response.results) {

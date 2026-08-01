@@ -18,7 +18,7 @@ It demonstrates:
 - three clean observations promoting the read-only path; and
 - the next identical situation retrieving the promoted path at Tier 0.
 
-Regenerate a new reference from `Sunjet/Astrolobe`:
+Regenerate a new reference from `aelio-os`:
 
 ```bash
 cargo run -p aelio --example decision_log_conversation

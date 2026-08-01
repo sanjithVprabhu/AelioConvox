@@ -18,8 +18,8 @@
 {"op":"trim",      "path":"<path>"}
 ```
 
-**Fabricating rules** (tier escalation computed, never stored as editable flag): `default`, `const_set`.  
-`map_enum` on unmapped value ⇒ `Convert.RuleFail` (never invents).  
+**Fabricating rules** (tier escalation computed, never stored as editable flag): `default`, `const_set`.
+`map_enum` on unmapped value ⇒ `Convert.RuleFail` (never invents).
 `cast` obeys §5.2 matrix; forbidden casts plan/apply-time reject.
 
 ## Conversion edge record
@@ -61,7 +61,7 @@ Counts inflate only on **distinct input hashes** (§16).
 
 ## App A expressible
 
-- **e1:** `[{"op":"rename","from":"active","to":"loggedin"}]` + reach external ⇒ reviewed  
+- **e1:** `[{"op":"rename","from":"active","to":"loggedin"}]` + reach external ⇒ reviewed
 - **e2:** `[{"op":"trim","path":"code"},{"op":"cast","path":"code","to":"int"}]`
 
 ## Completion check

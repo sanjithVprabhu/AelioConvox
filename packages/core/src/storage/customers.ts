@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { RowValueResponse } from '@aelio/sunjet-client';
+import type { RowValueResponse } from '@aelio/db-client';
 import { i64, parseJson, readI64, readUtf8, utf8 } from './helpers.js';
-import type { SunjetStorageConfig } from './types.js';
+import type { AelioDbStorageConfig } from './types.js';
 
 const SCAN_CAP = 500;
 
@@ -15,11 +15,11 @@ export type CustomerRecord = {
 };
 
 export class ConvoxCustomerStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
   readonly channelTable: string;
 
-  constructor(config: SunjetStorageConfig) {
+  constructor(config: AelioDbStorageConfig) {
     this.client = config.client;
     this.table = config.tables.customers;
     this.channelTable = config.tables.channelAddresses;
@@ -147,6 +147,6 @@ export class ConvoxCustomerStore {
   }
 }
 
-export function createConvoxCustomerStore(config: SunjetStorageConfig): ConvoxCustomerStore {
+export function createConvoxCustomerStore(config: AelioDbStorageConfig): ConvoxCustomerStore {
   return new ConvoxCustomerStore(config);
 }

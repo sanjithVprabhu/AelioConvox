@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { i64, parseJson, readI64, readUtf8, utf8 } from './helpers.js';
-import type { SunjetStorageConfig } from './types.js';
+import type { AelioDbStorageConfig } from './types.js';
 
 const SCAN_CAP = 2_000;
 const DEFAULT_MAX_ATTEMPTS = 5;
@@ -12,7 +12,7 @@ export type ClaimedJob = {
 };
 
 /**
- * Sunjet has no atomic conditional update over HTTP, so `claim()` serializes
+ * AelioDb has no atomic conditional update over HTTP, so `claim()` serializes
  * through this in-process mutex and re-reads the candidate row before
  * flipping it to `processing`. This only protects against races between
  * claimers in the same process — multiple processes still need queue-level
@@ -30,10 +30,10 @@ function withClaimLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 export class ConvoxJobStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
 
-  constructor(config: SunjetStorageConfig) {
+  constructor(config: AelioDbStorageConfig) {
     this.client = config.client;
     this.table = config.tables.jobQueue;
   }
@@ -163,6 +163,6 @@ export class ConvoxJobStore {
   }
 }
 
-export function createConvoxJobStore(config: SunjetStorageConfig): ConvoxJobStore {
+export function createConvoxJobStore(config: AelioDbStorageConfig): ConvoxJobStore {
   return new ConvoxJobStore(config);
 }

@@ -1,7 +1,7 @@
 # Aelio Production Spine Backlog
 
-**Status:** derived from frozen glossaries (v0.1)  
-**Sources:** [`AELIO_L0_GLOSSARY.md`](./AELIO_L0_GLOSSARY.md), [`AELIO_L1_GLOSSARY.md`](./AELIO_L1_GLOSSARY.md), [`AELIO_AGENT_OS.md`](./AELIO_AGENT_OS.md)  
+**Status:** derived from frozen glossaries (v0.1)
+**Sources:** [`AELIO_L0_GLOSSARY.md`](./AELIO_L0_GLOSSARY.md), [`AELIO_L1_GLOSSARY.md`](./AELIO_L1_GLOSSARY.md), [`AELIO_AGENT_OS.md`](./AELIO_AGENT_OS.md)
 **Rule:** every implementation task cites glossary ids. Design first; then code.
 
 ---
@@ -29,7 +29,7 @@ Priority = **(blocks Agent OS loop)** × **(partial today)** × **(production ri
 | 4 | **SigMismatch never guesses**; interpret + propose branch | `L1.Sig.Match`, `L1.Invoke.Interpret`, `L1.Invoke.Extract` | Silent wrong extractors corrupt state |
 | 5 | **Resume re-checks Policy + State** after Park | `L0.Park`, `L1.Policy.Evaluate`, `L1.State.Read` | Stale auth is a security hole |
 | 6 | **Learn promote gates** (evidence thresholds, effectful tenant gate) + demote on tool invalidate | `L1.Learn.Promote`, `L1.Learn.Demote`, `L1.Registry.Invalidate` | Install/uninstall asymmetry |
-| 7 | Persist **flow_instances / states / turns** with compare-and-swap / version discipline | Agent OS §7, Sunjet data model | Sense/Recall/Learn read lies if commits race |
+| 7 | Persist **flow_instances / states / turns** with compare-and-swap / version discipline | Agent OS §7, Aelio DB data model | Sense/Recall/Learn read lies if commits race |
 
 ---
 
@@ -92,10 +92,10 @@ Each wave ends with: glossary status flips (`partial` → `implemented`) + simul
 
 ## Explicit non-work (until glossary changes)
 
-- New domain L0 combinators  
-- LLM-as-kernel turn controller  
-- Rewriting L0 closed set to expand branching factor for Compose  
-- Personality in situation keys  
+- New domain L0 combinators
+- LLM-as-kernel turn controller
+- Rewriting L0 closed set to expand branching factor for Compose
+- Personality in situation keys
 
 ---
 
@@ -103,8 +103,8 @@ Each wave ends with: glossary status flips (`partial` → `implemented`) + simul
 
 When a P0/P1 item lands, update:
 
-1. Status column in L0/L1 glossaries  
-2. This backlog (strike or move to Done)  
-3. Decision log if semantics changed  
+1. Status column in L0/L1 glossaries
+2. This backlog (strike or move to Done)
+3. Decision log if semantics changed
 
 **Done definition for “production spine”:** P0 complete + P1 items 8–15 at `implemented` or explicitly waived with risk note.

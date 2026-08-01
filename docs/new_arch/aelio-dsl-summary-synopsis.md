@@ -1,7 +1,7 @@
 # Aelio DSL — Architecture Synopsis
 
-**Document:** `aelio-dsl-summary-synopsis.md`  
-**Status:** living design synopsis (v0.1)  
+**Document:** `aelio-dsl-summary-synopsis.md`
+**Status:** living design synopsis (v0.1)
 **Purpose:** Single narrative of everything discussed for the Aelio agent OS / DSL architecture — how work is broken down, where the LLM enters, how logic is expressed, and how we build and verify it.
 
 **Related docs:**
@@ -19,7 +19,7 @@
 
 ## 1. Vision in one paragraph
 
-Aelio is an **agent operating system**: a small agnostic kernel of operations, pipelines (flows) composed from those operations, a shared JSON-shaped language (**Sol Contracts**) so stages can talk, durable storage in **Sunjet**, and an **LLM** used to author and repair logic — not to be the unsupervised kernel every turn. The system prefers **retrieve a known routine or conversion**; if missing, **ask the LLM once**, typecheck, **store**, and reuse.
+Aelio is an **agent operating system**: a small agnostic kernel of operations, pipelines (flows) composed from those operations, a shared JSON-shaped language (**Sol Contracts**) so stages can talk, durable storage in **Aelio DB**, and an **LLM** used to author and repair logic — not to be the unsupervised kernel every turn. The system prefers **retrieve a known routine or conversion**; if missing, **ask the LLM once**, typecheck, **store**, and reuse.
 
 That is the “life” of the system: flows, meanings, and converters accumulate in the database; the runtime executes them deterministically whenever they already exist.
 
@@ -32,7 +32,7 @@ That is the “life” of the system: flows, meanings, and converters accumulate
 | ISA / syscalls | Kernel ops (control + compute primitives) |
 | System services | L1 abilities (Sense, Understand, Recall, Bind, Invoke, Learn, Express, …) |
 | Userland programs | Flows / procedures (Op trees / DSL programs) |
-| Filesystem | Sunjet (tables, text, vectors, edges) |
+| Filesystem | Aelio DB (tables, text, vectors, edges) |
 | Scheduler | Turn loop + `Park` / `Schedule` (no blocking `Sleep`) |
 | Package install | Propose → TypeCheck → Promote (routines & Sol converters) |
 | Policy / MAC | Policy as executor invariant around effectful tool/state writes |
@@ -205,7 +205,7 @@ Author writes `Equal(Val("loggedin"), …)` but payload has `active`. Without a 
 
 ```text
 mismatch
-  → lookup Sunjet conversion graph
+  → lookup Aelio DB conversion graph
   → HIT: apply pure rules (no LLM)
   → MISS: LLM proposes rule list → typecheck → Promote → apply
 ```
@@ -261,7 +261,7 @@ message in
 
 ### 8.2 Sense is not a `.vss` file
 
-- **Sunjet / `.vss` + WAL:** durable row engine on disk.
+- **Aelio DB / `.vss` + WAL:** durable row engine on disk.
 - **Sense:** named Sol snapshot in RAM for this turn, assembled from durable data + clock + request.
 
 ### 8.3 What gets stored where
@@ -273,7 +273,7 @@ message in
 | Session timing / channel | `sessions` |
 | Open loops, facts | `memories` |
 | Messages / turns | `messages` / `turns` |
-| Conversion edges, pathway prototypes, procedures | Sunjet graph/tables |
+| Conversion edges, pathway prototypes, procedures | Aelio DB graph/tables |
 | Turn budget | ephemeral envelope |
 
 Sense fields (conceptual): env (now, tz, turn_index, channel, timings), session (open_loops, active_flow, pending_step, last_seen), budget, tenant, plus deployer state & reachable tools.
@@ -299,16 +299,16 @@ Seq(Pull(State, …), Convert?, Equal(loggedin, true))
 Branch → AuthedPath | UnauthedPath
 ```
 
-Sanitiser/Convert repairs `active` vs `loggedin` on first miss; stores edge in Sunjet.
+Sanitiser/Convert repairs `active` vs `loggedin` on first miss; stores edge in Aelio DB.
 
 ### 9.3 If unauthorised — conversational direction
 
 Four pathways (declared):
 
-1. Immediately begin login  
-2. Suggest anon-capable actions  
-3. Entertain and nudge login  
-4. Divert topic  
+1. Immediately begin login
+2. Suggest anon-capable actions
+3. Entertain and nudge login
+4. Divert topic
 
 Signals: turn timing urgency, intent, conversation context Sol (day / hour / 10m / 5m / last turn). Pathway prototypes (expected histories) authored with LLM, stored; **vector search** picks highest score; Control branches.
 
@@ -338,43 +338,43 @@ The login diagram **can** be represented in the DSL architecture. Gaps to name e
 
 ### 10.1 Design cadence
 
-1. Discuss one unit (op class, Sol rule, or flow fragment).  
-2. Decide keep/change/lock.  
-3. Write glossary / synopsis.  
+1. Discuss one unit (op class, Sol rule, or flow fragment).
+2. Decide keep/change/lock.
+3. Write glossary / synopsis.
 4. Only then implement code citing glossary ids.
 
 ### 10.2 Assignment method
 
-1. Scene + history + inbound message.  
-2. Reverse-engineer jobs.  
-3. One job at a time.  
-4. Map to Control / Compute / I/O / Model / Tool.  
-5. Write instructions + Sol in/out.  
-6. Insert Convert where shapes differ.  
+1. Scene + history + inbound message.
+2. Reverse-engineer jobs.
+3. One job at a time.
+4. Map to Control / Compute / I/O / Model / Tool.
+5. Write instructions + Sol in/out.
+6. Insert Convert where shapes differ.
 7. Verdict: missing op vs wrong class.
 
 ### 10.3 Theory tests already run (design)
 
-- Const → convert age→years_lived → Add(2)  
-- sex→gender via map_enum  
-- Identity Sol pass-through  
-- Login flow reverse map  
+- Const → convert age→years_lived → Add(2)
+- sex→gender via map_enum
+- Identity Sol pass-through
+- Login flow reverse map
 
 ### 10.4 Implementation waves (from backlog)
 
-**P0:** real Timeout/Budget, durable Sense hydrate, Bind→Policy→Once→Invoke→Sig, Park resume re-check Policy, Promote/Demote, CAS persistence.  
-**P1:** tenant isolation, repair registry, Understand/Recall depth, conversion graph production, direction pathways.  
+**P0:** real Timeout/Budget, durable Sense hydrate, Bind→Policy→Once→Invoke→Sig, Park resume re-check Policy, Promote/Demote, CAS persistence.
+**P1:** tenant isolation, repair registry, Understand/Recall depth, conversion graph production, direction pathways.
 **P2+:** Schedule/Proactive/Observe, aspirational control (`Switch`, `Retry`, …).
 
 ---
 
 ## 11. Kernel v0 (adopted control+effect core)
 
-**L0-A:** Const, Identity, Call, Seq, Branch, Loop, Try, Fallback, Guard, Budget, Timeout, Once, Park, Let, Tee, Map, Filter  
+**L0-A:** Const, Identity, Call, Seq, Branch, Loop, Try, Fallback, Guard, Budget, Timeout, Once, Park, Let, Tee, Map, Filter
 
-**L0-C (v0):** Now, Uuid, Random, Park, LedgerAppend  
+**L0-C (v0):** Now, Uuid, Random, Park, LedgerAppend
 
-**L0-B:** category compute (numeric, string, path, list, logic, validate, hash) — detailed DSL after Control is finished  
+**L0-B:** category compute (numeric, string, path, list, logic, validate, hash) — detailed DSL after Control is finished
 
 Domain formatters (`NormalizePhone`, …) = **registered** Call targets, not eternal kernel nouns.
 
@@ -387,7 +387,7 @@ Deployer declares: states, tools, policies, pathways, personalities
         │
 User message
         │
-Hydrate Sunjet → Sense Sol
+Hydrate Aelio DB → Sense Sol
         │
 Control program (DSL / promoted procedure)
    ├─ Compute on Sol (pointers + scope)
@@ -405,7 +405,7 @@ Cold loop: score, attribute, promote converters & paths
 
 ## 13. One-sentence summary
 
-**Aelio DSL is a typed pipeline language over Sol KV contracts: Control wires the program, Compute edits bags by pointer and scope, Convert learns and stores shape bridges in Sunjet, I/O persists and recalls, Model and Tool are gated Calls — and the LLM authors what the OS does not yet know, then steps aside for deterministic reuse.**
+**Aelio DSL is a typed pipeline language over Sol KV contracts: Control wires the program, Compute edits bags by pointer and scope, Convert learns and stores shape bridges in Aelio DB, I/O persists and recalls, Model and Tool are gated Calls — and the LLM authors what the OS does not yet know, then steps aside for deterministic reuse.**
 
 ---
 
@@ -413,11 +413,11 @@ Cold loop: score, attribute, promote converters & paths
 
 Still to finalize in follow-up discussions:
 
-1. Exact scope enum + list home (`body.items`) as normative.  
-2. Full Compute instruction catalog (after Control DSL freeze).  
-3. Convert edge id scheme between two ops.  
-4. Conversational direction registry + context imprint schema.  
-5. Call out merge vs replace policy for Sol namespaces.  
+1. Exact scope enum + list home (`body.items`) as normative.
+2. Full Compute instruction catalog (after Control DSL freeze).
+3. Convert edge id scheme between two ops.
+4. Conversational direction registry + context imprint schema.
+5. Call out merge vs replace policy for Sol namespaces.
 6. Production implementation of Timeout/Budget and durable Sense.
 
 This synopsis is the narrative glue; normative tables live in the companion glossary docs and should be updated when locks are decided.

@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * Reply-relevance audit: drives processTurn end-to-end against a real Sunjet
- * (spawned ll-server) with a capturing mock LLM, and asserts that everything
+ * Reply-relevance audit: drives processTurn end-to-end against a real AelioDb
+ * (spawned aelio-server) with a capturing mock LLM, and asserts that everything
  * retrieval pulled actually REACHES the system prompt the model answers from:
  *
  *   1. a seeded long-term memory (the customer's correct VAT number),
  *   2. the archetype stance guidance for a frustrated message,
  *   3. the immediate-context block carrying the previous turn verbatim,
  *   4. the semantic pathway decision naming the relevant capability,
- *   5. and that the reply is produced and persisted to Sunjet.
+ *   5. and that the reply is produced and persisted to AelioDb.
  *
  * If any of these blocks go missing from the prompt, replies lose relevance
  * silently — this script makes that regression loud.
@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bootstrapSunjetTables,
+  bootstrapAelioDbTables,
   configureEmbedder,
   createArchetypeEngine,
   createConvoxArchetypeStore,
@@ -36,11 +36,11 @@ import {
   HarnessTracer,
   processTurn,
 } from '@aelio/core';
-import { SunjetClient } from '@aelio/sunjet-client';
+import { AelioDbClient } from '@aelio/db-client';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ASTROLOBE = join(ROOT, 'Sunjet/Astrolobe');
-const LL_SERVER = join(ASTROLOBE, 'target/release/ll-server');
+const AELIO_OS = join(ROOT, 'aelio-os');
+const AELIO_SERVER = join(AELIO_OS, 'target/release/aelio-server');
 const DIM = 64;
 
 const TABLES = {
@@ -108,7 +108,7 @@ async function healthy(url) {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error('ll-server did not become healthy');
+  throw new Error('aelio-server did not become healthy');
 }
 
 function assert(condition, message) {
@@ -126,7 +126,7 @@ function cleanup(code) {
       // The relevance assertions above are the test signal; cleanup failures
       // should not turn a passing audit into a false negative.
       console.warn(
-        `WARN: unable to stop temporary ll-server: ${
+        `WARN: unable to stop temporary aelio-server: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -140,16 +140,16 @@ async function main() {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   temp = mkdtempSync(join(tmpdir(), 'aelio-relevance-'));
-  child = spawn(LL_SERVER, [], {
-    cwd: ASTROLOBE,
-    env: { ...process.env, LL_BIND: `127.0.0.1:${port}`, LL_DATA_DIR: join(temp, 'data') },
+  child = spawn(AELIO_SERVER, [], {
+    cwd: AELIO_OS,
+    env: { ...process.env, AELIO_ALLOW_INSECURE_OPEN: '1', AELIO_RUNTIME_BIND: `127.0.0.1:${port}`, AELIO_DATA_DIR: join(temp, 'data') },
     stdio: 'ignore',
   });
   await healthy(url);
   configureEmbedder(async (text) => vectorize(text));
 
-  const client = new SunjetClient({ baseUrl: url });
-  await bootstrapSunjetTables(client, TABLES, DIM);
+  const client = new AelioDbClient({ baseUrl: url });
+  await bootstrapAelioDbTables(client, TABLES, DIM);
   const storageConfig = { client, tables: TABLES, embedDim: DIM };
 
   const messageStore = createConvoxMessageStore(storageConfig);
@@ -299,7 +299,7 @@ async function main() {
     'turn 2 message embedded exactly once across cache/pathway/stance/storage',
   );
 
-  // 6. Persistence: both turns' user+assistant rows landed in Sunjet.
+  // 6. Persistence: both turns' user+assistant rows landed in AelioDb.
   const scan = await client.scanRows(TABLES.messages, {
     k: 50,
     filters: [{ col: 'customer_id', op: 'eq', value: { type: 'utf8', value: customer.id } }],
@@ -308,7 +308,7 @@ async function main() {
   assert(
     roles.filter((role) => role === 'user').length >= 2 &&
       roles.filter((role) => role === 'assistant').length >= 2,
-    'both turns persisted user + assistant messages to Sunjet',
+    'both turns persisted user + assistant messages to AelioDb',
   );
 
   // 7. Decision journal: the turn's decisions must be reconstructable from

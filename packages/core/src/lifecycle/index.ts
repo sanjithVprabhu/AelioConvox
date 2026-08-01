@@ -46,7 +46,7 @@ export function readLifecycleMetadata(
 
 function requireCustomerStore(customerStore: ConvoxCustomerStore | undefined): ConvoxCustomerStore {
   if (!customerStore) {
-    throw new Error('Sunjet customerStore is required');
+    throw new Error('AelioDb customerStore is required');
   }
   return customerStore;
 }

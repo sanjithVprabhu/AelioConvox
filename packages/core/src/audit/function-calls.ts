@@ -18,7 +18,7 @@ export async function logFunctionCall(
   functionCallStore: ConvoxFunctionCallStore,
 ): Promise<void> {
   if (!functionCallStore) {
-    throw new Error('Sunjet functionCallStore is required');
+    throw new Error('AelioDb functionCallStore is required');
   }
   await functionCallStore.log(input);
 }

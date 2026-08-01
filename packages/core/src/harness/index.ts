@@ -10,7 +10,7 @@ import { BudgetMeter } from './budgets.js';
 import { bindInstructions, type BindingCacheConfig } from './binder.js';
 import { resolvePlan } from './resolver.js';
 import { executePlan, hydrateExecutorState, newExecutorState, hashArgs, type ExecOutcome } from './executor.js';
-import type { LedgerSunjetConfig } from './ledger.js';
+import type { LedgerAelioDbConfig } from './ledger.js';
 import { runPlanner } from './planner.js';
 import { runSynthesis } from './synthesis.js';
 import { rehydrateSuspension, toSuspensionPayload } from './resume.js';
@@ -61,9 +61,9 @@ export type HarnessRunInput = {
   turnId?: string;
   functionCallStore: ConvoxFunctionCallStore;
   customerStore: ConvoxCustomerStore;
-  /** The idempotency ledger reads/writes Sunjet exclusively. */
-  ledgerSunjet: LedgerSunjetConfig;
-  /** When present, instruction→tool bindings are cached in Sunjet. */
+  /** The idempotency ledger reads/writes AelioDb exclusively. */
+  ledgerAelioDb: LedgerAelioDbConfig;
+  /** When present, instruction→tool bindings are cached in AelioDb. */
   bindingCache?: BindingCacheConfig;
 };
 
@@ -195,7 +195,7 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
 
   // ---- Execute (wavefront) ----
   const state = input.turnId
-    ? await hydrateExecutorState(input.context.sessionId, input.turnId, input.ledgerSunjet)
+    ? await hydrateExecutorState(input.context.sessionId, input.turnId, input.ledgerAelioDb)
     : newExecutorState();
   const outcome = await executePlan(resolveResult.plan, state, buildExecutorDeps(input, budgets, trace));
 
@@ -323,7 +323,7 @@ function buildExecutorDeps(
     ...(input.internalCustomerId ? { internalCustomerId: input.internalCustomerId } : {}),
     ...(input.turnId ? { turnId: input.turnId } : {}),
     functionCallStore: input.functionCallStore,
-    ledgerSunjet: input.ledgerSunjet,
+    ledgerAelioDb: input.ledgerAelioDb,
     trace: (kind: 'wave' | 'gate' | 'repair', payload: unknown) => trace(kind, payload),
     // Declarative lifecycle transitions on tool success. context.customerId is
     // the external id (what upsertCustomerLifecycleState keys on).

@@ -1,10 +1,10 @@
 # Aelio-Convox — Production Readiness Log
 
-> **Created:** 2026-07-10  
-> **Purpose:** Living record of pre-production gaps, smoke-test findings, architecture fixes, logic fixes, and recommendations.  
+> **Created:** 2026-07-10
+> **Purpose:** Living record of pre-production gaps, smoke-test findings, architecture fixes, logic fixes, and recommendations.
 > **Companion docs:** [bug-list.md](./bug-list.md) · [fix-log.md](./fix-log.md) · [project-documentation.md](./project-documentation.md) · [Blueprint/harness-spec.md](../Blueprint/harness-spec.md)
 
-Use this file when running real-LLM conversations, live Sunjet tests, or manual widget click-throughs. Append findings under **Session Logs**; promote confirmed issues to **Open Issues**; move resolved items to **Resolved**.
+Use this file when running real-LLM conversations, live Aelio DB tests, or manual widget click-throughs. Append findings under **Session Logs**; promote confirmed issues to **Open Issues**; move resolved items to **Resolved**.
 
 ---
 
@@ -27,9 +27,9 @@ Use this file when running real-LLM conversations, live Sunjet tests, or manual 
 | Real-LLM planning quality | 🔴 | **Single most important gap.** Mock keyword-matches (`packages/llm/src/mock.ts`); cannot validate `emit_turn` plans from Claude/GPT/Gemini |
 | Provider forced-tool mappings | 🟡 | Anthropic `tool_choice`, OpenAI `tool_choice`, Gemini `functionCallingConfig.mode: ANY` coded; construction + config selection now covered by `pnpm test:llm`. Still **not run live** (structured-output compliance) against a real provider |
 | 3-provider configurability | 🟢 | `@aelio/llm` split into `providers/` + `embeddings/`; Anthropic/OpenAI/Gemini selected purely by config (`config.{anthropic,openai,gemini}.yaml`); missing keys fail loudly at boot; `pnpm test:llm` green |
-| Sunjet/Astrolobe E2E | 🟡 | `pnpm test:sunjet` exists but requires live `ll-server`; default `sunjet.enabled: false` — TS mirror, tool-graph search, trace firehose only tested against **in-process fallback** |
+| aelio-os E2E | 🟡 | `pnpm test:aelio-db` exists but requires live `ll-server`; default `aelio-db.enabled: false` — TS mirror, tool-graph search, trace firehose only tested against **in-process fallback** |
 | Multi-turn recoil / confirmation (browser) | 🟡 | Covered by unit tests (`test-harness-executor.mjs`) + mock phase tests — **no human widget click-through** |
-| Load / concurrency | 🔴 | Per-session turn lock logic tested; no multi-session load, no SDK invoke storm, no Sunjet backpressure |
+| Load / concurrency | 🔴 | Per-session turn lock logic tested; no multi-session load, no SDK invoke storm, no Aelio DB backpressure |
 | Security hardening | 🟢 | P0/P1 audit items closed (see bug-list) |
 | Harness architecture | 🟡 | Design complete (`Blueprint/harness-spec.md`); executor/resolver/gates unit-tested; planner quality depends on real LLM |
 
@@ -78,9 +78,9 @@ function mockEmitTurn(content: string, system: string): Record<string, unknown> 
 
 ---
 
-### 3. Sunjet/Astrolobe storage E2E (P1)
+### 3. aelio-os storage E2E (P1)
 
-**Risk:** With `sunjet.enabled: false` (default in `config.yaml`), Lighthouse falls back to in-process embedding rank. The following paths have **not** been exercised against a live `ll-server`:
+**Risk:** With `aelio-db.enabled: false` (default in `config.yaml`), Lighthouse falls back to in-process embedding rank. The following paths have **not** been exercised against a live `ll-server`:
 
 - Registry mirror (`harness_tools`, `harness_capabilities`) — `packages/core/src/lighthouse/mirror.ts`
 - Hybrid tool-graph search for binding
@@ -88,7 +88,7 @@ function mockEmitTurn(content: string, system: string): Record<string, unknown> 
 - Trace firehose (`harness_traces`) — `packages/core/src/harness/traces.ts`
 - Dual-write message store under load
 
-**Existing test:** `pnpm test:sunjet` (`scripts/test-sunjet-integration.mjs`) — requires `SUNJET_URL` (default `http://127.0.0.1:18080`) and bootstrapped tables. Uses mock LLM, not full harness turn.
+**Existing test:** `pnpm test:aelio-db` (`scripts/test-aelio-db-integration.mjs`) — requires `AELIO DB_URL` (default `http://127.0.0.1:18080`) and bootstrapped tables. Uses mock LLM, not full harness turn.
 
 ---
 
@@ -113,7 +113,7 @@ function mockEmitTurn(content: string, system: string): Record<string, unknown> 
 - `MAX_SDK_CONNECTIONS=32` eviction under heartbeat churn
 - Inbound worker `enqueueCustomerTurn` under WhatsApp burst
 - SQLite write contention on `harness_ledger` / `suspended_plans`
-- Sunjet timeout + `fallback_sqlite_on_error` under sustained errors
+- Aelio DB timeout + `fallback_sqlite_on_error` under sustained errors
 
 **Covered by:** Per-session lock logic, `requeueStaleJobs`, SDK connection cap (unit/integration logic only).
 
@@ -206,12 +206,12 @@ Log template (copy into Session Logs below):
 |----|------|----------------|----------|-----------|
 | ARCH-001 | Planner validation | Add `scripts/test-real-llm-smoke.mjs` that runs scenarios A–D headlessly, asserts `emit_turn.mode` + tool names, records payloads to this log | P0 | Automates the #1 gap; mock tests cannot substitute |
 | ARCH-002 | Provider matrix | CI job (manual/nightly) matrix: `config.anthropic.yaml`, `config.openai.yaml`, `config.gemini.yaml` × scenarios A–D | P1 | Forced-tool mappings differ per API |
-| ARCH-003 | Sunjet live path | Extend `test:sunjet` to register SDK tools, run one harness turn with `sunjet.enabled: true`, verify mirror rows in `harness_tools` + trace append | P1 | Fallback-only testing hides ll-server integration bugs |
+| ARCH-003 | Aelio DB live path | Extend `test:aelio-db` to register SDK tools, run one harness turn with `aelio-db.enabled: true`, verify mirror rows in `harness_tools` + trace append | P1 | Fallback-only testing hides ll-server integration bugs |
 | ARCH-004 | Binding cache | Implement `harness_bindings` read/write (deferred in harness-spec) once real-LLM binding scores are logged | P2 | Reduces repeated semantic search cost |
 | ARCH-005 | Progress streaming | SSE or WS `plan_progress` events during multi-step execution | P2 | 3-step checkout looks like a hang without it |
 | ARCH-006 | Compensating actions | Per-tool rollback definitions for aborted mid-plan writes | P3 | Product decision: cart left populated vs auto-rollback |
 | ARCH-007 | Load harness | k6 or scripted WS clients: N sessions × M turns, measure p95 turn latency + SQLite lock waits | P2 | Per-session lock untested at scale |
-| ARCH-008 | Embedding dim consistency | When switching provider configs, verify `embeddings.output_dimension` matches `sunjet.embed_dim` and sqlite-vec table | P1 | Dimension mismatch silently breaks recall + Sunjet vectors |
+| ARCH-008 | Embedding dim consistency | When switching provider configs, verify `embeddings.output_dimension` matches `aelio-db.embed_dim` and sqlite-vec table | P1 | Dimension mismatch silently breaks recall + Aelio DB vectors |
 
 ---
 
@@ -232,19 +232,19 @@ Log template (copy into Session Logs below):
 
 ## Testing Matrix
 
-| Test | Command | LLM | Sunjet | Harness | Browser |
+| Test | Command | LLM | Aelio DB | Harness | Browser |
 |------|---------|-----|--------|---------|---------|
 | LLM provider wiring | `pnpm test:llm` | none | off | — | — |
 | Phase 2 widget | `pnpm test:phase2` | mock | off | on | WS script |
 | Phase 4 confirmation | `pnpm test:phase4:confirmation` | mock | off | on | WS script |
 | Phase 5 memory | `pnpm test:phase5` | mock | off | on | — |
 | Harness executor | `pnpm test:harness` | none | off | direct | — |
-| Sunjet integration | `pnpm test:sunjet` | mock | **live** | partial | — |
+| Aelio DB integration | `pnpm test:aelio-db` | mock | **live** | partial | — |
 | Full suite | `AELIO_TEST_MODE=1 pnpm test:all` | mock | off | on | — |
 | Diagnostic | `pnpm diagnostic` | mock | off | on | — |
 | Docker verify | `pnpm docker:verify` | mock | off | on | — |
 | **Real-LLM smoke** | *manual — see above* | **live** | off | on | **human** |
-| **Sunjet + harness** | *not automated* | live | **live** | on | — |
+| **Aelio DB + harness** | *not automated* | live | **live** | on | — |
 | **Load test** | *not implemented* | any | any | on | — |
 
 ---
@@ -255,7 +255,7 @@ Log template (copy into Session Logs below):
 |------|-------|
 | `destructive` safety blocked from chat | By design — admin channel future |
 | Proactive / reflection daemon off by default | Opt-in |
-| Sunjet off by default | Opt-in archival |
+| Aelio DB off by default | Opt-in archival |
 | Response cache off by default | Opt-in |
 | Python SDK minimal | Node SDK is primary |
 | SDK secret in URL query param | Deprecated; Bearer header preferred |
@@ -302,9 +302,9 @@ Log template (copy into Session Logs below):
 ```markdown
 ## Session YYYY-MM-DD — [Provider] smoke test
 
-**Config:** config.anthropic.yaml  
-**Backend:** aelio-sample-saas  
-**Tester:** name  
+**Config:** config.anthropic.yaml
+**Backend:** aelio-sample-saas
+**Tester:** name
 **Environment:** local | staging | prod-candidate
 
 ### Scenario A — Order lookup
@@ -343,7 +343,7 @@ Log template (copy into Session Logs below):
 - Integration phases 2–5 pass on mock (`AELIO_TEST_MODE=1 pnpm test:all`)
 - Security audit items BUG-001–047 closed ([bug-list.md](./bug-list.md))
 
-**Awaiting:** Human-driven real-LLM smoke (scenarios A–D) + optional Sunjet live pass.
+**Awaiting:** Human-driven real-LLM smoke (scenarios A–D) + optional Aelio DB live pass.
 
 ---
 
@@ -359,7 +359,7 @@ Log template (copy into Session Logs below):
 | Suspension store | `packages/core/src/harness/suspension.ts` |
 | Harness spec | `Blueprint/harness-spec.md` |
 | Anthropic config | `config.anthropic.yaml` |
-| Sunjet test config | `config.sunjet-test.yaml` |
+| Aelio DB test config | `config.aelio-db-test.yaml` |
 | Sample SaaS tools | `examples/sample-saas/` |
 
 ---
@@ -369,7 +369,7 @@ Log template (copy into Session Logs below):
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | 2026-07-10 | Ship-blocking = real-LLM smoke pass, not more mock tests | Mock cannot validate `emit_turn` quality |
-| 2026-07-10 | Sunjet live test is P1 but not ship-blocking if `sunjet.enabled: false` in prod | SQLite is authoritative; Sunjet is search/archive |
+| 2026-07-10 | Aelio DB live test is P1 but not ship-blocking if `aelio-db.enabled: false` in prod | SQLite is authoritative; Aelio DB is search/archive |
 | 2026-07-10 | Browser click-through recommended for confirmation/recoil UX only | Logic covered by unit tests; UX is the unknown |
 
 ---

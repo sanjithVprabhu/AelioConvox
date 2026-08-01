@@ -149,42 +149,68 @@ aelio.expose('listOrders', async ({ status }, ctx) => api.listOrders(ctx.custome
   description: "List the customer's orders, optionally filtered by status",
   params: { status: { type: 'string', enum: ['shipped', 'pending', 'cancelled'], optional: true } },
   safety: 'read',
-  intent: 'order_inquiry',
+  intent: 'list_orders',
+  output: {
+    orders: { type: 'array', meaning: 'The customer orders matching the requested filter' },
+  },
 });
 
 aelio.expose('getOrderStatus', async ({ orderId }, ctx) => api.getOrderStatus(ctx.customerId, orderId as string), {
   description: 'Get the status and tracking of a specific order by its id (e.g. A-1002)',
   params: { orderId: 'string' },
   safety: 'read',
-  intent: 'order_inquiry',
+  intent: 'get_order_status',
+  output: {
+    id: { type: 'string', meaning: 'The order identifier' },
+    item: { type: 'string', meaning: 'The ordered item name' },
+    status: { type: 'string', meaning: 'The current fulfillment status' },
+    total: { type: 'number', meaning: 'The order total' },
+  },
 });
 
 aelio.expose('getSubscription', async (_args, ctx) => api.getSubscription(ctx.customerId), {
   description: "Get the customer's current subscription plan and renewal date",
   params: {},
   safety: 'read',
-  intent: 'subscription',
+  intent: 'get_subscription',
+  output: {
+    plan: { type: 'string', meaning: 'The active subscription plan' },
+    renewsOn: { type: 'string', meaning: 'The subscription renewal date' },
+  },
 });
 
 aelio.expose('listInvoices', async (_args, ctx) => api.listInvoices(ctx.customerId), {
   description: "List the customer's invoices and whether they are paid",
   params: {},
   safety: 'read',
-  intent: 'billing',
+  intent: 'list_invoices',
+  output: {
+    invoices: { type: 'array', meaning: 'The customer invoice records' },
+  },
 });
 
 aelio.expose('cancelOrder', async ({ orderId }, ctx) => api.cancelOrder(ctx.customerId, orderId as string), {
   description: 'Cancel a pending order by its id',
   params: { orderId: 'string' },
   safety: 'write', // Aelio asks the customer to confirm before this runs
-  intent: 'cancellation',
+  intent: 'cancel_order',
+  output: {
+    orderId: { type: 'string', meaning: 'The cancelled order identifier' },
+    status: { type: 'string', meaning: 'The resulting order status' },
+  },
+  outputRole: 'effect_confirmation',
 });
 
 aelio.expose('upgradePlan', async ({ plan }, ctx) => api.upgradePlan(ctx.customerId, plan as 'starter' | 'pro' | 'enterprise'), {
   description: 'Upgrade or change the subscription plan',
   params: { plan: { type: 'string', enum: ['starter', 'pro', 'enterprise'], description: 'Target plan' } },
   safety: 'write',
-  intent: 'subscription',
+  intent: 'upgrade_subscription',
+  output: {
+    plan: { type: 'string', meaning: 'The resulting subscription plan' },
+    status: { type: 'string', meaning: 'The resulting subscription status' },
+  },
+  outputRole: 'effect_confirmation',
 });
 
 const PORT = Number(process.env.PORT ?? 8081);

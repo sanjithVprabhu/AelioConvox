@@ -1,12 +1,22 @@
-//! # aelio-query — dataset registry + closed query AST (§10.4)
+//! # aelio-query — dataset registry + closed query AST (§10.4) + Prism
 //!
-//! "Queries are not strings either." Sunjet reads are a **Sol-shaped structure, never query text**:
-//! one op per Sunjet modality (tables / vector / full-text / graph), every op carrying a **mandatory
+//! "Queries are not strings either." Aelio DB reads are a **Sol-shaped structure, never query text**:
+//! one op per database modality (tables / vector / full-text / graph), every op carrying a **mandatory
 //! `limit`** that feeds the §8.4 boundedness contract (so I/O can never break the termination
-//! theorem, G1). Consequences by construction: no injection surface (no text to inject into),
-//! deterministic replay (results are `read`-class ledger entries), plan-time analyzability (dataset
-//! and params are static, so hydration needs are computable); and tenant isolation (the dataset
-//! registry is tenant-scoped, §17.2).
+//! theorem, G1).
+//!
+//! Multimodal recall uses [`prism::PrismQuery`] (from/match/where/select/limit/into). Legacy
+//! single-op [`QueryAst`] remains as sugar for one-modality Calls.
+
+pub mod prism;
+
+pub use prism::{
+    check_prism, parse_prism, prism_to_json, recall, validate_prism, CollectionRegistry,
+    CollectionSchema, FusionMethod, MatchClause, PrismColKind, PrismColumn, PrismQuery,
+    RecallModality, WhereOp, WherePred, MAX_PRISM_GRAPH_SEEDS, MAX_PRISM_MATCH_CLAUSES,
+    MAX_PRISM_NAME_BYTES, MAX_PRISM_QUERY_TEXT_BYTES, MAX_PRISM_SELECT_COLUMNS,
+    MAX_PRISM_WHERE_CLAUSES,
+};
 
 use aelio_sol::SolValue;
 use serde_json::Value as J;
@@ -16,7 +26,7 @@ pub const MAX_QUERY_LIMIT: u64 = 10_000;
 pub const MAX_TRAVERSE_DEPTH: u64 = 32;
 pub const MAX_TRAVERSE_NODES: u64 = 10_000;
 
-/// One op per Sunjet modality (§10.4). No free-text variant exists — that is the whole point.
+/// One op per Aelio database modality (§10.4). No free-text variant exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QOp {
     Get,
@@ -79,7 +89,7 @@ impl DatasetRegistry {
     }
 }
 
-/// Parse + validate a query AST (App E `sunjet.query` shape). Enforces: mandatory positive `limit`;
+/// Parse + validate a query AST (App E `aelio_db.query` shape). Enforces: mandatory positive `limit`;
 /// `traverse` requires positive `max_depth` + `max_nodes`; unknown `qop` rejected.
 pub fn parse_query(j: &J) -> Result<QueryAst, String> {
     let o = j.as_object().ok_or("query AST must be an object")?;

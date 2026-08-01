@@ -1,0 +1,14 @@
+[package]
+name = "aelio-db-text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LL fuaelio-db-text index: tokenizer, inverted index, BM25 scoring, on-disk section."
+
+[dependencies]
+# Dependency-free: sorted term dictionary + delta/varint postings, std only. (FST term
+# dictionary and PFOR-Delta/skip-list postings are later optimizations.)
+
+[dev-dependencies]
+# End-to-end test: embed a Text section inside a real .vss file.
+aelio-db-format = { path = "../aelio-db-format" }

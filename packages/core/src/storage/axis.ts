@@ -1,7 +1,7 @@
 /**
  * Harness Axis store — user-specific occurrence chains per aspect (atom).
  *
- * Unified Sunjet table `convox_axis_nodes` holds:
+ * Unified AelioDb table `convox_axis_nodes` holds:
  *   - root rows: one per (tenant, customer, aspect)
  *   - occurrence rows: each fed stance sighting, linked via `previous` edges
  *
@@ -14,7 +14,7 @@ import { cosineSimilarity } from '../analyst/embeddings.js';
 import { inTemporalScope, type TemporalScope } from '../temporal/index.js';
 import { f64, i64, readF64, readI64, readUtf8, readVector, utf8 } from './helpers.js';
 import { normalizeEmbedding } from './messages.js';
-import type { SunjetStorageConfig } from './types.js';
+import type { AelioDbStorageConfig } from './types.js';
 import type { ArchetypeValence } from './archetypes.js';
 
 export type AxisNodeType = 'root' | 'occurrence';
@@ -78,19 +78,19 @@ function edges(rowIds: number[]): { type: 'edges'; value: number[] } {
   return { type: 'edges', value: rowIds };
 }
 
-function readEdges(values: Record<string, import('@aelio/sunjet-client').ApiValue>, key: string): number[] {
+function readEdges(values: Record<string, import('@aelio/db-client').ApiValue>, key: string): number[] {
   const entry = values[key];
   if (entry?.type === 'edges') return entry.value;
   return [];
 }
 
 export class ConvoxAxisStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
   readonly embedDim: number;
   readonly tenant: string;
 
-  constructor(config: SunjetStorageConfig, tenant = 'default') {
+  constructor(config: AelioDbStorageConfig, tenant = 'default') {
     this.client = config.client;
     this.table = config.tables.axisNodes;
     this.embedDim = config.embedDim;
@@ -231,7 +231,7 @@ export class ConvoxAxisStore {
 
   private rowToOccurrence(
     rowId: number,
-    values: Record<string, import('@aelio/sunjet-client').ApiValue>,
+    values: Record<string, import('@aelio/db-client').ApiValue>,
     score = 0,
   ): AxisOccurrence | null {
     if (readUtf8(values, 'node_type') !== 'occurrence') return null;
@@ -325,7 +325,7 @@ export class ConvoxAxisStore {
 }
 
 export function createConvoxAxisStore(
-  config: SunjetStorageConfig,
+  config: AelioDbStorageConfig,
   tenant = 'default',
 ): ConvoxAxisStore {
   return new ConvoxAxisStore(config, tenant);

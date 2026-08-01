@@ -6,10 +6,12 @@ import {
   SDK_REGISTER_TIMEOUT_MS,
   SdkToServerMessageSchema,
 } from '@aelio/protocol';
-import { enqueueJob, upsertCustomerFlowProgress, upsertCustomerLifecycleState } from '@aelio/core';
+import { enqueueJob, upsertCustomerLifecycleState } from '@aelio/core';
 import type { WebSocket } from '@fastify/websocket';
 import type { FastifyInstance } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
+import { buildAgentCatalog } from '../aelio-agent-catalog.js';
+import { stableAgentUserId } from '../conversation-turn.js';
 import { secretsMatch } from '../auth.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 
@@ -134,6 +136,45 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           connectedAt: Date.now(),
           lastHeartbeatAt: Date.now(),
         });
+        if (deps.aelioRuntime) {
+          void Promise.all([
+            deps.aelioRuntime.pushAgentCatalog(
+              buildAgentCatalog(
+                config.name,
+                message,
+                { memoryEnabled: config.memory.enabled },
+              ),
+            ),
+            ...(
+            (message.flows ?? [])
+              .filter((flow) => flow.aelio)
+              .map((flow) =>
+                deps.aelioRuntime!.pushFlow({
+                  tenant: config.name,
+                  flow_id: flow.aelio!.flow_id,
+                  flow_rev: flow.aelio!.flow_rev,
+                  program: flow.aelio!.program,
+                  targets: flow.aelio!.targets,
+                  prompts: flow.aelio!.prompts,
+                }),
+              )
+            ),
+          ]).catch((error: unknown) => {
+            app.log.error(
+              { err: error, connectionId },
+              'SDK registration contained a flow rejected by the Rust runtime',
+            );
+            socket.send(
+              JSON.stringify({
+                type: 'error',
+                code: 'aelio_flow_rejected',
+                message: error instanceof Error ? error.message : 'Rust runtime rejected flow',
+              }),
+            );
+            socket.close(1008, 'Aelio flow rejected');
+            sdkBridge.unregister(connectionId);
+          });
+        }
         app.log.info(
           {
             connectionId,
@@ -158,12 +199,25 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
       }
 
       if (message.type === 'set_state') {
-        void upsertCustomerLifecycleState(
-          message.customerId,
-          message.stateId,
-          message.reason,
-          deps.customerStore,
-        )
+        const commandId = `sdk-state:${createHash('sha256')
+          .update(`${message.customerId}\u001f${message.stateId}\u001f${message.reason ?? ''}`)
+          .digest('hex')}`;
+        void Promise.all([
+          deps.aelioRuntime.setAgentUserState({
+            command_id: commandId,
+            user_id: stableAgentUserId(message.customerId),
+            state_id: message.stateId,
+            ...(message.reason ? { reason: message.reason } : {}),
+          }),
+          // Keep the edge read model synchronized for admin/identity views. It is not an
+          // execution authority; Rust commits the lifecycle command above.
+          upsertCustomerLifecycleState(
+            message.customerId,
+            message.stateId,
+            message.reason,
+            deps.customerStore,
+          ),
+        ])
           .then(() => {
             socket.send(JSON.stringify({ type: 'ack', op: 'set_state' }));
           })
@@ -173,29 +227,6 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
                 type: 'error',
                 code: 'set_state_failed',
                 message: error instanceof Error ? error.message : 'Failed to update state',
-              }),
-            );
-          });
-        return;
-      }
-
-      if (message.type === 'set_flow_progress') {
-        void upsertCustomerFlowProgress(
-          message.customerId,
-          message.flowId,
-          message.stepIndex,
-          message.completedSteps,
-          deps.customerStore,
-        )
-          .then(() => {
-            socket.send(JSON.stringify({ type: 'ack', op: 'set_flow_progress' }));
-          })
-          .catch((error: unknown) => {
-            socket.send(
-              JSON.stringify({
-                type: 'error',
-                code: 'set_flow_progress_failed',
-                message: error instanceof Error ? error.message : 'Failed to update flow progress',
               }),
             );
           });

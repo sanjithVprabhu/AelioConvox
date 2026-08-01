@@ -8,7 +8,7 @@ export type RecalledMemory = {
 };
 
 /**
- * Semantic memory recall — Sunjet/Astrolobe VSS only. SQLite is not used.
+ * Semantic memory recall — Aelio DB VSS only. SQLite is not used.
  */
 export async function recallMemories(
   memoryStore: ConvoxMemoryStore | undefined,

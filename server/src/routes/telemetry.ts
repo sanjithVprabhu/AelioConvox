@@ -34,8 +34,8 @@ export async function registerTelemetryRoutes(app: FastifyInstance, deps: Runtim
     const since = query.since ? Number.parseInt(query.since, 10) : undefined;
 
     const events = await listConversationTelemetry(
-      deps.sunjetClient,
-      deps.config.sunjet.tables.conversations,
+      deps.aelioDbClient,
+      deps.config.aelioDb.tables.conversations,
       {
         limit: Number.isFinite(limit) ? limit : 100,
         since: Number.isFinite(since) ? since : undefined,
@@ -46,7 +46,7 @@ export async function registerTelemetryRoutes(app: FastifyInstance, deps: Runtim
 
     return {
       enabled: true,
-      table: deps.config.sunjet.tables.conversations,
+      table: deps.config.aelioDb.tables.conversations,
       count: events.length,
       events,
     };
@@ -63,16 +63,16 @@ export async function registerTelemetryRoutes(app: FastifyInstance, deps: Runtim
     };
 
     const limit = query.limit ? Number.parseInt(query.limit, 10) : 200;
-    const turnApiCallsSunjet = {
-      client: deps.sunjetClient,
-      table: deps.config.sunjet.tables.turn_api_calls,
+    const turnApiCallsAelioDb = {
+      client: deps.aelioDbClient,
+      table: deps.config.aelioDb.tables.turn_api_calls,
     };
 
     if (query.turn_id) {
-      const summary = await summarizeTurnApiCalls(query.turn_id, turnApiCallsSunjet);
+      const summary = await summarizeTurnApiCalls(query.turn_id, turnApiCallsAelioDb);
       return {
         ...summary,
-        source: 'sunjet',
+        source: 'aelioDb',
       };
     }
 
@@ -81,11 +81,11 @@ export async function registerTelemetryRoutes(app: FastifyInstance, deps: Runtim
         sessionId: query.session_id,
         limit: Number.isFinite(limit) ? limit : 200,
       },
-      turnApiCallsSunjet,
+      turnApiCallsAelioDb,
     );
 
     return {
-      source: 'sunjet',
+      source: 'aelioDb',
       count: calls.length,
       calls,
     };

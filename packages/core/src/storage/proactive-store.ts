@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { i64, readI64, readUtf8, utf8 } from './helpers.js';
-import type { SunjetStorageConfig } from './types.js';
+import type { AelioDbStorageConfig } from './types.js';
 
 const SCAN_CAP = 2_000;
 
@@ -27,10 +27,10 @@ export type ProactiveRecord = {
 };
 
 export class ConvoxProactiveStore {
-  readonly client: SunjetStorageConfig['client'];
+  readonly client: AelioDbStorageConfig['client'];
   readonly table: string;
 
-  constructor(config: SunjetStorageConfig) {
+  constructor(config: AelioDbStorageConfig) {
     this.client = config.client;
     this.table = config.tables.proactiveMessages;
   }
@@ -92,6 +92,6 @@ export class ConvoxProactiveStore {
   }
 }
 
-export function createConvoxProactiveStore(config: SunjetStorageConfig): ConvoxProactiveStore {
+export function createConvoxProactiveStore(config: AelioDbStorageConfig): ConvoxProactiveStore {
   return new ConvoxProactiveStore(config);
 }

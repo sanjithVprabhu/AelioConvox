@@ -1,6 +1,6 @@
 # AelioConvox Production-Hardening Plan
 
-**Goal:** take the AelioConvox SDK + Aelio server (with embedded Sunjet engine) from
+**Goal:** take the AelioConvox SDK + Aelio server (with embedded Aelio DB engine) from
 "works in demo" to production-grade: domain-neutral core, resilient storage, secure
 transport, token-efficient prompting, measurable spend, and agent-grade tool selection.
 
@@ -39,16 +39,16 @@ heuristics. Every real tenant gets wrong intent labels and useless memory extrac
 `packages/sdk-python`, `packages/core/src/intent/stack.ts`,
 `packages/core/src/analyst/extract.ts`, `examples/sample-saas` (declare intents).
 
-### P0.2 Sunjet write-path fallback `[x]`
+### P0.2 Aelio DB write-path fallback `[x]`
 
-**Problem.** `fallback_sqlite_on_error` is honored for reads only. A Sunjet outage
+**Problem.** `fallback_sqlite_on_error` is honored for reads only. A Aelio DB outage
 makes `persistMessage` throw → **every turn hard-fails** even with dual-write SQLite
 available. Config promises resilience the write path doesn't deliver.
 
-**Design.** Wrap the Sunjet append; on failure with `fallbackSqliteOnError`, log and
-continue with the SQLite write (which dual-write performs anyway). A Sunjet outage
+**Design.** Wrap the Aelio DB append; on failure with `fallbackSqliteOnError`, log and
+continue with the SQLite write (which dual-write performs anyway). A Aelio DB outage
 degrades archival, never conversations. (Divergence is acceptable: SQLite is the
-operational store; Sunjet rows can be backfilled by a future reconciliation job.)
+operational store; Aelio DB rows can be backfilled by a future reconciliation job.)
 
 **Files.** `packages/core/src/runtime/turn.ts` (`persistMessage`).
 
@@ -176,14 +176,14 @@ cost rises linearly.
 
 ## Deferred (explicitly not in this pass)
 
-- **Sunjet scan projection** — engine-side change (Astrolobe repo): `cols` on scan,
-  `order_by` + `desc`. Unblocks Sunjet-primary history reads without vector payloads.
+- **Aelio DB scan projection** — engine-side change (Aelio DB engine repo): `cols` on scan,
+  `order_by` + `desc`. Unblocks Aelio DB-primary history reads without vector payloads.
 - **Streaming completions** — UX latency; provider interface change.
-- **Sunjet↔SQLite reconciliation job** — backfill archive rows after outages.
+- **Aelio DB↔SQLite reconciliation job** — backfill archive rows after outages.
 - **Multi-tenant workspace isolation** — cloud scope.
 
 ## Verification contract
 
 Every item lands only with: `pnpm typecheck` (15/15) · `pnpm build` (9/9) ·
-`pnpm test:all` (6/6) · `pnpm test:sunjet` (13 OK) · phase6 PASSED · plus a focused
+`pnpm test:all` (6/6) · `pnpm test:aelio-db` (13 OK) · phase6 PASSED · plus a focused
 test per item. Finished work is committed and pushed.

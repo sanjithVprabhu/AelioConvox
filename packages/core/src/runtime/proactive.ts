@@ -38,7 +38,7 @@ export async function setProactiveOptIn(
   customerStore: ConvoxCustomerStore,
 ): Promise<boolean> {
   if (!customerStore) {
-    throw new Error('Sunjet customerStore is required');
+    throw new Error('AelioDb customerStore is required');
   }
   const customer = await customerStore.getByExternalId(customerExternalId);
   if (!customer) {
@@ -70,20 +70,20 @@ async function record(
  *   4. dedup             5. daily frequency cap
  *   6. WhatsApp 24h window (free-form only inside it; template required outside)
  * On success it enqueues an outbound job (delivered by the same path as replies).
- * Requires Sunjet customerStore/messageStore/proactiveStore/jobStore.
+ * Requires AelioDb customerStore/messageStore/proactiveStore/jobStore.
  */
 export async function sendProactiveMessage(input: ProactiveInput): Promise<ProactiveResult> {
   if (!input.customerStore) {
-    throw new Error('Sunjet customerStore is required');
+    throw new Error('AelioDb customerStore is required');
   }
   if (!input.messageStore) {
-    throw new Error('Sunjet messageStore is required');
+    throw new Error('AelioDb messageStore is required');
   }
   if (!input.proactiveStore) {
-    throw new Error('Sunjet proactiveStore is required');
+    throw new Error('AelioDb proactiveStore is required');
   }
   if (!input.jobStore) {
-    throw new Error('Sunjet jobStore is required');
+    throw new Error('AelioDb jobStore is required');
   }
 
   if (!input.config.enabled) {

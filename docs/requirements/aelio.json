@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "generated_from": [
+    "docs/claude_context/AELIO_DSL_MOTHER.md",
+    "docs/claude_context/TECHNICAL_MOTHER_SPECIFICATION.md",
+    "docs/claude_context/AELIO_UNIFIED_IMPLEMENTATION_MASTER_PLAN.md"
+  ],
+  "allowed_statuses": ["implemented", "partial", "missing", "external"],
+  "requirements": [
+    {
+      "id": "SOL-CANON-001",
+      "source": "AELIO_DSL_MOTHER §4.3",
+      "summary": "Sol canonical bytes preserve exact Unicode, distinguish int/float, reject non-finite floats, and hash with BLAKE3.",
+      "owner": "aelio-sol",
+      "code": ["aelio-os/crates/aelio-sol/src/canonical.rs", "aelio-os/crates/aelio-sol/src/hash.rs"],
+      "tests": ["aelio-os/crates/aelio-sol/tests/canonical_conformance.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "SOL-LIMIT-001",
+      "source": "AELIO_DSL_MOTHER §4.4",
+      "summary": "Sol depth, map, list and canonical-size limits are enforced at materialization and writes.",
+      "owner": "aelio-sol,aelio-kernel",
+      "code": ["aelio-os/crates/aelio-sol/src/limits.rs", "aelio-os/crates/aelio-kernel/src/exec.rs"],
+      "tests": ["aelio-os/crates/aelio-kernel/tests/limits.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "KERNEL-CLOSED-001",
+      "source": "AELIO_DSL_MOTHER App E",
+      "summary": "Instruction and nested control schemas reject unknown operations and fields.",
+      "owner": "aelio-kernel",
+      "code": ["aelio-os/crates/aelio-kernel/src/instr.rs"],
+      "tests": ["aelio-os/crates/aelio-kernel/tests/closed_schema.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "KERNEL-PLAN-001",
+      "source": "AELIO_DSL_MOTHER §29",
+      "summary": "Planner derives static access and rejects illegal bounds, paths, Park positions, Tee aliases and effects.",
+      "owner": "aelio-kernel",
+      "code": ["aelio-os/crates/aelio-kernel/src/plan.rs", "aelio-os/crates/aelio-kernel/src/registry.rs"],
+      "tests": ["aelio-os/crates/aelio-kernel/tests/planner_safety.rs", "aelio-os/crates/aelio-kernel/tests/resources.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "KERNEL-EXEC-001",
+      "source": "AELIO_DSL_MOTHER §8-§12",
+      "summary": "The closed control and compute instruction set executes sequentially with atomic declared writes and bounded iteration.",
+      "owner": "aelio-kernel",
+      "code": ["aelio-os/crates/aelio-kernel/src/exec.rs", "aelio-os/crates/aelio-kernel/src/compute.rs"],
+      "tests": ["aelio-os/crates/aelio-kernel/tests/conformance.rs", "aelio-os/crates/aelio-kernel/tests/compute_catalog.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "KERNEL-REPLAY-001",
+      "source": "AELIO_DSL_MOTHER §12 and App G",
+      "summary": "Replay injects observations, verifies deterministic entries and hard-refuses divergence.",
+      "owner": "aelio-kernel",
+      "code": ["aelio-os/crates/aelio-kernel/src/ledger.rs", "aelio-os/crates/aelio-kernel/src/driver.rs"],
+      "tests": ["aelio-os/crates/aelio-kernel/tests/nondet_replay.rs", "aelio-os/crates/aelio-kernel/tests/ledger_io.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "KERNEL-PARK-001",
+      "source": "AELIO_DSL_MOTHER §23 and App I",
+      "summary": "Continuations pin versions, hash frames and bags, authenticate event wakes, and resume exact execution state.",
+      "owner": "aelio-kernel,aelio-runtime",
+      "code": ["aelio-os/crates/aelio-kernel/src/continuation.rs", "aelio-os/crates/aelio-runtime/src/lib.rs"],
+      "tests": ["aelio-os/crates/aelio-kernel/tests/continuation_codec.rs", "aelio-os/crates/aelio-kernel/tests/continuation_semantics.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "STORE-EMBED-001",
+      "source": "AELIO_DSL_MOTHER §24 and §29",
+      "summary": "The production Store implementation uses embedded Aelio DB while MemoryStore remains a test double.",
+      "owner": "aelio-store",
+      "code": ["aelio-os/crates/aelio-store/src/lib.rs"],
+      "tests": ["aelio-os/crates/aelio-runtime/tests/runtime.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "QUERY-PRISM-001",
+      "source": "AELIO_DSL_MOTHER §10.4 Amendment #4",
+      "summary": "Prism is the one closed stored/executed multimodal query AST with mandatory projection and limit.",
+      "owner": "aelio-query,aelio-db-query",
+      "code": ["aelio-os/crates/aelio-query/src/prism.rs", "aelio-os/crates/aelio-db-query/src/prism_exec.rs"],
+      "tests": ["aelio-os/crates/aelio-db-query/tests/prism.rs", "aelio-os/crates/aelio-db-query/tests/prism_adversarial.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "QUERY-PHYSICAL-001",
+      "source": "AELIO_DSL_MOTHER §10.4",
+      "summary": "Prism validates collection, column modality, predicate type, vector dimension and graph bounds against the physical catalog.",
+      "owner": "aelio-db-query",
+      "code": ["aelio-os/crates/aelio-db-query/src/prism_exec.rs", "aelio-os/crates/aelio-db-query/src/exec.rs"],
+      "tests": ["aelio-os/crates/aelio-db-query/tests/prism_adversarial.rs", "aelio-os/crates/aelio-db-query/tests/graph_budgets.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "CONVERT-RULE-001",
+      "source": "AELIO_DSL_MOTHER §14",
+      "summary": "Converters use only the closed sequential non-computational rule set and identify fabrication structurally.",
+      "owner": "aelio-convert",
+      "code": ["aelio-os/crates/aelio-convert/src/rules.rs"],
+      "tests": ["aelio-os/crates/aelio-convert/tests/property_noncomputation.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "CONVERT-GATE-001",
+      "source": "AELIO_DSL_MOTHER §16 and App K",
+      "summary": "Conversion evidence and lifecycle implement structural, shadow, canary, promotion and demotion thresholds.",
+      "owner": "aelio-convert",
+      "code": ["aelio-os/crates/aelio-convert/src/gate.rs", "aelio-os/crates/aelio-convert/src/lifecycle.rs"],
+      "tests": ["aelio-os/crates/aelio-convert/tests/convert_gate.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "LEARN-PATHWAY-001",
+      "source": "AELIO_DSL_MOTHER §18",
+      "summary": "Pathway selection uses bounded candidates, measured thresholds, margins, entropy and mandatory fallback.",
+      "owner": "aelio-learn",
+      "code": ["aelio-os/crates/aelio-learn/src/pathways.rs"],
+      "tests": ["aelio-os/crates/aelio-learn/tests/learn.rs", "aelio-os/crates/aelio-learn/tests/explain.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "LEARN-PROCEDURE-001",
+      "source": "AELIO_DSL_MOTHER §19-§21",
+      "summary": "Procedure mining, attribution and economics exist, but are not yet closed through the unified artifact steward.",
+      "owner": "aelio-learn,aelio-runtime",
+      "code": ["aelio-os/crates/aelio-learn/src/procedures.rs", "aelio-os/crates/aelio-learn/src/attribution.rs"],
+      "tests": ["aelio-os/crates/aelio-learn/tests/procedures_metrics.rs"],
+      "status": "partial"
+    },
+    {
+      "id": "PROMPT-TEMPLATE-001",
+      "source": "AELIO_DSL_MOTHER §10.3 and App J",
+      "summary": "Prompt templates are pinned, slot-projected, closed-output artifacts with deterministic composition hashes.",
+      "owner": "aelio-prompt",
+      "code": ["aelio-os/crates/aelio-prompt/src/lib.rs"],
+      "tests": ["aelio-os/crates/aelio-prompt/src/lib.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "PROMPT-MINT-001",
+      "source": "TECHNICAL_MOTHER §2.1",
+      "summary": "Mint and its immutable root lower into the unified artifact registry; the Prism shelf remains a typed search projection, while prompt-specific evidence gating is still pending.",
+      "owner": "aelio-prompt,aelio-runtime",
+      "code": ["aelio-os/crates/aelio-prompt/src/mint.rs", "aelio-os/crates/aelio-runtime/src/mint.rs", "aelio-os/crates/aelio-runtime/src/artifact.rs"],
+      "tests": ["aelio-os/crates/aelio-prompt/src/mint.rs", "aelio-os/crates/aelio-runtime/src/mint.rs"],
+      "status": "partial"
+    },
+    {
+      "id": "RUNTIME-ACTOR-001",
+      "source": "AELIO_DSL_MOTHER §33",
+      "summary": "Per-instance bounded actors serialize turns and reject queue overload.",
+      "owner": "aelio-runtime",
+      "code": ["aelio-os/crates/aelio-runtime/src/lib.rs"],
+      "tests": ["aelio-os/crates/aelio-runtime/tests/runtime.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "WIRE-PROTOCOL-001",
+      "source": "AELIO_DSL_MOTHER App H",
+      "summary": "The host protocol is closed, versioned, correlated and defines delivery, duplicate and expiry behavior.",
+      "owner": "aelio-wire",
+      "code": ["aelio-os/crates/aelio-wire/src/lib.rs"],
+      "tests": ["aelio-os/crates/aelio-wire/tests/wire.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "SERVER-AUTH-001",
+      "source": "UNIFIED MASTER §8 and §12",
+      "summary": "Production Rust APIs fail startup closed without credentials and apply bounded authenticated requests.",
+      "owner": "aelio-server",
+      "code": ["aelio-os/crates/aelio-server/src/lib.rs", "aelio-os/crates/aelio-server/src/main.rs"],
+      "tests": ["aelio-os/crates/aelio-server/src/lib.rs"],
+      "status": "implemented"
+    },
+    {
+      "id": "ARTIFACT-REGISTRY-001",
+      "source": "TECHNICAL_MOTHER §3; UNIFIED MASTER Phase 1",
+      "summary": "The immutable, schema-versioned artifact authority owns Flow and Mint records, lifecycle history, evidence, leases and verification cache; procedures, pathways, converters, imprints and datasets still require lowering.",
+      "owner": "aelio-runtime,aelio-store",
+      "code": ["aelio-os/crates/aelio-runtime/src/artifact.rs", "aelio-os/crates/aelio-runtime/src/artifact/build.rs", "aelio-os/crates/aelio-runtime/src/artifact/coordination.rs", "aelio-os/crates/aelio-runtime/src/artifact/evidence.rs"],
+      "tests": ["aelio-os/crates/aelio-runtime/tests/artifacts.rs", "aelio-os/crates/aelio-runtime/tests/runtime.rs"],
+      "status": "partial"
+    },
+    {
+      "id": "SANDBOX-GATE-001",
+      "source": "TECHNICAL_MOTHER §2.9 and §6.8; UNIFIED MASTER Phase 2",
+      "summary": "Flow examples execute through the production Planner/Executor in ephemeral fixture-only stores, with distinct-input evidence and Appendix K thresholds; class-generic sandbox adapters and hard process-level wall cancellation remain.",
+      "owner": "aelio-runtime",
+      "code": ["aelio-os/crates/aelio-runtime/src/sandbox.rs", "aelio-os/crates/aelio-runtime/src/gate.rs"],
+      "tests": ["aelio-os/crates/aelio-runtime/tests/sandbox.rs"],
+      "status": "partial"
+    },
+    {
+      "id": "BUILD-ROOT-001",
+      "source": "TECHNICAL_MOTHER §5-§7; UNIFIED MASTER Phase 3-4",
+      "summary": "The durable twelve-step root harness searches, selects, composes, validates, decomposes, recursively builds, assembles and gates artifacts.",
+      "owner": "aelio-runtime",
+      "code": ["aelio-os/crates/aelio-runtime/src/forge.rs"],
+      "tests": ["aelio-os/crates/aelio-runtime/tests/runtime.rs"],
+      "status": "partial"
+    },
+    {
+      "id": "STEWARD-001",
+      "source": "TECHNICAL_MOTHER §2.8 and §11; UNIFIED MASTER Phase 7",
+      "summary": "A deterministic steward proposes dependency cascades, promotion, demotion, retirement and rebuild work without promotion authority.",
+      "owner": "aelio-runtime",
+      "code": [],
+      "tests": [],
+      "status": "missing"
+    },
+    {
+      "id": "DEMAND-LOOP-001",
+      "source": "TECHNICAL_MOTHER §12; UNIFIED MASTER §7.3",
+      "summary": "Missing live capability creates a deduplicated off-path demand and never inline executable logic.",
+      "owner": "aelio-agent,aelio-runtime",
+      "code": [],
+      "tests": [],
+      "status": "missing"
+    },
+    {
+      "id": "AGENT-UNIFICATION-001",
+      "source": "UNIFIED MASTER C-008 and Phase 6",
+      "summary": "The adaptive agent selects or requests pinned artifacts while the runtime exclusively executes effects and flow state.",
+      "owner": "aelio-agent,aelio-runtime",
+      "code": ["aelio-os/crates/aelio-agent/src/blocks/turn.rs", "aelio-os/crates/aelio-runtime/src/lib.rs"],
+      "tests": ["aelio-os/crates/aelio-agent/tests/golden_traces.rs", "aelio-os/crates/aelio-runtime/tests/runtime.rs"],
+      "status": "partial"
+    },
+    {
+      "id": "TS-EDGE-001",
+      "source": "AELIO_DSL_MOTHER §31-§35; UNIFIED MASTER C-012",
+      "summary": "TypeScript is transport/provider/tool/channel adaptation only and has no production decision path.",
+      "owner": "server,aelio-server",
+      "code": ["server/src/aelio-runtime-client.ts", "server/src/aelio-db.ts"],
+      "tests": ["scripts/test-aelio-db-integration.mjs"],
+      "status": "partial"
+    },
+    {
+      "id": "E2E-PUBLIC-001",
+      "source": "UNIFIED MASTER §10",
+      "summary": "Mandatory scenarios execute through the public boundary and assert response, effects, state, ledger and replay.",
+      "owner": "aelio-server,server",
+      "code": ["aelio-os/crates/aelio-server/src/lib.rs"],
+      "tests": ["aelio-os/crates/aelio-kernel/tests/login_golden.rs", "aelio-os/crates/aelio-agent/tests/golden_traces.rs"],
+      "status": "partial"
+    },
+    {
+      "id": "PRODUCTION-LIVE-001",
+      "source": "UNIFIED MASTER Phase 9",
+      "summary": "Live provider, reverse-tool, channel, load, soak and crash-window matrices pass in release CI.",
+      "owner": "aelio-server,server,ci",
+      "code": [],
+      "tests": ["aelio-os/crates/aelio-agent/tests/live_llm_architecture.rs", "aelio-os/crates/aelio-agent/tests/live_llm_e2e.rs"],
+      "status": "external"
+    }
+  ]
+}

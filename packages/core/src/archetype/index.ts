@@ -2,7 +2,7 @@
  * Archetype valence engine.
  *
  * For each conversational category (sentiment, engagement, certainty, urgency,
- * …) three valence buckets — positive / negative / neutral — live in Sunjet as
+ * …) three valence buckets — positive / negative / neutral — live in AelioDb as
  * embedded exemplars. An incoming message vector is matched against every
  * bucket; the recomputed-cosine scores become per-category positive/negative/
  * neutral numbers. The dominant, confident buckets contribute their `guidance`
@@ -73,7 +73,7 @@ export type ArchetypeEngineOptions = {
   store: ConvoxArchetypeStore;
   /** Mother collection registry — enables self-learning aspect discovery. */
   aspectStore?: ConvoxAspectStore;
-  /** Candidate rows pulled from Sunjet per assessment. Default 40. */
+  /** Candidate rows pulled from AelioDb per assessment. Default 40. */
   k?: number;
   /** A bucket below this cosine is ignored entirely. Default 0.20. */
   minScore?: number;
@@ -174,7 +174,7 @@ export class ArchetypeEngine {
     } else {
       // Span decomposition: match every sentence/clause independently and keep
       // each bucket's best span, so mixed messages don't average away signals.
-      // Span embeds are memoized and the Sunjet queries fan out in parallel.
+      // Span embeds are memoized and the AelioDb queries fan out in parallel.
       // Hybrid BM25+vector is used so exact keywords (e.g. "Pro Max") survive.
       const spanVectors = await Promise.all(
         spans.map((span) => embed(span, { purpose: 'pathway_retrieval' })),
@@ -236,7 +236,7 @@ export class ArchetypeEngine {
       this.aspectCache = { ids, at: now };
       return ids;
     } catch {
-      // Sunjet hiccup: keep the last known set rather than dropping all stance.
+      // AelioDb hiccup: keep the last known set rather than dropping all stance.
       return this.aspectCache?.ids ?? null;
     }
   }
