@@ -14,11 +14,16 @@ use sha2::{Digest, Sha256};
 pub(crate) struct RuntimeArtifactToolHost {
     runtime: Runtime,
     tenant_id: String,
+    last_trace: Option<String>,
 }
 
 impl RuntimeArtifactToolHost {
     pub(crate) fn new(runtime: Runtime, tenant_id: String) -> Self {
-        Self { runtime, tenant_id }
+        Self {
+            runtime,
+            tenant_id,
+            last_trace: None,
+        }
     }
 }
 
@@ -53,12 +58,20 @@ impl ToolHost for RuntimeArtifactToolHost {
             .runtime
             .invoke_pinned_artifact(TurnSubmit {
                 tenant: self.tenant_id.clone(),
-                instance_id,
-                flow_id,
+                instance_id: instance_id.clone(),
+                flow_id: flow_id.clone(),
                 flow_rev: version.to_string(),
                 input,
             })
             .map_err(map_runtime_error)?;
+        let trace = self
+            .runtime
+            .invocation_trace(&self.tenant_id, &instance_id, &flow_id, version)
+            .map_err(map_runtime_error)?;
+        self.last_trace = Some(
+            serde_json::to_string(&trace)
+                .map_err(|error| AelioError::new(ReasonCode::Internal, error.to_string()))?,
+        );
 
         match reply {
             TurnReply::Completed { bag, .. } => {
@@ -74,6 +87,10 @@ impl ToolHost for RuntimeArtifactToolHost {
                 format!("tool {} parked instead of completing", tool.id),
             )),
         }
+    }
+
+    fn take_decision_trace(&mut self) -> Option<String> {
+        self.last_trace.take()
     }
 }
 

@@ -5,7 +5,7 @@ import type {
   ConvoxInboundDedupStore,
   ConvoxMagicLinkStore,
   ConvoxSdkConnectionStore,
-} from '@aelio/core';
+} from '@aelio/core/edge';
 import type { LLMProvider } from '@aelio/llm';
 import type { WhatsAppSender } from '@aelio/channels';
 import type { AelioDbClient } from '@aelio/db-client';

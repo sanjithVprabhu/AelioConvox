@@ -5,8 +5,9 @@ use aelio_runtime::{
     BuildPolicy, BuildScope, BuildSpec, BuildSpecDraft, BuildStage, CapabilityReason,
     CapabilityRequestDraft, CapabilityRequestRepository, ImprintDeclaration, ImprintField,
     ImprintRegistry, ImprintSensitivity, ImprintType, LeaseRequest, LeaseStatus,
-    NameLeaseRepository, Provenance, VerificationCacheEntry, VerificationCacheRepository,
-    VerificationVerdict, ARTIFACT_TABLE, REPOSITORY_SCHEMA_TABLE, REPOSITORY_SCHEMA_TENANT,
+    NameLeaseRepository, Provenance, Runtime, RuntimeConfig, VerificationCacheEntry,
+    VerificationCacheRepository, VerificationVerdict, ARTIFACT_TABLE, DEFAULT_QUEUE_DEPTH,
+    REPOSITORY_SCHEMA_TABLE, REPOSITORY_SCHEMA_TENANT,
 };
 use aelio_sol::SolValue;
 use aelio_store::{EmbeddedStore, MemoryStore, Store};
@@ -131,6 +132,59 @@ fn declared_imprints_resolve_nested_shapes_and_fail_closed() {
         )
         .is_err());
     assert!(registry.resolve("tenant-a", "test.missing@1").is_err());
+}
+
+#[test]
+fn builder_v2_imprints_are_closed_bounded_and_validate_nested_topology() {
+    let directory = tempfile::tempdir().unwrap();
+    let _runtime = Runtime::open(RuntimeConfig {
+        data_dir: directory.path().into(),
+        host_url: None,
+        host_token: None,
+        event_key_secret: [41; 32],
+        queue_depth: DEFAULT_QUEUE_DEPTH,
+    })
+    .unwrap();
+    let registry = ImprintRegistry::open(EmbeddedStore::open(directory.path()).unwrap()).unwrap();
+
+    let selection = serde_json::json!({
+        "selected":[{"id":"flow.seed@1","score":0.91,"role":"source"}],
+        "runners_up":[],
+        "unmet":[],
+        "undeterminable":false
+    });
+    registry
+        .validate_value("tenant-a", "aelio.selection_result@2", &selection)
+        .unwrap();
+    let mut unknown = selection.clone();
+    unknown["model_secret"] = serde_json::json!(true);
+    assert!(registry
+        .validate_value("tenant-a", "aelio.selection_result@2", &unknown)
+        .unwrap_err()
+        .to_string()
+        .contains("rejects key"));
+
+    let composition = serde_json::json!({
+        "tree":[{"nid":"seed","artifact":"flow.seed@1"}],
+        "seams":[
+            {"from":{"kind":"parent_input","slot":"turn"},"to":{"kind":"node_input","node":"seed","slot":"turn"}},
+            {"from":{"kind":"node_output","node":"seed"},"to":{"kind":"parent_output"}}
+        ],
+        "undeterminable":false
+    });
+    registry
+        .validate_value("tenant-a", "aelio.compose_result@2", &composition)
+        .unwrap();
+    let mut invented = composition.clone();
+    invented["tree"][0]["executable_program"] = serde_json::json!({"op":"Call"});
+    assert!(registry
+        .validate_value("tenant-a", "aelio.compose_result@2", &invented)
+        .is_err());
+    let mut malformed_seam = composition;
+    malformed_seam["seams"][0]["from"]["unknown"] = serde_json::json!(1);
+    assert!(registry
+        .validate_value("tenant-a", "aelio.compose_result@2", &malformed_seam)
+        .is_err());
 }
 
 #[test]

@@ -29,6 +29,8 @@ pub struct ExecutionFrame {
     pub dormant: bool,
     pub reply: Option<Utterance>,
     pub claims: Vec<crate::abilities::judge::EvidenceClaim>,
+    /// Redaction-safe metadata-only narratives from the authoritative artifact runtime.
+    pub artifact_traces: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -128,6 +130,9 @@ pub fn execute_path(
                     });
                 }
                 ToolCallOutcome::Done { receipt } => {
+                    if let Some(trace) = receipt.decision_trace.clone() {
+                        frame.artifact_traces.push(trace);
+                    }
                     let provenance = format!(
                         "tool:{}:sig={}:args={}",
                         receipt.tool_id, receipt.sig_hash, receipt.args_hash

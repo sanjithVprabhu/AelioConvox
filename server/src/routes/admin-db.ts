@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { listTurnApiCalls } from '@aelio/core';
+import { listTurnApiCalls } from '@aelio/core/edge';
 import { AelioDbHttpError } from '@aelio/db-client';
 import type {
   ApiValue,

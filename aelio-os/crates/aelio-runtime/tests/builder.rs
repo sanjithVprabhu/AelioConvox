@@ -1,9 +1,9 @@
 use aelio_runtime::{
-    ArtifactEffect, ArtifactInput, ArtifactInterface, ArtifactStatus, BuildAction, BuildBudget,
-    BuildExample, BuildOracle, BuildOracleRequest, BuildOracleResponse, BuildPolicy,
-    BuildReactionOutput, BuildReactionUsage, BuildScope, BuildSpec, BuildSpecDraft, BuildStage,
-    FlowPush, Runtime, RuntimeConfig, RuntimeError, SandboxCase, SandboxLimits,
-    DEFAULT_QUEUE_DEPTH,
+    ArtifactEffect, ArtifactInput, ArtifactStatus, BuildAction, BuildBudget, BuildExample,
+    BuildOracle, BuildOracleRequest, BuildOracleResponse, BuildPolicy, BuildReactionOutput,
+    BuildReactionUsage, BuildScope, BuildSpec, BuildSpecDraft, BuildStage, DecompositionSeam,
+    FlowPush, HarnessNode, HarnessSink, HarnessSource, Runtime, RuntimeConfig, RuntimeError,
+    SandboxCase, SandboxLimits, SelectionChoice, DEFAULT_QUEUE_DEPTH,
 };
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -68,7 +68,7 @@ fn cases() -> Vec<SandboxCase> {
 fn spec() -> BuildSpec {
     BuildSpec::seal(BuildSpecDraft {
         name: "flow.built".into(),
-        description: "compose a constant successful conversation flow".into(),
+        description: "immutable flow flow seed".into(),
         inputs: vec![ArtifactInput {
             name: "turn".into(),
             imprint: "aelio.turn.input@1".into(),
@@ -106,7 +106,7 @@ fn spec() -> BuildSpec {
 }
 
 #[test]
-fn root_builder_resumes_pending_oracle_and_builds_only_after_planner_and_gate() {
+fn root_builder_resumes_pending_oracle_and_rejects_semantically_wrong_composition() {
     let directory = tempfile::tempdir().unwrap();
     let runtime = Runtime::open(config(directory.path())).unwrap();
 
@@ -195,8 +195,14 @@ fn root_builder_resumes_pending_oracle_and_builds_only_after_planner_and_gate() 
             &job.build_id,
             &select_reaction.reaction_id,
             BuildReactionOutput::Selection {
-                selected: vec!["flow.seed@1".into()],
-                abstain: false,
+                selected: vec![SelectionChoice {
+                    id: "flow.seed@1".into(),
+                    score: 0.99,
+                    role: "seed".into(),
+                }],
+                runners_up: vec![],
+                unmet: vec![],
+                undeterminable: false,
             },
             BuildReactionUsage {
                 model_calls: 1,
@@ -221,7 +227,28 @@ fn root_builder_resumes_pending_oracle_and_builds_only_after_planner_and_gate() 
             &job.build_id,
             &compose_reaction.reaction_id,
             BuildReactionOutput::Composition {
-                flow: constant_flow("tenant-a", "flow.built"),
+                tree: vec![HarnessNode {
+                    nid: "seed".into(),
+                    artifact: "flow.seed@1".into(),
+                }],
+                seams: vec![
+                    DecompositionSeam {
+                        from: HarnessSource::ParentInput {
+                            slot: "turn".into(),
+                        },
+                        to: HarnessSink::NodeInput {
+                            node: "seed".into(),
+                            slot: "turn".into(),
+                        },
+                    },
+                    DecompositionSeam {
+                        from: HarnessSource::NodeOutput {
+                            node: "seed".into(),
+                        },
+                        to: HarnessSink::ParentOutput,
+                    },
+                ],
+                undeterminable: false,
             },
             BuildReactionUsage {
                 model_calls: 1,
@@ -243,6 +270,12 @@ fn root_builder_resumes_pending_oracle_and_builds_only_after_planner_and_gate() 
             .unwrap(),
         BuildAction::Progress { .. }
     )); // assemble
+    assert!(matches!(
+        runtime
+            .advance_build("tenant-a", &job.build_id, None)
+            .unwrap(),
+        BuildAction::Progress { .. }
+    )); // gate rejects the semantically wrong selected primitive
     let completed = runtime
         .advance_build("tenant-a", &job.build_id, None)
         .unwrap();
@@ -251,7 +284,7 @@ fn root_builder_resumes_pending_oracle_and_builds_only_after_planner_and_gate() 
     };
     assert_eq!(job.stage, BuildStage::Complete);
     assert!(
-        matches!(result, aelio_runtime::BuildResult::Built { .. }),
+        matches!(result, aelio_runtime::BuildResult::Failed { .. }),
         "unexpected worker result: {result:?}"
     );
     let artifact = runtime
@@ -260,20 +293,11 @@ fn root_builder_resumes_pending_oracle_and_builds_only_after_planner_and_gate() 
         .get("tenant-a", "flow.built", 1)
         .unwrap()
         .unwrap();
-    assert_eq!(artifact.status, ArtifactStatus::Canary);
+    assert_ne!(artifact.status, ArtifactStatus::Canary);
     assert_eq!(
-        artifact.artifact.provenance.metadata["spec_hash"],
-        spec().spec_hash
+        artifact.artifact.class,
+        aelio_runtime::ArtifactClass::Harness
     );
-    assert_eq!(
-        artifact.artifact.interface,
-        ArtifactInterface {
-            inputs: spec().draft.inputs,
-            output: spec().draft.output,
-        }
-    );
-    assert_eq!(artifact.artifact.description, spec().draft.description);
-    assert_eq!(artifact.artifact.examples.len(), 20);
     assert_eq!(
         aelio_runtime::CapabilityRequestRepository::open(
             aelio_store::EmbeddedStore::open(directory.path()).unwrap()
@@ -283,7 +307,7 @@ fn root_builder_resumes_pending_oracle_and_builds_only_after_planner_and_gate() 
         .unwrap()
         .unwrap()
         .status,
-        aelio_runtime::CapabilityStatus::Resolved
+        aelio_runtime::CapabilityStatus::Failed
     );
 }
 
@@ -312,9 +336,16 @@ fn bounded_worker_uses_one_closed_schema_retry_and_accounts_for_every_model_call
     let job = runtime.submit_build(spec()).unwrap();
     let oracle = ScriptedBuildOracle {
         responses: Mutex::new(VecDeque::from([
-            serde_json::json!({"selected":["invented@1"],"abstain":false}).to_string(),
-            serde_json::json!({"selected":["flow.seed@1"],"abstain":false}).to_string(),
-            serde_json::json!({"flow":constant_flow("tenant-a", "flow.built")}).to_string(),
+            serde_json::json!({"selected":[{"id":"invented@1","score":0.99,"role":"seed"}],"runners_up":[],"unmet":[],"undeterminable":false}).to_string(),
+            serde_json::json!({"selected":[{"id":"flow.seed@1","score":0.99,"role":"seed"}],"runners_up":[],"unmet":[],"undeterminable":false}).to_string(),
+            serde_json::json!({
+                "tree":[{"nid":"seed","artifact":"flow.seed@1"}],
+                "seams":[
+                    {"from":{"kind":"parent_input","slot":"turn"},"to":{"kind":"node_input","node":"seed","slot":"turn"}},
+                    {"from":{"kind":"node_output","node":"seed"},"to":{"kind":"parent_output"}}
+                ],
+                "undeterminable":false
+            }).to_string(),
         ])),
         retries: Mutex::new(Vec::new()),
     };
@@ -325,12 +356,72 @@ fn bounded_worker_uses_one_closed_schema_retry_and_accounts_for_every_model_call
         panic!("worker must finish the scripted build");
     };
     assert!(
-        matches!(result, aelio_runtime::BuildResult::Built { .. }),
+        matches!(result, aelio_runtime::BuildResult::Failed { .. }),
         "unexpected worker result: {result:?}"
     );
     assert_eq!(job.cost.llm_calls, 3);
     assert_eq!(job.cost.tokens, 15);
     assert_eq!(*oracle.retries.lock().unwrap(), [false, true, false]);
+}
+
+#[test]
+fn model_confidence_cannot_override_low_kernel_similarity() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = Runtime::open(config(directory.path())).unwrap();
+    let mut candidate = constant_flow("tenant-a", "flow.seed");
+    candidate.program = serde_json::json!({"nid":"root","op":"Const","v":{"ok":false}});
+    runtime.push_flow(candidate.clone()).unwrap();
+    let negative_cases = cases()
+        .into_iter()
+        .map(|mut case| {
+            case.expected = serde_json::json!({"ok":false});
+            case
+        })
+        .collect::<Vec<_>>();
+    runtime
+        .gate_flow(&candidate, &negative_cases, SandboxLimits::default(), None)
+        .unwrap();
+
+    let mut draft = spec().draft;
+    draft.description = "send a quarterly customer retention report".into();
+    let job = runtime
+        .submit_build(BuildSpec::seal(draft).unwrap())
+        .unwrap();
+    for _ in 0..3 {
+        runtime
+            .advance_build("tenant-a", &job.build_id, None)
+            .unwrap();
+    }
+    let BuildAction::Oracle { reaction, .. } = runtime
+        .advance_build("tenant-a", &job.build_id, None)
+        .unwrap()
+    else {
+        panic!("search must produce a selection reaction");
+    };
+    let updated = runtime
+        .submit_build_reaction(
+            "tenant-a",
+            &job.build_id,
+            &reaction.reaction_id,
+            BuildReactionOutput::Selection {
+                selected: vec![SelectionChoice {
+                    id: "flow.seed@1".into(),
+                    score: 1.0,
+                    role: "model_claims_perfect".into(),
+                }],
+                runners_up: vec![],
+                unmet: vec![],
+                undeterminable: false,
+            },
+            BuildReactionUsage::default(),
+        )
+        .unwrap();
+    assert_eq!(updated.stage, BuildStage::Decompose);
+    assert!(updated
+        .workspace
+        .diagnostic
+        .as_deref()
+        .is_some_and(|detail| detail.contains("select_abstained")));
 }
 
 #[test]
@@ -356,6 +447,7 @@ fn atomic_failure_is_durable_and_creates_one_readable_demand() {
             &reaction.reaction_id,
             BuildReactionOutput::Decomposition {
                 verdict: aelio_runtime::DecompositionVerdict::Atomic,
+                undeterminable: false,
                 children: vec![],
                 seams: vec![],
                 parent_complexity: 0,
@@ -405,16 +497,16 @@ fn bootstrap_root_harness_is_a_promoted_self_describing_vendor_axiom() {
     let record = runtime
         .artifact_repository()
         .unwrap()
-        .get("aelio.vendor", "aelio.root_harness", 1)
+        .get("aelio.vendor", "aelio.root_harness", 2)
         .unwrap()
         .expect("root harness registry entry #1");
     assert_eq!(record.status, ArtifactStatus::Promoted);
     assert_eq!(record.artifact.class, aelio_runtime::ArtifactClass::Harness);
     assert_eq!(
         record.artifact.interface.inputs[0].imprint,
-        "aelio.build_spec@1"
+        "aelio.build_spec@2"
     );
-    assert_eq!(record.artifact.interface.output, "aelio.build_result@1");
+    assert_eq!(record.artifact.interface.output, "aelio.build_result@2");
     let declared = record.artifact.body["stages"].as_array().unwrap();
     assert_eq!(declared.len(), 12);
     let self_spec: BuildSpec =
@@ -474,6 +566,7 @@ fn decomposition_proves_typed_closure_and_admits_children_in_topological_order()
             &reaction.reaction_id,
             BuildReactionOutput::Decomposition {
                 verdict: aelio_runtime::DecompositionVerdict::Children,
+                undeterminable: false,
                 children: vec![sink, source], // deliberately reverse emission order
                 seams: vec![
                     aelio_runtime::DecompositionSeam {
@@ -557,6 +650,7 @@ async fn recursive_build_assembles_executes_and_gates_a_harness_end_to_end() {
             &reaction.reaction_id,
             BuildReactionOutput::Decomposition {
                 verdict: aelio_runtime::DecompositionVerdict::Children,
+                undeterminable: false,
                 children: vec![child_spec(
                     "flow.child_source",
                     "turn",

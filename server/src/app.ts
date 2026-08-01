@@ -3,7 +3,7 @@ import { createLLMProviderChain, createEmbeddingProvider, type LLMProviderConfig
 import {
   configureEmbedder,
   createInstrumentedLlm,
-} from '@aelio/core';
+} from '@aelio/core/edge';
 import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';

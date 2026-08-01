@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
+import {
+  flattenToText,
+  textFrame,
+  validateRenderFrame,
+  type RenderFrame,
+} from '@aelio/chat-sdk';
 import type { RuntimeDeps } from './runtime-deps.js';
 
 export type ConversationTurnInput = {
@@ -12,14 +18,17 @@ export type ConversationTurnInput = {
 };
 
 export type ConversationTurnResult = {
+  /** Plain-text fallback for WhatsApp / legacy consumers. */
   reply: string;
+  /** Validated Render Protocol frame (always present when Rust agent answers). */
+  frame: RenderFrame;
   turnId: string;
   awaitingConfirmation: boolean;
 };
 
 /**
  * One ingress for every conversational channel. When the Rust runtime is configured it is the
- * sole decision executor.
+ * sole decision executor. Returns both a RenderFrame (web) and flattened text (other channels).
  */
 export async function executeConversationTurn(
   deps: RuntimeDeps,
@@ -35,12 +44,27 @@ export async function executeConversationTurn(
     utterance: input.message,
     channel: input.channel,
   });
-  const reply = result.reply.text.trim();
-  if (!reply) {
+  const replyText = result.reply.text.trim();
+  let frame: RenderFrame;
+  if (result.reply.frame) {
+    const checked = validateRenderFrame(result.reply.frame);
+    if (checked.ok) {
+      frame = checked.frame;
+    } else {
+      frame = textFrame(turnId, `fb-${turnId}`, replyText || '…');
+    }
+  } else if (replyText) {
+    frame = textFrame(turnId, `rf-${turnId}`, replyText);
+  } else {
+    throw new Error('Aelio Rust agent returned an empty customer-facing reply');
+  }
+  const reply = replyText || flattenToText(frame);
+  if (!reply.trim()) {
     throw new Error('Aelio Rust agent returned an empty customer-facing reply');
   }
   return {
     reply,
+    frame,
     turnId,
     awaitingConfirmation: result.suspended,
   };

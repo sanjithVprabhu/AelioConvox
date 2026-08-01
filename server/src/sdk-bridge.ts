@@ -10,7 +10,7 @@ import {
   type SendInvokeMessage,
   type StateDefinition,
 } from '@aelio/protocol';
-import type { ConvoxSdkConnectionStore, SdkBridge, SdkInvokeResult } from '@aelio/core';
+import type { ConvoxSdkConnectionStore, SdkBridge, SdkInvokeResult } from '@aelio/core/edge';
 import type { WebSocket } from '@fastify/websocket';
 import { randomUUID } from 'node:crypto';
 

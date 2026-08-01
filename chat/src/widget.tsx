@@ -1,15 +1,35 @@
 import { render } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import {
+  flattenToText,
+  makeHello,
+  renderMarkdownSubset,
+  resolveBlockForClient,
+  validateRenderFrame,
+  type RenderFrame,
+  CORE_KINDS,
+} from '@aelio/chat-sdk';
 
 type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
+  frame?: RenderFrame;
+  html?: string;
 };
 
 type ServerMessage =
-  | { type: 'ready'; customerId: string }
-  | { type: 'message'; role: 'assistant'; content: string }
-  | { type: 'confirmation'; prompt: string; turnId?: string }
+  | {
+      type: 'ready';
+      customerId: string;
+      welcome?: {
+        session_id: string;
+        accepted_kinds: string[];
+        server_limits: { max_blocks: number; max_nesting: number };
+        protocol: string;
+      };
+    }
+  | { type: 'message'; role: 'assistant'; content: string; frame?: RenderFrame; turnId?: string }
+  | { type: 'confirmation'; prompt: string; frame?: RenderFrame; turnId?: string }
   | { type: 'typing'; active: boolean }
   | { type: 'error'; message: string; code?: string };
 
@@ -97,9 +117,43 @@ function getScriptOptions(): AelioChatOptions | null {
   };
 }
 
+
+function assistantFromFrame(frame: RenderFrame | undefined, fallback: string, accepted: string[]): ChatMessage {
+  if (frame) {
+    const checked = validateRenderFrame(frame, accepted);
+    if (checked.ok) {
+      const parts: string[] = [];
+      for (const block of checked.frame.blocks) {
+        const resolved = resolveBlockForClient(block, accepted);
+        if (resolved.block.kind === 'text@1') {
+          parts.push(renderMarkdownSubset(String(resolved.block.body.md ?? '')));
+        } else if (resolved.block.kind === 'confirm@1') {
+          parts.push(`<p>${escapeAttr(String(resolved.block.body.prompt ?? fallback))}</p>`);
+        } else if (resolved.block.kind === 'status@1') {
+          parts.push(`<p><em>${escapeAttr(String(resolved.block.body.label ?? ''))}</em></p>`);
+        } else {
+          parts.push(renderMarkdownSubset(flattenToText({ ...checked.frame, blocks: [resolved.block] })));
+        }
+      }
+      return {
+        role: 'assistant',
+        content: fallback || flattenToText(checked.frame),
+        frame: checked.frame,
+        html: parts.join(''),
+      };
+    }
+  }
+  return { role: 'assistant', content: fallback, html: renderMarkdownSubset(fallback) };
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function ChatWidget({ options }: { options: NormalizedOptions }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [acceptedKinds, setAcceptedKinds] = useState<string[]>([...CORE_KINDS]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
@@ -116,6 +170,7 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
       customerId: options.customerId,
       authToken: options.authToken,
       email: options.email,
+      hello: makeHello(),
     }),
     [options.authToken, options.customerId, options.email],
   );
@@ -220,6 +275,9 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
           ready = true;
           clearTimers();
           attempt = 0;
+          if (data.welcome?.accepted_kinds?.length) {
+            setAcceptedKinds(data.welcome.accepted_kinds);
+          }
           setStatus('connected');
           setStatusDetail('');
           return;
@@ -230,12 +288,18 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
         }
         if (data.type === 'message') {
           setPendingConfirmationIndex(null);
-          setMessages((prev) => [...prev, { role: 'assistant', content: data.content }]);
+          setMessages((prev) => [
+            ...prev,
+            assistantFromFrame(data.frame, data.content, acceptedKinds),
+          ]);
           return;
         }
         if (data.type === 'confirmation') {
           setMessages((prev) => {
-            const next: ChatMessage[] = [...prev, { role: 'assistant', content: data.prompt }];
+            const next: ChatMessage[] = [
+              ...prev,
+              assistantFromFrame(data.frame, data.prompt, acceptedKinds),
+            ];
             setPendingConfirmationIndex(next.length - 1);
             return next;
           });
@@ -279,7 +343,7 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
       clearTimers();
       socketRef.current?.close();
     };
-  }, [initPayload, options.serverUrl]);
+  }, [acceptedKinds, initPayload, options.serverUrl]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
@@ -350,7 +414,11 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
             {messages.length === 0 ? <div class="aelio-hint">{options.initialMessage}</div> : null}
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} class={`aelio-msg aelio-${message.role}`}>
-                {message.content}
+                {message.html && message.role === 'assistant' ? (
+                  <div class="aelio-md" dangerouslySetInnerHTML={{ __html: message.html }} />
+                ) : (
+                  message.content
+                )}
                 {pendingConfirmationIndex === index ? (
                   <div class="aelio-confirm-actions">
                     <button
@@ -403,7 +471,7 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
         .aelio-header strong { min-width: 0; overflow-wrap: anywhere; font-size: 15px; }
         .aelio-close { background: transparent; border: none; font-size: 20px; line-height: 1; cursor: pointer; color: #374151; }
         .aelio-messages { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; background: #f9fafb; }
-        .aelio-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; line-height: 1.4; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .aelio-md p { margin: 0 0 0.5em; } .aelio-md p:last-child { margin: 0; } .aelio-md ul { margin: 0.25em 0; padding-left: 1.2em; } .aelio-md code { font-family: ui-monospace, monospace; font-size: 0.9em; } .aelio-md pre { overflow: auto; background: #f3f4f6; padding: 8px; border-radius: 8px; } .aelio-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; line-height: 1.4; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
         .aelio-user { align-self: flex-end; background: #111827; color: #fff; }
         .aelio-assistant { align-self: flex-start; background: #fff; border: 1px solid #e5e7eb; color: #111827; }
         .aelio-confirm-actions { display: flex; gap: 8px; margin-top: 10px; }

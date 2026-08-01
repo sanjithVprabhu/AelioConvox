@@ -160,3 +160,11 @@ cannot be recalled. This flag remains open only for the prompt-class shadow/cana
 Forge pinning of admitted Mint artifacts.
 
 ---
+
+
+---
+
+### F-020 — Render Protocol E2E (aelio-render + @aelio/chat-sdk) — `AELIO_RENDER_PROTOCOL`
+**What:** Product needs typed RenderFrame down / EventFrame up between Rust agent Express and the web widget. Previously only plain `Utterance.text` crossed the seam.
+**Options:** (a) ship closed-kind `aelio-render` + TS `@aelio/chat-sdk`, author frames in Rust before send, TS validates + renders with mandatory fallbacks; (b) invent frames from free text in TS.
+**Recommendation → (a) PROVISIONAL.** Hello/Welcome on widget init; agent `ensure_render_frame` emits `text@1` (and `confirm@1` for Confirm); WhatsApp keeps flattened text. Ledgering of frames (F5) and full element registry remain follow-ups.

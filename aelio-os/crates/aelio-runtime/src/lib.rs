@@ -16,10 +16,10 @@ pub use artifact::{
     ArtifactEvidenceDraft, ArtifactEvidenceRepository, ArtifactInput, ArtifactInterface,
     ArtifactPins, ArtifactRecord, ArtifactRepository, ArtifactStatus, ArtifactTier,
     ArtifactTransition, ArtifactTrigger, BuildBudget, BuildBudgetAccount, BuildBudgetCharge,
-    BuildBudgetRepository, BuildCost, BuildExample, BuildFailure, BuildJob, BuildJobRecord,
-    BuildJobRepository, BuildLineage, BuildPolicy, BuildReaction, BuildReactionKind,
-    BuildReactionStatus, BuildResult, BuildScope, BuildSpec, BuildSpecDraft, BuildStage,
-    BuildWorkspace, CapabilityReason, CapabilityRequest, CapabilityRequestDraft,
+    BuildBudgetRepository, BuildCandidateMeasurement, BuildCost, BuildExample, BuildFailure,
+    BuildJob, BuildJobRecord, BuildJobRepository, BuildLineage, BuildPolicy, BuildReaction,
+    BuildReactionKind, BuildReactionStatus, BuildResult, BuildScope, BuildSpec, BuildSpecDraft,
+    BuildStage, BuildWorkspace, CapabilityReason, CapabilityRequest, CapabilityRequestDraft,
     CapabilityRequestRepository, CapabilityStatus, DecompositionSeam, EvidencePhase,
     EvidenceSummary, HarnessBody, HarnessNode, HarnessSeam, HarnessSink, HarnessSource,
     ImprintDeclaration, ImprintField, ImprintRegistry, ImprintSensitivity, ImprintType,
@@ -34,6 +34,7 @@ pub use artifact::{
 pub use builder::{
     root_harness_vendor_artifact, BuildAction, BuildOracle, BuildOracleRequest,
     BuildOracleResponse, BuildReactionOutput, BuildReactionUsage, DecompositionVerdict,
+    SelectionChoice, SelectionRunnerUp,
 };
 pub use forge::{
     forge_catalog_json, forge_flow, forge_system_prompt, forge_vendor_prompt, forge_vendor_targets,
@@ -229,6 +230,24 @@ pub struct ToolProxyInstall {
     pub flow_id: String,
     pub flow_rev: String,
     pub status: ArtifactStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ArtifactLedgerStep {
+    pub seq: u64,
+    pub turn_id: String,
+    pub nid: Option<String>,
+    pub kind: String,
+    pub category: String,
+    pub payload_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ArtifactInvocationTrace {
+    pub artifact: String,
+    pub instance: String,
+    pub ledger_hash: String,
+    pub steps: Vec<ArtifactLedgerStep>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -683,6 +702,72 @@ impl Runtime {
         execute_artifact_turn(&self.inner, turn, InvocationMode::ChildStartOrRetry, 0)
     }
 
+    /// Read the tamper-checked, metadata-only ledger narrative for one invocation. Payloads are
+    /// intentionally excluded; their hashes retain audit/replay correlation without exposing PII
+    /// or secrets to the agent trace.
+    pub fn invocation_trace(
+        &self,
+        tenant: &str,
+        instance_id: &str,
+        artifact_id: &str,
+        artifact_version: u32,
+    ) -> Result<ArtifactInvocationTrace, RuntimeError> {
+        validate_identity(tenant, instance_id, artifact_id)?;
+        if artifact_version == 0 {
+            return Err(RuntimeError::Invalid(
+                "artifact trace version must be positive".into(),
+            ));
+        }
+        let prefix = format!("{instance_id}:");
+        let rows = self
+            .inner
+            .store
+            .scan_prefix(tenant, "ledger", &prefix, 100_001)
+            .map_err(store_error)?;
+        if rows.len() > 100_000 {
+            return Err(RuntimeError::Invalid(
+                "artifact ledger exceeds trace hydration bound".into(),
+            ));
+        }
+        let entries = rows
+            .into_iter()
+            .map(|(_, row)| aelio_kernel::ledger::Entry::from_sol(&row.value))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(RuntimeError::Internal)?;
+        let ledger = aelio_kernel::Ledger::from_entries(entries).map_err(RuntimeError::Internal)?;
+        let ledger_hash = ledger
+            .entries()
+            .last()
+            .map(|entry| aelio_sol::value_hash(&entry.to_sol()))
+            .unwrap_or_else(|| blake3::hash(b"empty-ledger").to_hex().to_string());
+        let steps = ledger
+            .entries()
+            .iter()
+            .map(|entry| ArtifactLedgerStep {
+                seq: entry.seq,
+                turn_id: entry.turn_id.clone(),
+                nid: entry.nid.clone(),
+                kind: entry.kind.clone(),
+                category: match entry.category {
+                    aelio_kernel::Category::Inject => "inject",
+                    aelio_kernel::Category::Verify => "verify",
+                    aelio_kernel::Category::Info => "info",
+                }
+                .into(),
+                payload_hash: entry.payload_hash.clone(),
+            })
+            .collect::<Vec<_>>();
+        Ok(ArtifactInvocationTrace {
+            artifact: format!("{artifact_id}@{artifact_version}"),
+            instance: format!(
+                "blake3:{}",
+                &blake3::hash(instance_id.as_bytes()).to_hex().to_string()[..16]
+            ),
+            ledger_hash,
+            steps,
+        })
+    }
+
     fn push_flow_with_provenance(
         &self,
         push: FlowPush,
@@ -730,54 +815,6 @@ impl Runtime {
         // Drop closures before persisting; artifacts contain declarations, never credentials.
         drop(registry);
         Ok(())
-    }
-
-    /// Validate a builder-authored flow through the production Planner, then persist it with the
-    /// sealed build interface rather than the legacy turn-flow default. This is the only builder
-    /// admission path and prevents a general build from being mislabeled as `aelio.turn.*`.
-    pub(crate) fn push_built_flow(
-        &self,
-        push: FlowPush,
-        spec: &BuildSpec,
-        build_id: &str,
-    ) -> Result<Artifact, RuntimeError> {
-        self.validate_flow(&push)?;
-        let metadata = serde_json::Map::from_iter([
-            (
-                "spec_hash".into(),
-                serde_json::Value::String(spec.spec_hash.clone()),
-            ),
-            (
-                "build_id".into(),
-                serde_json::Value::String(build_id.into()),
-            ),
-        ]);
-        let mut artifact = artifact_from_flow_push(&push)?;
-        artifact.interface = ArtifactInterface {
-            inputs: spec.draft.inputs.clone(),
-            output: spec.draft.output.clone(),
-        };
-        artifact.description = spec.draft.description.clone();
-        artifact.examples = spec
-            .draft
-            .examples
-            .iter()
-            .map(|example| {
-                serde_json::json!({
-                    "inputs": example.inputs,
-                    "output": example.output,
-                    "negative": example.negative,
-                    "fixtures": example.fixtures,
-                })
-            })
-            .collect();
-        artifact.provenance.build_id = Some(build_id.into());
-        artifact.provenance.metadata.extend(metadata);
-        artifact = rebuild_artifact(artifact)?;
-        self.artifact_repository()?
-            .put_proposed(&push.tenant, artifact.clone(), ArtifactActor::System)
-            .map_err(artifact_error)?;
-        Ok(artifact)
     }
 
     pub(crate) fn push_forged_flow(

@@ -96,9 +96,9 @@ impl BuildSpec {
 
 fn validate_draft(draft: &BuildSpecDraft) -> Result<(), ArtifactError> {
     validate_id(&draft.name)?;
-    if draft.description.trim().is_empty() || draft.description.len() > 16 * 1024 {
+    if draft.description.trim().is_empty() || draft.description.len() > 500 {
         return Err(ArtifactError::Invalid(
-            "build description must contain 1..=16384 bytes".into(),
+            "build description must contain 1..=500 bytes".into(),
         ));
     }
     if draft.inputs.len() > 256 {

@@ -5,7 +5,7 @@ import {
   failJob,
   requeueStaleJobs,
   resolveWhatsAppIdentity,
-} from '@aelio/core';
+} from '@aelio/core/edge';
 import { executeConversationTurn } from '../conversation-turn.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 import type { FastifyBaseLogger } from 'fastify';

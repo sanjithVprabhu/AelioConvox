@@ -219,7 +219,10 @@ You must:
 2. Write a system prompt body that uses only {{slot}} placeholders matching system_input names. No conditionals/loops.
 3. Write a short description of what the prompt is for and how to feed inputs.
 4. Choose output_imprint id like judgement.<slug>@1 matching the output contract.
-5. Optionally add one exemplar whose output keys match the output contract.
+5. Every minted contract includes `undeterminable: bool`. The body must require
+   undeterminable=true instead of guessing whenever the supplied values cannot support a result.
+6. Add exemplars matching the exact output contract, including a non-fabricating
+   undeterminable=true case.
 
 Respond as a single JSON object with keys:
 id, description, body, output_imprint, inputs_sufficient, sufficiency_note, exemplars, model."#
@@ -340,16 +343,40 @@ pub fn validate_artifact(art: &PromptArtifact) -> Result<(), MintError> {
             )));
         }
     }
+    if !art.root_version.is_empty()
+        && art.output_fields.get("undeterminable").map(String::as_str) != Some("bool")
+    {
+        return Err(MintError::Invalid(
+            "minted prompt output must declare undeterminable:bool".into(),
+        ));
+    }
     let tmpl = art.to_template();
     validate_template_shape(&tmpl).map_err(MintError::Invalid)?;
+    let mut has_refusal = false;
     for ex in &art.exemplars {
-        for key in art.output_fields.keys() {
-            if !ex.output.contains_key(key) {
+        if ex.output.len() != art.output_fields.len() {
+            return Err(MintError::Invalid(
+                "exemplar output must exactly match the closed output contract".into(),
+            ));
+        }
+        for (key, ty) in &art.output_fields {
+            let Some(value) = ex.output.get(key) else {
                 return Err(MintError::Invalid(format!(
                     "exemplar missing output field `{key}`"
                 )));
+            };
+            if !json_has_declared_type(value, ty) {
+                return Err(MintError::Invalid(format!(
+                    "exemplar output field `{key}` has wrong type"
+                )));
             }
         }
+        has_refusal |= ex.output.get("undeterminable") == Some(&Json::Bool(true));
+    }
+    if !art.root_version.is_empty() && !has_refusal {
+        return Err(MintError::Invalid(
+            "minted prompt requires an undeterminable=true exemplar".into(),
+        ));
     }
     Ok(())
 }
@@ -391,19 +418,93 @@ pub fn mint_artifact(
     }
 
     let slots: Vec<SlotDecl> = request.system_input.iter().map(SlotDecl::from).collect();
+    let mut output_fields = request.output.clone();
+    match output_fields.get("undeterminable") {
+        Some(ty) if ty != "bool" => {
+            return Err(MintError::Invalid(
+                "reserved output field `undeterminable` must be bool".into(),
+            ))
+        }
+        Some(_) => {}
+        None => {
+            output_fields.insert("undeterminable".into(), "bool".into());
+        }
+    }
+    let mut exemplars = draft.exemplars;
+    for exemplar in &mut exemplars {
+        exemplar
+            .output
+            .entry("undeterminable".into())
+            .or_insert(Json::Bool(false));
+    }
+    let exemplar_slots = request
+        .system_input
+        .iter()
+        .map(|slot| {
+            let value = request
+                .input
+                .as_ref()
+                .and_then(Json::as_object)
+                .and_then(|input| input.get(&slot.name))
+                .cloned()
+                .unwrap_or_else(|| stub_json_for_type(&slot.ty));
+            (slot.name.clone(), value)
+        })
+        .collect::<BTreeMap<_, _>>();
+    if !exemplars
+        .iter()
+        .any(|exemplar| exemplar.output.get("undeterminable") == Some(&Json::Bool(false)))
+    {
+        exemplars.push(Exemplar {
+            slots: exemplar_slots.clone(),
+            output: output_fields
+                .iter()
+                .map(|(name, ty)| {
+                    (
+                        name.clone(),
+                        if name == "undeterminable" {
+                            Json::Bool(false)
+                        } else {
+                            stub_json_for_type(ty)
+                        },
+                    )
+                })
+                .collect(),
+        });
+    }
+    exemplars.push(Exemplar {
+        slots: exemplar_slots,
+        output: output_fields
+            .iter()
+            .map(|(name, ty)| {
+                (
+                    name.clone(),
+                    if name == "undeterminable" {
+                        Json::Bool(true)
+                    } else {
+                        stub_json_for_type(ty)
+                    },
+                )
+            })
+            .collect(),
+    });
+    let body = format!(
+        "{}\nIf the declared inputs do not support a result, do not guess: return the exact JSON contract with undeterminable=true. Otherwise return undeterminable=false.",
+        draft.body
+    );
     let mut art = PromptArtifact {
         template_format: 1,
         id,
         version: request.version.clone(),
         description: draft.description,
         objective: request.objective.clone(),
-        body: draft.body,
+        body,
         slots,
         layers: vec![],
         output_imprint: draft.output_imprint,
-        output_fields: request.output.clone(),
+        output_fields,
         model: draft.model,
-        exemplars: draft.exemplars,
+        exemplars,
         is_axiom: false,
         root_version: ROOT_VERSION.into(),
         composed_hash: String::new(),
@@ -654,6 +755,19 @@ fn stub_json_for_type(ty: &str) -> Json {
         "map" => Json::Object(Default::default()),
         "null" => Json::Null,
         _ => Json::String("example".into()),
+    }
+}
+
+fn json_has_declared_type(value: &Json, ty: &str) -> bool {
+    match ty {
+        "null" => value.is_null(),
+        "bool" => value.is_boolean(),
+        "int" => value.as_i64().is_some(),
+        "float" => value.as_f64().is_some() && !value.is_i64() && !value.is_u64(),
+        "str" => value.is_string(),
+        "list" => value.is_array(),
+        "map" => value.is_object(),
+        _ => false,
     }
 }
 

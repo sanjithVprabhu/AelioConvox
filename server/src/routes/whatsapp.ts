@@ -1,4 +1,4 @@
-import { enqueueJob } from '@aelio/core';
+import { enqueueJob } from '@aelio/core/edge';
 import { parseWhatsAppWebhook, verifyWhatsAppSignature } from '@aelio/channels';
 import type { FastifyInstance } from 'fastify';
 import type { RuntimeDeps } from '../runtime-deps.js';

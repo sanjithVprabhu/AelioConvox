@@ -133,6 +133,7 @@ fn explain(step_name: &str) -> Option<&'static str> {
         "Policy.Wrap" => "policy is a structural invariant around every effect, not a composable step",
         "Bind.Residual" => "only the argument the system genuinely lacks is asked for; the rest are sourced",
         "Invoke.Call" => "the one externally effectful line; ledger brackets it, args/secrets redacted",
+        "Artifact.Ledger" => "the authoritative runtime's hash-only op ledger for the pinned artifact; raw inputs and outputs are excluded",
         "Invoke.Error" => "typed tool failure selected a deterministic recovery path; no model guessed the outcome",
         "Postcondition" => "verifies what must be true after the step — the seam that keeps flows sound",
         "TermResolve" => "term anchored to a declared attribute with polarity — antonyms don't collide",

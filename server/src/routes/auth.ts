@@ -1,4 +1,4 @@
-import { createMagicLink, createSessionToken, verifyMagicLink } from '@aelio/core';
+import { createMagicLink, createSessionToken, verifyMagicLink } from '@aelio/core/edge';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireSecret } from '../auth.js';

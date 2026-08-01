@@ -35,6 +35,9 @@ importers:
 
   chat:
     dependencies:
+      '@aelio/chat-sdk':
+        specifier: workspace:*
+        version: link:../packages/chat-sdk
       preact:
         specifier: ^10.26.8
         version: 10.29.2
@@ -87,6 +90,22 @@ importers:
       tsup:
         specifier: ^8.5.0
         version: 8.5.1(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
+  packages/chat-sdk:
+    dependencies:
+      zod:
+        specifier: ^3.25.67
+        version: 3.25.76
+    devDependencies:
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
+      tsx:
+        specifier: ^4.20.3
+        version: 4.22.4
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
@@ -199,6 +218,9 @@ importers:
       '@aelio/channels':
         specifier: workspace:*
         version: link:../packages/channels
+      '@aelio/chat-sdk':
+        specifier: workspace:*
+        version: link:../packages/chat-sdk
       '@aelio/core':
         specifier: workspace:*
         version: link:../packages/core

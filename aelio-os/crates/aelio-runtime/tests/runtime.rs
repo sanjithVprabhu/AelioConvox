@@ -187,7 +187,7 @@ async fn immutable_flow_executes_and_completed_instance_is_not_reentered() {
             instance_id: "instance-1".into(),
             flow_id: "hello".into(),
             flow_rev: "1".into(),
-            input: serde_json::json!({}),
+            input: serde_json::json!({"secret_marker":"do-not-log"}),
         })
         .await
         .unwrap();
@@ -195,6 +195,14 @@ async fn immutable_flow_executes_and_completed_instance_is_not_reentered() {
         panic!("const flow must complete");
     };
     assert_eq!(bag["reply"], "hello");
+    let trace = runtime
+        .invocation_trace("tenant-a", "instance-1", "hello", 1)
+        .unwrap();
+    assert!(!trace.steps.is_empty());
+    assert_eq!(trace.ledger_hash.len(), 64);
+    assert!(!serde_json::to_string(&trace)
+        .unwrap()
+        .contains("do-not-log"));
     assert!(matches!(
         runtime
             .submit(TurnSubmit {

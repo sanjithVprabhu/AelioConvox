@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { listConversationTelemetry, listTurnApiCalls, summarizeTurnApiCalls } from '@aelio/core';
+import { listConversationTelemetry, listTurnApiCalls, summarizeTurnApiCalls } from '@aelio/core/edge';
 import type { FastifyInstance } from 'fastify';
 import { resolvePublicDir } from '../paths.js';
 import type { RuntimeDeps } from '../runtime-deps.js';

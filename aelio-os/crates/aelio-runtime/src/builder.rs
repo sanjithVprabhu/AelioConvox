@@ -17,9 +17,12 @@ use serde_json::Value as Json;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::time::Instant;
 
-const SELECT_PROMPT: &str = "aelio.template.builder_select@1";
-const COMPOSE_PROMPT: &str = "aelio.template.builder_compose@1";
-const DECOMPOSE_PROMPT: &str = "aelio.template.builder_decompose@1";
+const SELECT_PROMPT: &str = "aelio.template.builder_select@2";
+const COMPOSE_PROMPT: &str = "aelio.template.builder_compose@2";
+const DECOMPOSE_PROMPT: &str = "aelio.template.builder_decompose@2";
+const SELECT_MIN_SIMILARITY: f64 = 0.60;
+const SELECT_MIN_MARGIN: f64 = 0.08;
+const SELECT_MAX_ENTROPY: f64 = 0.75;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -128,14 +131,24 @@ impl BuildOracle for HostBuildOracle<'_> {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BuildReactionOutput {
     Selection {
-        selected: Vec<String>,
-        abstain: bool,
+        selected: Vec<SelectionChoice>,
+        #[serde(default)]
+        runners_up: Vec<SelectionRunnerUp>,
+        #[serde(default)]
+        unmet: Vec<String>,
+        #[serde(default)]
+        undeterminable: bool,
     },
     Composition {
-        flow: FlowPush,
+        tree: Vec<crate::HarnessNode>,
+        seams: Vec<crate::DecompositionSeam>,
+        #[serde(default)]
+        undeterminable: bool,
     },
     Decomposition {
         verdict: DecompositionVerdict,
+        #[serde(default)]
+        undeterminable: bool,
         #[serde(default)]
         children: Vec<BuildSpec>,
         #[serde(default)]
@@ -147,6 +160,28 @@ pub enum BuildReactionOutput {
         #[serde(default)]
         detail: String,
     },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectionChoice {
+    pub id: String,
+    pub score: f64,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectionRunnerUp {
+    pub id: String,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CompositionDraft {
+    tree: Vec<crate::HarnessNode>,
+    seams: Vec<crate::DecompositionSeam>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -184,19 +219,32 @@ pub fn builder_vendor_prompts() -> Vec<PromptArtifact> {
     vec![
         seed_prompt(
             "aelio.template.builder_select",
-            "Select only candidate pins supplied in payload; abstain when none is suitable. Return JSON {selected:string[], abstain:bool}. Payload={{payload}}",
-            BTreeMap::from([("selected".into(), "list".into()), ("abstain".into(), "bool".into())]),
+            "2",
+            "Select only candidate pins supplied in payload. Scores are advisory; the kernel thresholds measured_similarity. Return JSON {selected:[{id,score,role}],runners_up:[{id,score}],unmet:string[],undeterminable:bool}. Payload={{payload}}",
+            BTreeMap::from([
+                ("selected".into(), "list".into()),
+                ("runners_up".into(), "list".into()),
+                ("unmet".into(), "list".into()),
+                ("undeterminable".into(), "bool".into()),
+            ]),
         ),
         seed_prompt(
             "aelio.template.builder_compose",
-            "Compose one closed FlowPush JSON using only selected pinned candidates and declared scope. Never invent ids. Payload={{payload}}",
-            BTreeMap::from([("flow".into(), "map".into())]),
+            "2",
+            "Propose only topology using selected immutable artifact pins. Return closed JSON {tree:[{nid,artifact}],seams:[{from,to}],undeterminable}. Never author executable operations, target declarations, imprints, converters, versions, or unoffered pins. Set undeterminable=true when closure cannot be proven from the payload. Payload={{payload}}",
+            BTreeMap::from([
+                ("tree".into(), "list".into()),
+                ("seams".into(), "list".into()),
+                ("undeterminable".into(), "bool".into()),
+            ]),
         ),
         seed_prompt(
             "aelio.template.builder_decompose",
-            "Return closed JSON {verdict,children,seams,parent_complexity,child_complexities,detail}. Every child must be strictly smaller. Seams use tagged parent_input/node_output sources and node_input/parent_output sinks; every required child input and the parent output must have exactly one producer. Do not name converters. Otherwise report atomic or cannot. Payload={{payload}}",
+            "2",
+            "Return closed JSON {verdict,undeterminable,children,seams,parent_complexity,child_complexities,detail}. Every child must be strictly smaller. Seams use tagged parent_input/node_output sources and node_input/parent_output sinks; every required child input and the parent output must have exactly one producer. Do not name converters. Set undeterminable=true with no children or seams when the evidence cannot support a decomposition. Otherwise report atomic or cannot without inventing facts. Payload={{payload}}",
             BTreeMap::from([
                 ("verdict".into(), "str".into()),
+                ("undeterminable".into(), "bool".into()),
                 ("children".into(), "list".into()),
                 ("seams".into(), "list".into()),
                 ("parent_complexity".into(), "int".into()),
@@ -215,11 +263,11 @@ pub fn root_harness_vendor_artifact() -> Result<crate::Artifact, ArtifactError> 
         description: "build, reuse, validate, gate, or report a bounded Aelio artifact".into(),
         inputs: vec![crate::ArtifactInput {
             name: "spec".into(),
-            imprint: "aelio.build_spec@1".into(),
+            imprint: "aelio.build_spec@2".into(),
             required: true,
             sensitivity: "internal".into(),
         }],
-        output: "aelio.build_result@1".into(),
+        output: "aelio.build_result@2".into(),
         budget: crate::BuildBudget {
             max_depth: 4,
             max_children: 8,
@@ -265,7 +313,7 @@ pub fn root_harness_vendor_artifact() -> Result<crate::Artifact, ArtifactError> 
     })?;
     crate::Artifact::new(
         "aelio.root_harness",
-        1,
+        2,
         crate::ArtifactClass::Harness,
         crate::ArtifactTier::Locked,
         "1",
@@ -305,11 +353,22 @@ pub fn root_harness_vendor_artifact() -> Result<crate::Artifact, ArtifactError> 
     )
 }
 
-fn seed_prompt(id: &str, body: &str, output_fields: BTreeMap<String, String>) -> PromptArtifact {
+fn seed_prompt(
+    id: &str,
+    version: &str,
+    body: &str,
+    output_fields: BTreeMap<String, String>,
+) -> PromptArtifact {
+    let output_imprint = match id {
+        "aelio.template.builder_select" => "aelio.selection_result@2",
+        "aelio.template.builder_compose" => "aelio.compose_result@2",
+        "aelio.template.builder_decompose" => "aelio.decompose_result@2",
+        _ => unreachable!("seed prompt id is closed"),
+    };
     let mut prompt = PromptArtifact {
         template_format: 1,
         id: id.into(),
-        version: "1".into(),
+        version: version.into(),
         description: format!("Human-authored root-builder seed prompt {id}."),
         objective: id.into(),
         body: body.into(),
@@ -320,7 +379,7 @@ fn seed_prompt(id: &str, body: &str, output_fields: BTreeMap<String, String>) ->
             required: true,
         }],
         layers: vec![],
-        output_imprint: format!("{}.output@1", id.replace("template.", "")),
+        output_imprint: output_imprint.into(),
         output_fields,
         model: ModelPin {
             id: "aelio.model.builder@1".into(),
@@ -638,56 +697,89 @@ impl Runtime {
         ));
         next.reaction = None;
         match output {
-            BuildReactionOutput::Selection { selected, abstain } => {
-                let candidates: HashSet<_> = next.workspace.candidates.iter().cloned().collect();
-                if selected.len() > 25
-                    || selected.iter().any(|pin| !candidates.contains(pin))
-                    || (!abstain && selected.is_empty())
-                {
-                    return Err(RuntimeError::Invalid(
-                        "selection invented, exceeded, or omitted candidate ids".into(),
-                    ));
-                }
-                if abstain {
+            BuildReactionOutput::Selection {
+                selected,
+                runners_up,
+                unmet,
+                undeterminable,
+            } => {
+                let accepted = validate_measured_selection(
+                    &next,
+                    &selected,
+                    &runners_up,
+                    &unmet,
+                    undeterminable,
+                )?;
+                if accepted.is_empty() {
                     next.workspace.selected.clear();
+                    next.workspace.diagnostic = Some(
+                        "select_abstained: measured similarity, margin, or entropy gate".into(),
+                    );
+                    next.ledger.push("builder:select:abstained".into());
                     next.stage = BuildStage::Decompose;
                 } else {
-                    next.workspace.selected = selected;
+                    next.workspace.selected = accepted;
+                    next.ledger.push("builder:select:measured_pass".into());
                     next.stage = BuildStage::Compose;
                 }
             }
-            BuildReactionOutput::Composition { flow } => {
-                next.workspace.draft = Some(
-                    serde_json::to_value(flow)
-                        .map_err(|error| RuntimeError::Invalid(error.to_string()))?,
-                );
-                next.stage = BuildStage::Validate;
+            BuildReactionOutput::Composition {
+                tree,
+                seams,
+                undeterminable,
+            } => {
+                if undeterminable {
+                    next.workspace.draft = None;
+                    next.workspace.diagnostic =
+                        Some("compose_abstained: topology was undeterminable".into());
+                    next.ledger.push("builder:compose:abstained".into());
+                    next.stage = BuildStage::Decompose;
+                } else {
+                    next.workspace.draft = Some(
+                        serde_json::to_value(CompositionDraft { tree, seams })
+                            .map_err(|error| RuntimeError::Invalid(error.to_string()))?,
+                    );
+                    next.stage = BuildStage::Validate;
+                }
             }
             BuildReactionOutput::Decomposition {
                 verdict,
+                undeterminable,
                 children,
                 seams,
                 parent_complexity,
                 child_complexities,
                 detail,
-            } => match verdict {
-                DecompositionVerdict::Children => {
-                    next.workspace.children = children;
-                    next.workspace.decomposition_seams = seams;
-                    next.workspace.parent_complexity = parent_complexity;
-                    next.workspace.child_complexities = child_complexities;
-                    next.workspace.diagnostic = (!detail.is_empty()).then_some(detail);
-                    next.stage = BuildStage::AdmitChildren;
-                }
-                DecompositionVerdict::Atomic | DecompositionVerdict::Cannot => {
+            } => {
+                if undeterminable {
                     next.workspace.diagnostic = Some(if detail.is_empty() {
-                        "no admitted primitive can satisfy the atomic capability".into()
+                        "decomposition was undeterminable from admitted evidence".into()
                     } else {
                         detail
                     });
+                    next.ledger.push("builder:decompose:undeterminable".into());
                     next.stage = BuildStage::Fail;
+                } else {
+                    match verdict {
+                        DecompositionVerdict::Children => {
+                            next.workspace.children = children;
+                            next.workspace.decomposition_seams = seams;
+                            next.workspace.parent_complexity = parent_complexity;
+                            next.workspace.child_complexities = child_complexities;
+                            next.workspace.diagnostic = (!detail.is_empty()).then_some(detail);
+                            next.stage = BuildStage::AdmitChildren;
+                        }
+                        DecompositionVerdict::Atomic | DecompositionVerdict::Cannot => {
+                            next.workspace.diagnostic = Some(if detail.is_empty() {
+                                "no admitted primitive can satisfy the atomic capability".into()
+                            } else {
+                                detail
+                            });
+                            next.stage = BuildStage::Fail;
+                        }
+                    }
                 }
-            },
+            }
         }
         jobs.commit(tenant, record, next)
             .map(|record| record.job)
@@ -905,7 +997,7 @@ impl Runtime {
             .map(|input| (input.name.as_str(), input.imprint.as_str()))
             .collect();
         let query_tokens = tokens(&record.job.spec.draft.description);
-        let mut candidates: Vec<_> = self
+        let eligible: Vec<_> = self
             .artifact_repository()?
             .list(tenant, 1_000)
             .map_err(artifact_error)?
@@ -931,20 +1023,76 @@ impl Runtime {
                             supplied.contains(&(input.name.as_str(), input.imprint.as_str()))
                         })
             })
-            .map(|candidate| {
-                let score = tokens(&candidate.artifact.description)
-                    .intersection(&query_tokens)
-                    .count();
-                (score, candidate.artifact.key())
-            })
             .collect();
-        candidates.sort_by(|left, right| right.cmp(left));
-        let limit = if record.job.workspace.widened { 50 } else { 25 };
-        let candidates: Vec<_> = candidates
+        let mut scored = eligible
             .into_iter()
-            .take(limit)
-            .map(|(_, pin)| pin)
-            .collect();
+            .map(|candidate| {
+                let candidate_tokens = tokens(&candidate.artifact.description);
+                let overlap = candidate_tokens.intersection(&query_tokens).count();
+                let similarity = token_cosine(&query_tokens, &candidate_tokens);
+                (candidate, overlap, similarity)
+            })
+            .collect::<Vec<_>>();
+        let mut text_order = scored
+            .iter()
+            .map(|(candidate, overlap, _)| (candidate.artifact.key(), *overlap))
+            .collect::<Vec<_>>();
+        text_order.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        let text_ranks = text_order
+            .iter()
+            .enumerate()
+            .map(|(index, (pin, _))| (pin.clone(), u32::try_from(index + 1).unwrap_or(u32::MAX)))
+            .collect::<BTreeMap<_, _>>();
+        let mut vector_order = scored
+            .iter()
+            .map(|(candidate, _, similarity)| (candidate.artifact.key(), *similarity))
+            .collect::<Vec<_>>();
+        vector_order.sort_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        let vector_ranks = vector_order
+            .iter()
+            .enumerate()
+            .map(|(index, (pin, _))| (pin.clone(), u32::try_from(index + 1).unwrap_or(u32::MAX)))
+            .collect::<BTreeMap<_, _>>();
+        let mut measured = scored
+            .drain(..)
+            .map(|(candidate, _, similarity)| {
+                let pin = candidate.artifact.key();
+                let text_rank = text_ranks[&pin];
+                let vector_rank = vector_ranks[&pin];
+                crate::BuildCandidateMeasurement {
+                    pin,
+                    measured_similarity: similarity,
+                    rrf_score: 1.0 / (60.0 + f64::from(text_rank))
+                        + 1.0 / (60.0 + f64::from(vector_rank)),
+                    text_rank,
+                    vector_rank,
+                    interface: candidate.artifact.interface,
+                    description: candidate.artifact.description,
+                }
+            })
+            .collect::<Vec<_>>();
+        measured.sort_by(|left, right| {
+            right
+                .rrf_score
+                .total_cmp(&left.rrf_score)
+                .then_with(|| {
+                    right
+                        .measured_similarity
+                        .total_cmp(&left.measured_similarity)
+                })
+                .then_with(|| left.pin.cmp(&right.pin))
+        });
+        let limit = if record.job.workspace.widened { 50 } else { 25 };
+        measured.truncate(limit);
+        let candidates = measured
+            .iter()
+            .map(|candidate| candidate.pin.clone())
+            .collect::<Vec<_>>();
         if let Some(pin) = candidates.first() {
             if self.verify_reuse_candidate(tenant, &record.job, pin)? {
                 let mut next = record.job.clone();
@@ -968,6 +1116,7 @@ impl Runtime {
         }
         let mut next = record.job.clone();
         next.workspace.candidates = candidates;
+        next.workspace.candidate_measurements = measured;
         next.ledger.push(format!(
             "builder:search:{}",
             next.workspace.candidates.len()
@@ -1075,7 +1224,7 @@ impl Runtime {
         tenant: &str,
         record: BuildJobRecord,
     ) -> Result<BuildAction, RuntimeError> {
-        let flow: FlowPush = serde_json::from_value(
+        let proposal: CompositionDraft = serde_json::from_value(
             record
                 .job
                 .workspace
@@ -1084,99 +1233,29 @@ impl Runtime {
                 .ok_or_else(|| RuntimeError::Internal("compose produced no draft".into()))?,
         )
         .map_err(|error| RuntimeError::Invalid(format!("compose output: {error}")))?;
-        if flow.tenant != tenant
-            || flow.flow_id != record.job.spec.draft.name
-            || flow.flow_rev != record.job.workspace.version.to_string()
-        {
-            return self.fail_job(
-                jobs,
-                tenant,
-                record,
-                "validate",
-                "invented_target",
-                "composed flow changed tenant, name, or assigned version",
-            );
-        }
-        let effects: HashSet<_> = flow
-            .targets
-            .iter()
-            .map(|target| match target.effect {
-                crate::EffectSpec::Pure => ArtifactEffect::Pure,
-                crate::EffectSpec::Read => ArtifactEffect::Read,
-                crate::EffectSpec::Write => ArtifactEffect::Write,
-                crate::EffectSpec::External => ArtifactEffect::External,
-            })
-            .collect();
-        let allowed: HashSet<_> = record
-            .job
-            .spec
-            .draft
-            .policy
-            .allowed_effects
-            .iter()
-            .copied()
-            .collect();
-        if effects.iter().any(|effect| !allowed.contains(effect)) {
-            return self.fail_job(
-                jobs,
-                tenant,
-                record,
-                "validate",
-                "effect_violation",
-                "composed flow exceeds allowed effects",
-            );
-        }
-        match self.validate_composed_catalog(tenant, &record.job, &flow)? {
-            CatalogVerdict::Accept => {}
-            CatalogVerdict::UnknownTarget(detail) => {
-                return self.retry_or_decompose(
-                    jobs,
-                    tenant,
-                    record,
-                    RetryClass::Widen,
-                    "unknown_target",
-                    &detail,
-                )
-            }
-            CatalogVerdict::TypeMismatch(detail) => {
-                return self.retry_or_decompose(
-                    jobs,
-                    tenant,
-                    record,
-                    RetryClass::Recompose,
-                    "type_mismatch",
-                    &detail,
-                )
-            }
-        }
-        let artifact = match self.push_built_flow(flow, &record.job.spec, &record.job.build_id) {
-            Ok(artifact) => artifact,
-            Err(RuntimeError::Kernel { code, detail })
-                if code == "Policy" && detail.contains("lacks a production registry") =>
-            {
-                return self.retry_or_decompose(
-                    jobs,
-                    tenant,
-                    record,
-                    RetryClass::Widen,
-                    "unknown_target",
-                    &detail,
-                )
-            }
+        let harness = match self.validate_composition_graph(tenant, &record.job, &proposal) {
+            Ok(harness) => harness,
+            Err(error @ (RuntimeError::Store(_) | RuntimeError::Internal(_))) => return Err(error),
             Err(error) => {
-                return self.fail_job(
+                let class =
+                    if matches!(error, RuntimeError::NotFound(_) | RuntimeError::Conflict(_)) {
+                        RetryClass::Widen
+                    } else {
+                        RetryClass::Recompose
+                    };
+                return self.retry_or_decompose(
                     jobs,
                     tenant,
                     record,
-                    "validate",
-                    "validation_failed_producer",
+                    class,
+                    "composition_not_closed",
                     &error.to_string(),
-                )
+                );
             }
         };
         let mut next = record.job.clone();
-        next.workspace.assembled_hash = Some(artifact.hash);
-        next.ledger.push("builder:validate:planner_pass".into());
+        next.workspace.harness = Some(harness);
+        next.ledger.push("builder:validate:harness_closed".into());
         next.stage = BuildStage::Assemble;
         commit_progress(jobs, tenant, record, next)
     }
@@ -1634,7 +1713,7 @@ impl Runtime {
             examples,
             serde_json::json!({"harness":harness}),
             crate::Provenance {
-                built_by: Some("aelio.root_harness@1".into()),
+                built_by: Some("aelio.root_harness@2".into()),
                 requester: Some(tenant.into()),
                 build_id: Some(job.build_id.clone()),
                 metadata: serde_json::Map::from_iter([(
@@ -1879,6 +1958,237 @@ impl Runtime {
         Ok((resolved, order))
     }
 
+    /// Resolve a model-proposed topology into a closed executable Harness. The proposal may name
+    /// only node ids, already-selected immutable artifact pins, and endpoint topology. Interfaces,
+    /// effects, converter pins, ordering, and graph closure remain kernel-owned facts.
+    fn validate_composition_graph(
+        &self,
+        tenant: &str,
+        job: &BuildJob,
+        proposal: &CompositionDraft,
+    ) -> Result<crate::HarnessBody, RuntimeError> {
+        if proposal.tree.is_empty()
+            || proposal.tree.len() > 64
+            || proposal.seams.is_empty()
+            || proposal.seams.len() > 1_024
+        {
+            return Err(RuntimeError::Invalid(
+                "composition requires 1..=64 nodes and 1..=1024 seams".into(),
+            ));
+        }
+        let selected: HashSet<_> = job.workspace.selected.iter().map(String::as_str).collect();
+        let allowed: HashSet<_> = job
+            .spec
+            .draft
+            .policy
+            .allowed_effects
+            .iter()
+            .copied()
+            .collect();
+        let repository = self.artifact_repository()?;
+        let mut nodes = BTreeMap::new();
+        for node in &proposal.tree {
+            if !selected.contains(node.artifact.as_str()) {
+                return Err(RuntimeError::Invalid(format!(
+                    "composition named unselected artifact `{}`",
+                    node.artifact
+                )));
+            }
+            let (id, version) = parse_artifact_pin(&node.artifact)?;
+            let record = repository
+                .get(tenant, id, version)
+                .map_err(artifact_error)?
+                .ok_or_else(|| RuntimeError::NotFound(node.artifact.clone()))?;
+            if !matches!(
+                record.status,
+                ArtifactStatus::Canary | ArtifactStatus::Promoted
+            ) {
+                return Err(RuntimeError::Conflict(format!(
+                    "composition artifact `{}` is no longer executable",
+                    node.artifact
+                )));
+            }
+            if record
+                .artifact
+                .effects
+                .iter()
+                .any(|effect| !allowed.contains(effect))
+            {
+                return Err(RuntimeError::Invalid(format!(
+                    "composition artifact `{}` exceeds allowed effects",
+                    node.artifact
+                )));
+            }
+            if nodes.insert(node.nid.clone(), record.artifact).is_some() {
+                return Err(RuntimeError::Invalid(
+                    "composition node ids must be unique".into(),
+                ));
+            }
+        }
+
+        let parent_inputs: BTreeMap<_, _> = job
+            .spec
+            .draft
+            .inputs
+            .iter()
+            .map(|input| (input.name.as_str(), input))
+            .collect();
+        let mut sinks = HashSet::new();
+        let mut edges: BTreeMap<String, BTreeSet<String>> = nodes
+            .keys()
+            .map(|nid| (nid.clone(), BTreeSet::new()))
+            .collect();
+        let mut output_source = None;
+        let mut resolved = Vec::with_capacity(proposal.seams.len());
+        for seam in &proposal.seams {
+            let (from_imprint, from_node) = match &seam.from {
+                crate::HarnessSource::ParentInput { slot } => (
+                    parent_inputs
+                        .get(slot.as_str())
+                        .ok_or_else(|| {
+                            RuntimeError::Invalid(format!(
+                                "seam references unknown parent input `{slot}`"
+                            ))
+                        })?
+                        .imprint
+                        .clone(),
+                    None,
+                ),
+                crate::HarnessSource::NodeOutput { node } => (
+                    nodes
+                        .get(node)
+                        .ok_or_else(|| {
+                            RuntimeError::Invalid(format!(
+                                "seam references unknown producer node `{node}`"
+                            ))
+                        })?
+                        .interface
+                        .output
+                        .clone(),
+                    Some(node.clone()),
+                ),
+            };
+            let (to_imprint, sink_key, to_node) = match &seam.to {
+                crate::HarnessSink::NodeInput { node, slot } => {
+                    let input = nodes
+                        .get(node)
+                        .and_then(|artifact| {
+                            artifact
+                                .interface
+                                .inputs
+                                .iter()
+                                .find(|input| input.name == *slot)
+                        })
+                        .ok_or_else(|| {
+                            RuntimeError::Invalid(format!(
+                                "seam references unknown node input `{node}.{slot}`"
+                            ))
+                        })?;
+                    (
+                        input.imprint.clone(),
+                        format!("node:{node}:{slot}"),
+                        Some(node.clone()),
+                    )
+                }
+                crate::HarnessSink::ParentOutput => {
+                    (job.spec.draft.output.clone(), "parent:output".into(), None)
+                }
+            };
+            if !sinks.insert(sink_key) {
+                return Err(RuntimeError::Invalid(
+                    "each node input and parent output must have exactly one producer".into(),
+                ));
+            }
+            if let (Some(from), Some(to)) = (&from_node, &to_node) {
+                if from == to {
+                    return Err(RuntimeError::Invalid("harness self-cycle".into()));
+                }
+                edges
+                    .get_mut(from)
+                    .expect("validated composition node")
+                    .insert(to.clone());
+            }
+            if matches!(seam.to, crate::HarnessSink::ParentOutput) {
+                output_source = Some(from_node.clone().ok_or_else(|| {
+                    RuntimeError::Invalid(
+                        "composed parent output must be produced by an artifact node".into(),
+                    )
+                })?);
+            }
+            let converter = if from_imprint == to_imprint {
+                None
+            } else {
+                Some(self.resolve_glu_converter(tenant, &from_imprint, &to_imprint)?)
+            };
+            resolved.push(crate::HarnessSeam {
+                from: seam.from.clone(),
+                to: seam.to.clone(),
+                from_imprint,
+                to_imprint,
+                converter,
+            });
+        }
+        for (nid, artifact) in &nodes {
+            for input in artifact
+                .interface
+                .inputs
+                .iter()
+                .filter(|input| input.required)
+            {
+                if !sinks.contains(&format!("node:{nid}:{}", input.name)) {
+                    return Err(RuntimeError::Invalid(format!(
+                        "required node input `{nid}.{}` is unsatisfied",
+                        input.name
+                    )));
+                }
+            }
+        }
+        if !sinks.contains("parent:output") {
+            return Err(RuntimeError::Invalid(
+                "composition does not produce the parent output".into(),
+            ));
+        }
+        let order = topological_order(&edges)?;
+        let output_source = output_source.expect("validated composition output");
+        let mut contributes = HashSet::from([output_source]);
+        loop {
+            let before = contributes.len();
+            for (from, tos) in &edges {
+                if tos.iter().any(|to| contributes.contains(to)) {
+                    contributes.insert(from.clone());
+                }
+            }
+            if contributes.len() == before {
+                break;
+            }
+        }
+        if contributes.len() != nodes.len() {
+            return Err(RuntimeError::Invalid(
+                "composition contains nodes that do not contribute to parent output".into(),
+            ));
+        }
+        let pins: BTreeMap<_, _> = proposal
+            .tree
+            .iter()
+            .map(|node| (node.nid.as_str(), node.artifact.as_str()))
+            .collect();
+        let harness = crate::HarnessBody {
+            nodes: order
+                .into_iter()
+                .map(|nid| crate::HarnessNode {
+                    artifact: pins
+                        .get(nid.as_str())
+                        .expect("topology node retains immutable pin")
+                        .to_string(),
+                    nid,
+                })
+                .collect(),
+            seams: resolved,
+        };
+        harness.validate_shape().map_err(artifact_error)?;
+        Ok(harness)
+    }
+
     fn resolve_glu_converter(
         &self,
         tenant: &str,
@@ -1938,6 +2248,7 @@ impl Runtime {
                 next.workspace.widened = true;
                 next.workspace.selected.clear();
                 next.workspace.candidates.clear();
+                next.workspace.candidate_measurements.clear();
                 next.stage = BuildStage::Search;
                 true
             }
@@ -1961,114 +2272,6 @@ impl Runtime {
         commit_progress(jobs, tenant, record, next)
     }
 
-    fn validate_composed_catalog(
-        &self,
-        tenant: &str,
-        job: &BuildJob,
-        flow: &FlowPush,
-    ) -> Result<CatalogVerdict, RuntimeError> {
-        let repository = self.artifact_repository()?;
-        let mut target_catalog: BTreeMap<String, Json> = BTreeMap::new();
-        let mut prompt_catalog: BTreeMap<String, Json> = BTreeMap::new();
-        for pin in &job.workspace.selected {
-            let (id, version) = parse_artifact_pin(pin)?;
-            let record = repository
-                .get(tenant, id, version)
-                .map_err(artifact_error)?
-                .ok_or_else(|| RuntimeError::NotFound(pin.clone()))?;
-            if !matches!(
-                record.status,
-                ArtifactStatus::Canary | ArtifactStatus::Promoted
-            ) {
-                return Ok(CatalogVerdict::UnknownTarget(format!(
-                    "selected artifact `{pin}` is no longer executable"
-                )));
-            }
-            for field in ["targets", "prompts"] {
-                let Some(items) = record.artifact.body.get(field).and_then(Json::as_array) else {
-                    continue;
-                };
-                for item in items {
-                    let Some(id) = item
-                        .get(if field == "targets" {
-                            "id"
-                        } else {
-                            "target_id"
-                        })
-                        .and_then(Json::as_str)
-                    else {
-                        return Err(RuntimeError::Internal(format!(
-                            "selected artifact `{pin}` has a corrupt {field} catalog"
-                        )));
-                    };
-                    let catalog = if field == "targets" {
-                        &mut target_catalog
-                    } else {
-                        &mut prompt_catalog
-                    };
-                    if let Some(existing) = catalog.insert(id.into(), item.clone()) {
-                        if existing != *item {
-                            return Ok(CatalogVerdict::TypeMismatch(format!(
-                                "selected artifacts disagree on declaration `{id}`"
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-        for target in &flow.targets {
-            let rendered = serde_json::to_value(target)
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-            match target_catalog.get(&target.id) {
-                None => {
-                    return Ok(CatalogVerdict::UnknownTarget(format!(
-                        "target `{}` was not supplied by the selected artifacts",
-                        target.id
-                    )))
-                }
-                Some(expected) if expected != &rendered => {
-                    return Ok(CatalogVerdict::TypeMismatch(format!(
-                        "target `{}` changed its pinned declaration",
-                        target.id
-                    )))
-                }
-                Some(_) => {}
-            }
-        }
-        for prompt in &flow.prompts {
-            let rendered = serde_json::to_value(prompt)
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-            match prompt_catalog.get(&prompt.target_id) {
-                None => {
-                    return Ok(CatalogVerdict::UnknownTarget(format!(
-                        "prompt target `{}` was not supplied by the selected artifacts",
-                        prompt.target_id
-                    )))
-                }
-                Some(expected) if expected != &rendered => {
-                    return Ok(CatalogVerdict::TypeMismatch(format!(
-                        "prompt target `{}` changed its admitted declaration",
-                        prompt.target_id
-                    )))
-                }
-                Some(_) => {}
-            }
-        }
-        let declared: HashSet<_> = flow
-            .targets
-            .iter()
-            .map(|target| target.id.as_str())
-            .collect();
-        let mut calls = Vec::new();
-        collect_call_ids(&flow.program, &mut calls);
-        if let Some(id) = calls.into_iter().find(|id| !declared.contains(id.as_str())) {
-            return Ok(CatalogVerdict::UnknownTarget(format!(
-                "Call `{id}` has no selected target declaration"
-            )));
-        }
-        Ok(CatalogVerdict::Accept)
-    }
-
     fn verify_reuse_candidate(
         &self,
         tenant: &str,
@@ -2081,6 +2284,16 @@ impl Runtime {
             .get(tenant, id, version)
             .map_err(artifact_error)?
             .ok_or_else(|| RuntimeError::NotFound(pin.into()))?;
+        if record.artifact.interface.inputs != job.spec.draft.inputs
+            || record.artifact.interface.output != job.spec.draft.output
+            || record
+                .artifact
+                .effects
+                .iter()
+                .any(|effect| !job.spec.draft.policy.allowed_effects.contains(effect))
+        {
+            return Ok(false);
+        }
         let examples_json = serde_json::to_value(&job.spec.draft.examples)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         let examples_hash = value_hash(
@@ -2156,12 +2369,6 @@ enum RetryClass {
     Recompose,
 }
 
-enum CatalogVerdict {
-    Accept,
-    UnknownTarget(String),
-    TypeMismatch(String),
-}
-
 fn commit_progress(
     jobs: &mut BuildJobRepository<aelio_store::EmbeddedStore>,
     tenant: &str,
@@ -2206,7 +2413,12 @@ fn reaction_payload(job: &BuildJob, kind: BuildReactionKind) -> Result<Json, Run
     Ok(match kind {
         BuildReactionKind::Select => serde_json::json!({
             "spec": interface,
-            "candidates": job.workspace.candidates,
+            "candidates": job.workspace.candidate_measurements,
+            "thresholds": {
+                "min_measured_similarity": SELECT_MIN_SIMILARITY,
+                "min_top_margin": SELECT_MIN_MARGIN,
+                "max_normalized_entropy": SELECT_MAX_ENTROPY,
+            },
         }),
         BuildReactionKind::Compose => serde_json::json!({
             "spec": interface,
@@ -2285,18 +2497,174 @@ fn validate_reaction_output(
     job: &BuildJob,
     output: &BuildReactionOutput,
 ) -> Result<(), RuntimeError> {
-    if let BuildReactionOutput::Selection { selected, abstain } = output {
-        let candidates: HashSet<_> = job.workspace.candidates.iter().collect();
-        if selected.len() > 25
-            || selected.iter().any(|pin| !candidates.contains(pin))
-            || (!abstain && selected.is_empty())
-        {
-            return Err(RuntimeError::Invalid(
-                "selection invented, exceeded, or omitted candidate ids".into(),
-            ));
+    match output {
+        BuildReactionOutput::Selection {
+            selected,
+            runners_up,
+            unmet,
+            undeterminable,
+        } => {
+            validate_measured_selection(job, selected, runners_up, unmet, *undeterminable)?;
+        }
+        BuildReactionOutput::Composition {
+            tree,
+            seams,
+            undeterminable,
+        } => {
+            if tree.len() > 64 || seams.len() > 1_024 {
+                return Err(RuntimeError::Invalid(
+                    "composition result exceeds closed bounds".into(),
+                ));
+            }
+            if !undeterminable && (tree.is_empty() || seams.is_empty()) {
+                return Err(RuntimeError::Invalid(
+                    "determinate composition requires a non-empty tree and seams".into(),
+                ));
+            }
+            let offered: HashSet<_> = job.workspace.selected.iter().map(String::as_str).collect();
+            if tree
+                .iter()
+                .any(|node| !offered.contains(node.artifact.as_str()))
+            {
+                return Err(RuntimeError::Invalid(
+                    "composition may name only selected immutable artifact pins".into(),
+                ));
+            }
+        }
+        BuildReactionOutput::Decomposition {
+            verdict,
+            undeterminable,
+            children,
+            seams,
+            child_complexities,
+            detail,
+            ..
+        } => {
+            if children.len() > 64
+                || seams.len() > 1_024
+                || child_complexities.len() > 64
+                || detail.len() > 4_096
+            {
+                return Err(RuntimeError::Invalid(
+                    "decomposition result exceeds closed bounds".into(),
+                ));
+            }
+            if *undeterminable
+                && (!children.is_empty()
+                    || !seams.is_empty()
+                    || !child_complexities.is_empty()
+                    || matches!(verdict, DecompositionVerdict::Children))
+            {
+                return Err(RuntimeError::Invalid(
+                    "undeterminable decomposition must not invent children, seams, or complexity"
+                        .into(),
+                ));
+            }
         }
     }
     Ok(())
+}
+
+fn validate_measured_selection(
+    job: &BuildJob,
+    selected: &[SelectionChoice],
+    runners_up: &[SelectionRunnerUp],
+    unmet: &[String],
+    undeterminable: bool,
+) -> Result<Vec<String>, RuntimeError> {
+    if selected.len() > 25
+        || runners_up.len() > 25
+        || unmet.len() > 64
+        || unmet.iter().any(|need| need.is_empty() || need.len() > 512)
+    {
+        return Err(RuntimeError::Invalid(
+            "selection result exceeds closed bounds".into(),
+        ));
+    }
+    let offered = job
+        .workspace
+        .candidate_measurements
+        .iter()
+        .map(|candidate| (candidate.pin.as_str(), candidate.measured_similarity))
+        .collect::<BTreeMap<_, _>>();
+    if offered.len() != job.workspace.candidates.len() {
+        return Err(RuntimeError::Invalid(
+            "selection lacks kernel candidate measurements".into(),
+        ));
+    }
+    let mut selected_ids = HashSet::new();
+    for choice in selected {
+        if !offered.contains_key(choice.id.as_str())
+            || !selected_ids.insert(choice.id.as_str())
+            || !choice.score.is_finite()
+            || !(0.0..=1.0).contains(&choice.score)
+            || choice.role.is_empty()
+            || choice.role.len() > 256
+        {
+            return Err(RuntimeError::Invalid(
+                "selection invented, duplicated, or malformed a candidate".into(),
+            ));
+        }
+    }
+    let mut runner_ids = HashSet::new();
+    for runner in runners_up {
+        if !offered.contains_key(runner.id.as_str())
+            || selected_ids.contains(runner.id.as_str())
+            || !runner_ids.insert(runner.id.as_str())
+            || !runner.score.is_finite()
+            || !(0.0..=1.0).contains(&runner.score)
+        {
+            return Err(RuntimeError::Invalid(
+                "selection runner-up is invented, selected, duplicated, or malformed".into(),
+            ));
+        }
+    }
+    if undeterminable || selected.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let similarities = selected
+        .iter()
+        .map(|choice| offered[choice.id.as_str()])
+        .collect::<Vec<_>>();
+    let minimum = similarities.iter().copied().fold(f64::INFINITY, f64::min);
+    let top_selected = similarities
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    let top_unselected = offered
+        .iter()
+        .filter(|(pin, _)| !selected_ids.contains(**pin))
+        .map(|(_, similarity)| *similarity)
+        .fold(0.0, f64::max);
+    let entropy = normalized_softmax_entropy(&similarities);
+    if minimum < SELECT_MIN_SIMILARITY
+        || top_selected - top_unselected < SELECT_MIN_MARGIN
+        || entropy > SELECT_MAX_ENTROPY
+    {
+        return Ok(Vec::new());
+    }
+    Ok(selected.iter().map(|choice| choice.id.clone()).collect())
+}
+
+fn normalized_softmax_entropy(values: &[f64]) -> f64 {
+    if values.len() <= 1 {
+        return 0.0;
+    }
+    let maximum = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let weights = values
+        .iter()
+        .map(|value| (value - maximum).exp())
+        .collect::<Vec<_>>();
+    let total: f64 = weights.iter().sum();
+    let entropy = weights
+        .iter()
+        .map(|weight| {
+            let probability = weight / total;
+            -probability * probability.ln()
+        })
+        .sum::<f64>();
+    entropy / (values.len() as f64).ln()
 }
 
 fn parse_artifact_pin(pin: &str) -> Result<(&str, u32), RuntimeError> {
@@ -2312,27 +2680,6 @@ fn parse_artifact_pin(pin: &str) -> Result<(&str, u32), RuntimeError> {
         )));
     }
     Ok((id, version))
-}
-
-fn collect_call_ids(value: &Json, into: &mut Vec<String>) {
-    match value {
-        Json::Object(map) => {
-            if map.get("op").and_then(Json::as_str) == Some("Call") {
-                if let Some(id) = map.get("id").and_then(Json::as_str) {
-                    into.push(id.into());
-                }
-            }
-            for child in map.values() {
-                collect_call_ids(child, into);
-            }
-        }
-        Json::Array(values) => {
-            for child in values {
-                collect_call_ids(child, into);
-            }
-        }
-        Json::Null | Json::Bool(_) | Json::Number(_) | Json::String(_) => {}
-    }
 }
 
 fn topological_order(
@@ -2431,6 +2778,14 @@ fn tokens(text: &str) -> BTreeSet<String> {
         .take(64)
         .map(str::to_owned)
         .collect()
+}
+
+fn token_cosine(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64 {
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+    let intersection = left.intersection(right).count() as f64;
+    (intersection / ((left.len() as f64).sqrt() * (right.len() as f64).sqrt())).clamp(0.0, 1.0)
 }
 
 fn normalize_need(description: &str, fallback: &str) -> String {

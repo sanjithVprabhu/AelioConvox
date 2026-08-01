@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { verifySessionToken, withSessionLock } from '@aelio/core';
+import { verifySessionToken, withSessionLock } from '@aelio/core/edge';
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { resolvePublicDir } from '../paths.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 import { executeConversationTurn } from '../conversation-turn.js';
 import { z } from 'zod';
+import { CORE_KINDS, makeHello, intersectKinds } from '@aelio/chat-sdk';
 import { MAX_WS_FRAME_BYTES } from '@aelio/protocol';
 
 const WIDGET_WS_PATH = '/widget/ws';
@@ -18,6 +19,18 @@ const ClientMessageSchema = z.discriminatedUnion('type', [
     customerId: z.string().min(1),
     email: z.string().email().optional(),
     authToken: z.string().min(1).optional(),
+    hello: z
+      .object({
+        protocol: z.literal('aelio-render@v1'),
+        kinds: z.array(z.string()).min(1),
+        limits: z
+          .object({
+            max_blocks: z.number().int().positive().optional(),
+            max_nesting: z.number().int().positive().optional(),
+          })
+          .optional(),
+      })
+      .optional(),
   }),
   z.object({
     type: z.literal('message'),
@@ -174,7 +187,21 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
             },
             'Widget client initialized',
           );
-          socket.send(JSON.stringify({ type: 'ready', customerId }));
+          const hello = message.hello ?? makeHello();
+          const accepted = intersectKinds(hello.kinds, CORE_KINDS);
+          const sessionId = randomUUID();
+          socket.send(
+            JSON.stringify({
+              type: 'ready',
+              customerId,
+              welcome: {
+                session_id: sessionId,
+                accepted_kinds: accepted.length ? accepted : ['text@1'],
+                server_limits: { max_blocks: 64, max_nesting: 4 },
+                protocol: 'aelio-render@v1',
+              },
+            }),
+          );
           return;
         }
 
@@ -186,7 +213,7 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
         socket.send(JSON.stringify({ type: 'typing', active: true }));
 
         try {
-          const { reply, turnId, awaitingConfirmation } = await executeConversationTurn(
+          const { reply, frame, turnId, awaitingConfirmation } = await executeConversationTurn(
             deps,
             {
               customerExternalId: customerId,
@@ -206,6 +233,7 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
               JSON.stringify({
                 type: 'confirmation',
                 prompt: reply,
+                frame,
                 turnId,
               }),
             );
@@ -215,6 +243,7 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
                 type: 'message',
                 role: 'assistant',
                 content: reply,
+                frame,
                 turnId,
               }),
             );

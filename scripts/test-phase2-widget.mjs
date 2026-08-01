@@ -36,8 +36,14 @@ socket.on('open', async () => {
     if (!reply.content.toLowerCase().includes('ship')) {
       throw new Error('Expected shipping-related reply from SDK tool loop');
     }
+    if (!reply.frame || reply.frame.frame !== 'render' || !Array.isArray(reply.frame.blocks)) {
+      throw new Error('Expected Render Protocol frame on assistant message');
+    }
+    if (reply.frame.blocks[0]?.kind !== 'text@1' && !reply.frame.blocks[0]?.fallback) {
+      throw new Error(`Unexpected first block kind: ${reply.frame.blocks[0]?.kind}`);
+    }
 
-    console.log('[Phase 2] PASSED — Web widget → LLM → SDK → reply');
+    console.log('[Phase 2] PASSED — Web widget → LLM → SDK → RenderFrame reply');
     socket.close();
     process.exit(0);
   } catch (error) {

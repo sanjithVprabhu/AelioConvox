@@ -43,9 +43,9 @@ pub use imprint::{
     ImprintType,
 };
 pub use job::{
-    BuildBudgetAccount, BuildBudgetCharge, BuildBudgetRepository, BuildJob, BuildJobRecord,
-    BuildJobRepository, BuildLineage, BuildReaction, BuildReactionKind, BuildReactionStatus,
-    BuildStage, BuildWorkspace, BUILD_BUDGET_TABLE, BUILD_JOB_TABLE,
+    BuildBudgetAccount, BuildBudgetCharge, BuildBudgetRepository, BuildCandidateMeasurement,
+    BuildJob, BuildJobRecord, BuildJobRepository, BuildLineage, BuildReaction, BuildReactionKind,
+    BuildReactionStatus, BuildStage, BuildWorkspace, BUILD_BUDGET_TABLE, BUILD_JOB_TABLE,
 };
 
 pub const ARTIFACT_TABLE: &str = "artifacts";

@@ -1038,6 +1038,12 @@ impl<'a> TurnRuntime<'a> {
                         detail: format!("{tool} success"),
                     });
                 }
+                for trace in &frame.artifact_traces {
+                    steps.push(TurnTraceStep {
+                        name: "Artifact.Ledger".into(),
+                        detail: trace.clone(),
+                    });
+                }
                 if let Some(reply) = frame.reply {
                     return TierPathOutcome {
                         reply,
@@ -1085,6 +1091,7 @@ impl<'a> TurnRuntime<'a> {
                     via: ExpressVia::Ask,
                     template_id: None,
                     claim_refs: vec![],
+                    frame: None,
                 },
                 llm_calls: 0,
                 opened_loop: true,
@@ -1291,6 +1298,7 @@ impl<'a> TurnRuntime<'a> {
                         via: ExpressVia::Template,
                         template_id: Some(format!("{}_missing", step.id)),
                         claim_refs: vec![],
+                        frame: None,
                     },
                     instance,
                     steps,
@@ -1304,6 +1312,12 @@ impl<'a> TurnRuntime<'a> {
                     steps.push(TurnTraceStep {
                         name: "Invoke.Call".into(),
                         detail: format!("{tool_id} success"),
+                    });
+                }
+                for trace in &frame.artifact_traces {
+                    steps.push(TurnTraceStep {
+                        name: "Artifact.Ledger".into(),
+                        detail: trace.clone(),
                     });
                 }
                 let policy = PolicyCtx {
@@ -1768,6 +1782,7 @@ impl<'a> TurnRuntime<'a> {
                         via: ExpressVia::Ask,
                         template_id: None,
                         claim_refs,
+                        frame: None,
                     },
                     llm_calls,
                     tier: None,
@@ -1807,6 +1822,7 @@ impl<'a> TurnRuntime<'a> {
                     via: ExpressVia::Confirm,
                     template_id: None,
                     claim_refs,
+                    frame: None,
                 },
                 llm_calls,
                 tier: None,
@@ -1827,6 +1843,7 @@ impl<'a> TurnRuntime<'a> {
                 via: ExpressVia::Synthesize,
                 template_id: None,
                 claim_refs,
+                frame: None,
             },
             llm_calls,
             tier: None,
@@ -2010,6 +2027,7 @@ impl<'a> TurnRuntime<'a> {
                         via: result.reply.via,
                         template_id: result.reply.template_id,
                         claim_refs: refs,
+                        frame: None,
                     },
                     llm_calls: calls,
                     tier: result.tier,
@@ -2030,6 +2048,7 @@ impl<'a> TurnRuntime<'a> {
                 via: ExpressVia::Synthesize,
                 template_id: None,
                 claim_refs: refs,
+                frame: None,
             },
             llm_calls: calls,
             tier: None,
@@ -2162,7 +2181,7 @@ impl<'a> TurnRuntime<'a> {
                     .extend(claims.iter().map(|claim| claim.id.clone()));
                 reply
             })
-    }
+        }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2262,6 +2281,7 @@ fn multi_clause_completed(text: &str, steps: Vec<TurnTraceStep>) -> TurnResult {
             via: ExpressVia::Template,
             template_id: Some("multi_clause_cancelled".into()),
             claim_refs: vec![],
+            frame: None,
         },
         llm_calls: 0,
         tier: None,

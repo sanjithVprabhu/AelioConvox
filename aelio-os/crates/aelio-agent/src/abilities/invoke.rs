@@ -34,6 +34,12 @@ pub trait ToolHost: Send {
     fn invocation_count_for(&self, _tool_id: &str) -> Option<usize> {
         None
     }
+
+    /// Metadata-only narrative from an authoritative execution engine. Implementations must not
+    /// include raw arguments or results. The value is consumed once by the caller.
+    fn take_decision_trace(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// In-memory mock host for tests.
@@ -93,6 +99,7 @@ pub struct InvokeReceipt {
     pub extracted: IndexMap<String, Value>,
     pub used_llm_interpret: bool,
     pub sig_hash: String,
+    pub decision_trace: Option<String>,
 }
 
 /// Full tool call lifecycle (minus CollectAllSlots parking).
@@ -140,6 +147,7 @@ pub fn tool_call_block(
     let raw = context
         .host
         .call_with_context(tool, args, &key, context.user_id, context.channel)?;
+    let decision_trace = context.host.take_decision_trace();
     context.once_seen.insert(key.clone());
 
     // Signature on RAW before cleaning
@@ -191,6 +199,7 @@ pub fn tool_call_block(
         extracted,
         used_llm_interpret: used_llm,
         sig_hash,
+        decision_trace,
     })
 }
 

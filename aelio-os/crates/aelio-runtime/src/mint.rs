@@ -525,17 +525,18 @@ impl MintDrafter for HostMintDrafter<'_> {
         });
         let composed = format!("{root_text}\n\nMINT REQUEST:\n{user}");
         let prompt_hash = blake3::hash(composed.as_bytes()).to_hex().to_string();
+        let correlation = format!("mint:{prompt_hash}");
         let content = self
             .runtime
-            .complete_model_text(
-                &request.tenant,
-                &composed,
-                &prompt_hash,
-                "aelio.model.mint@1",
-                16_384,
-                0.0,
-                &format!("mint:{prompt_hash}"),
-            )
+            .complete_model_text(crate::ModelCompletionRequest {
+                tenant: &request.tenant,
+                prompt: &composed,
+                prompt_hash: &prompt_hash,
+                model: "aelio.model.mint@1",
+                max_tokens: 16_384,
+                temperature: 0.0,
+                correlation: &correlation,
+            })
             .map_err(|error| MintError::Drafter(error.to_string()))?;
         let mut draft: aelio_prompt::MintDraft =
             serde_json::from_str(&content).map_err(|e| MintError::Drafter(e.to_string()))?;
@@ -568,15 +569,18 @@ impl crate::PromptEvaluator for HostPromptEvaluator<'_> {
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0);
         let prompt_hash = blake3::hash(rendered.as_bytes()).to_hex().to_string();
-        let content = self.runtime.complete_model_text(
-            self.tenant,
-            rendered,
-            &prompt_hash,
-            &artifact.model.id,
-            16_384,
-            temperature,
-            &format!("prompt-gate:{}:{prompt_hash}", artifact.key()),
-        )?;
+        let correlation = format!("prompt-gate:{}:{prompt_hash}", artifact.key());
+        let content = self
+            .runtime
+            .complete_model_text(crate::ModelCompletionRequest {
+                tenant: self.tenant,
+                prompt: rendered,
+                prompt_hash: &prompt_hash,
+                model: &artifact.model.id,
+                max_tokens: 16_384,
+                temperature,
+                correlation: &correlation,
+            })?;
         serde_json::from_str(&content)
             .map_err(|error| RuntimeError::Host(format!("prompt gate output is not JSON: {error}")))
     }

@@ -29,7 +29,21 @@ const TurnReplySchema = z.discriminatedUnion('outcome', [
 ]);
 
 const AgentTurnReplySchema = z.object({
-  reply: z.object({ text: z.string() }).passthrough(),
+  reply: z
+    .object({
+      text: z.string(),
+      frame: z
+        .object({
+          frame: z.literal('render'),
+          frame_id: z.string(),
+          mode: z.enum(['append', 'patch', 'replace_turn']),
+          turn_id: z.string(),
+          blocks: z.array(z.record(z.unknown())).min(1),
+        })
+        .passthrough()
+        .optional(),
+    })
+    .passthrough(),
   suspended: z.boolean(),
   llm_calls: z.number().int().nonnegative(),
   steps: z.array(z.object({ name: z.string(), detail: z.string() })),

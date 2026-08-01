@@ -86,6 +86,20 @@ pub struct BuildReaction {
     pub output_hash: Option<String>,
 }
 
+/// Kernel-owned measurements attached to one offered artifact. Model-emitted scores never replace
+/// these values and are used only for advisory ordering.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuildCandidateMeasurement {
+    pub pin: String,
+    pub measured_similarity: f64,
+    pub rrf_score: f64,
+    pub text_rank: u32,
+    pub vector_rank: u32,
+    pub interface: super::ArtifactInterface,
+    pub description: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuildWorkspace {
@@ -94,6 +108,8 @@ pub struct BuildWorkspace {
     pub widened: bool,
     pub recomposed: bool,
     pub candidates: Vec<String>,
+    #[serde(default)]
+    pub candidate_measurements: Vec<BuildCandidateMeasurement>,
     pub selected: Vec<String>,
     pub draft: Option<serde_json::Value>,
     pub diagnostic: Option<String>,
@@ -259,6 +275,7 @@ impl BuildJob {
             return Err(ArtifactError::Invalid("invalid build ledger".into()));
         }
         if self.workspace.candidates.len() > MAX_CANDIDATES
+            || self.workspace.candidate_measurements.len() > MAX_CANDIDATES
             || self.workspace.selected.len() > MAX_CANDIDATES
             || self.workspace.children.len() > MAX_CHILDREN
             || self.workspace.decomposition_seams.len() > 1_024
@@ -271,6 +288,23 @@ impl BuildJob {
             return Err(ArtifactError::Invalid(
                 "build workspace exceeds bounds".into(),
             ));
+        }
+        let mut measured = std::collections::HashSet::new();
+        for candidate in &self.workspace.candidate_measurements {
+            validate_pin(&candidate.pin)?;
+            if !candidate.measured_similarity.is_finite()
+                || !(0.0..=1.0).contains(&candidate.measured_similarity)
+                || !candidate.rrf_score.is_finite()
+                || candidate.rrf_score < 0.0
+                || candidate.text_rank == 0
+                || candidate.vector_rank == 0
+                || candidate.description.len() > 16 * 1024
+                || !measured.insert(candidate.pin.as_str())
+            {
+                return Err(ArtifactError::Invalid(
+                    "build candidate measurements are invalid".into(),
+                ));
+            }
         }
         if self
             .workspace

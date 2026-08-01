@@ -287,13 +287,18 @@ async fn process_turn(
         runtime
             .run_turn_on_channel(
                 DurableTurnRequest {
-                    turn_id: request.turn_id,
+                    turn_id: request.turn_id.clone(),
                     user_id: request.user_id,
                     utterance: request.utterance,
                 },
                 &request.channel,
             )
-            .map(Json)
+            .map(|mut result| {
+                let _ = result
+                    .reply
+                    .ensure_render_frame(&request.turn_id, &format!("rf-{}", result.steps.len()));
+                Json(result)
+            })
             .map_err(ApiError)
     })
     .await

@@ -95,6 +95,9 @@ async function waitForSdk(url, attempts = 40) {
 
 const root = process.cwd();
 
+console.log('\n=== Verifying production authority graph ===');
+await run('node', ['scripts/check-production-authority.mjs']);
+
 console.log('\n=== Building authoritative Rust Aelio server ===');
 await run('cargo', [
   'build',

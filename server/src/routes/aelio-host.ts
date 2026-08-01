@@ -1,4 +1,4 @@
-import { embed } from '@aelio/core';
+import { embed } from '@aelio/core/edge';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { secretsMatch } from '../auth.js';

@@ -45,7 +45,8 @@
     "dev": "vite build --watch"
   },
   "dependencies": {
-    "preact": "^10.26.8"
+    "preact": "^10.26.8",
+    "@aelio/chat-sdk": "workspace:*"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.1",

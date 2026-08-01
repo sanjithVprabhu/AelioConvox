@@ -7,6 +7,7 @@ use crate::provider::{
 };
 use crate::tenant::PersonalitySpec;
 use crate::types::{AelioResult, ReplyType, Sensitivity, Value};
+use aelio_render::{confirm_block, text_frame, validate_render_frame, RenderFrame, RenderMode};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +18,54 @@ pub struct Utterance {
     pub template_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub claim_refs: Vec<String>,
+    /// Render Protocol frame (AELIO_RENDER_PROTOCOL). When absent at construction,
+    /// [`Utterance::ensure_render_frame`] fills a frame from `text` / `via`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<RenderFrame>,
+}
+
+impl Utterance {
+    /// Ensure a validated RenderFrame exists.
+    /// Confirm utterances get `confirm@1` (+ text fallback); others get `text@1`.
+    pub fn ensure_render_frame(&mut self, turn_id: &str, frame_id: &str) -> Result<(), String> {
+        if self.frame.is_none() {
+            let frame = match self.via {
+                ExpressVia::Confirm => RenderFrame {
+                    frame_type: "render".into(),
+                    frame_id: frame_id.into(),
+                    mode: RenderMode::Append,
+                    turn_id: turn_id.into(),
+                    blocks: vec![confirm_block(
+                        "c0",
+                        &self.text,
+                        "Confirm",
+                        "Cancel",
+                        false,
+                        None,
+                    )],
+                },
+                _ => text_frame(turn_id, frame_id, &self.text),
+            };
+            validate_render_frame(&frame, None).map_err(|e| e.to_string())?;
+            self.frame = Some(frame);
+        } else if let Some(frame) = &self.frame {
+            validate_render_frame(frame, None).map_err(|e| e.to_string())?;
+            if self.text.trim().is_empty() {
+                self.text = aelio_render::flatten_to_text(frame);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn plain(text: impl Into<String>, via: ExpressVia) -> Self {
+        Self {
+            text: text.into(),
+            via,
+            template_id: None,
+            claim_refs: vec![],
+            frame: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +154,7 @@ pub fn synthesize_with_provider(
         via: ExpressVia::Synthesize,
         template_id: None,
         claim_refs: vec![],
+        frame: None,
     })
 }
 
@@ -181,6 +231,7 @@ pub fn synthesize_grounded_with_provider(
         via: ExpressVia::Synthesize,
         template_id: None,
         claim_refs,
+        frame: None,
     })
 }
 
@@ -195,6 +246,7 @@ pub fn template(id: &str, body: &str, bindings: &IndexMap<String, String>) -> Ut
         via: ExpressVia::Template,
         template_id: Some(id.into()),
         claim_refs: vec![],
+        frame: None,
     }
 }
 
@@ -210,6 +262,7 @@ pub fn ask(missing_slot: &str, hint: Option<&str>, attempt_n: u32) -> Utterance 
         via: ExpressVia::Ask,
         template_id: None,
         claim_refs: vec![],
+        frame: None,
     }
 }
 
@@ -219,6 +272,7 @@ pub fn confirm(action: &str, args_summary: &str) -> Utterance {
         via: ExpressVia::Confirm,
         template_id: None,
         claim_refs: vec![],
+        frame: None,
     }
 }
 
@@ -229,6 +283,7 @@ pub fn clarify(candidates: &[String]) -> Utterance {
         via: ExpressVia::Clarify,
         template_id: None,
         claim_refs: vec![],
+        frame: None,
     }
 }
 
@@ -256,6 +311,7 @@ pub fn synthesize(
                 via: ExpressVia::Synthesize,
                 template_id: None,
                 claim_refs: vec![],
+                frame: None,
             },
             true,
         );
@@ -267,6 +323,7 @@ pub fn synthesize(
             via: ExpressVia::Synthesize,
             template_id: None,
             claim_refs: vec![],
+            frame: None,
         },
         false,
     )
@@ -278,6 +335,7 @@ pub fn apologize(reason: &str, recovery: &str) -> Utterance {
         via: ExpressVia::Apologize,
         template_id: None,
         claim_refs: vec![],
+        frame: None,
     }
 }
 
@@ -328,6 +386,7 @@ pub fn greeting_template(
         via: ExpressVia::Template,
         template_id: Some("greeting".into()),
         claim_refs: vec![],
+        frame: None,
     }
 }
 
@@ -336,4 +395,31 @@ pub fn utterance_to_value(u: &Utterance) -> Value {
         "text".into() => Value::str(&u.text),
         "via".into() => Value::str(format!("{:?}", u.via).to_lowercase()),
     })
+}
+
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+
+    #[test]
+    fn ensure_render_frame_emits_text() {
+        let mut u = apologize("timeout", "try again");
+        u.ensure_render_frame("turn-1", "rf-1").unwrap();
+        let frame = u.frame.as_ref().unwrap();
+        assert_eq!(frame.frame_type, "render");
+        assert_eq!(frame.blocks[0].kind, "text@1");
+        let json = serde_json::to_value(frame).unwrap();
+        assert_eq!(json["frame"], "render");
+        assert_eq!(json["blocks"][0]["body"]["md"], u.text);
+    }
+
+    #[test]
+    fn ensure_render_frame_emits_confirm() {
+        let mut u = confirm("cancel_order", "order=42");
+        u.ensure_render_frame("turn-2", "rf-2").unwrap();
+        let frame = u.frame.as_ref().unwrap();
+        assert_eq!(frame.blocks[0].kind, "confirm@1");
+        assert!(frame.blocks[0].fallback.is_some());
+    }
 }

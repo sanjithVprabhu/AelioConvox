@@ -1,4 +1,4 @@
-import { setProactiveOptIn } from '@aelio/core';
+import { setProactiveOptIn } from '@aelio/core/edge';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';

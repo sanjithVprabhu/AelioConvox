@@ -32,7 +32,7 @@ import {
   type ConvoxAxisStore,
   type AelioDbTableNames,
   type AelioDbStorageConfig,
-} from '@aelio/core';
+} from '@aelio/core/edge';
 import { AelioDbClient } from '@aelio/db-client';
 import type { AelioConfig } from './config.js';
 

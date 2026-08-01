@@ -12,6 +12,7 @@ members = [
     "crates/aelio-learn",
     "crates/aelio-query",
     "crates/aelio-prompt",
+    "crates/aelio-render",
     "crates/aelio-cli",
     "crates/aelio-wire",
     "crates/aelio-db-format",
@@ -52,6 +53,7 @@ aelio-convert = { path = "crates/aelio-convert" }
 aelio-learn = { path = "crates/aelio-learn" }
 aelio-query = { path = "crates/aelio-query" }
 aelio-prompt = { path = "crates/aelio-prompt" }
+aelio-render = { path = "crates/aelio-render" }
 aelio-wire = { path = "crates/aelio-wire" }
 
 [profile.dev]

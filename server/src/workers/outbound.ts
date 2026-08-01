@@ -1,4 +1,4 @@
-import { claimJob, completeJob, failJob } from '@aelio/core';
+import { claimJob, completeJob, failJob } from '@aelio/core/edge';
 import type { RuntimeDeps } from '../runtime-deps.js';
 import type { FastifyBaseLogger } from 'fastify';
 

@@ -6,7 +6,7 @@ import {
   SDK_REGISTER_TIMEOUT_MS,
   SdkToServerMessageSchema,
 } from '@aelio/protocol';
-import { enqueueJob, upsertCustomerLifecycleState } from '@aelio/core';
+import { enqueueJob, upsertCustomerLifecycleState } from '@aelio/core/edge';
 import type { WebSocket } from '@fastify/websocket';
 import type { FastifyInstance } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';

@@ -81,7 +81,11 @@ impl PromptEvaluator for DeterministicPromptEvaluator {
         _slots: &BTreeMap<String, Json>,
     ) -> Result<Json, RuntimeError> {
         assert!(rendered.contains("incoming-"));
-        Ok(serde_json::json!({"class":"example","confidence":0.0}))
+        Ok(serde_json::json!({
+            "class":"example",
+            "confidence":0.0,
+            "undeterminable":rendered.contains("incoming-0")
+        }))
     }
 }
 
@@ -123,6 +127,7 @@ fn minted_prompt_needs_real_exemplar_admission_before_flow_binding() {
             expected: BTreeMap::from([
                 ("class".into(), serde_json::json!("example")),
                 ("confidence".into(), serde_json::json!(0.0)),
+                ("undeterminable".into(), serde_json::json!(index == 0)),
             ]),
             kind: if index == 0 {
                 PromptCaseKind::Negative

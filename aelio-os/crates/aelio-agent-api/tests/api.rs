@@ -4,7 +4,10 @@ use aelio_agent_api::{router, AppState};
 use aelio_db_query::Database;
 use aelio_runtime::{ArtifactStatus, Runtime, RuntimeConfig, DEFAULT_QUEUE_DEPTH};
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::{Request, StatusCode};
+use axum::routing::post;
+use axum::{Json, Router};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -44,6 +47,10 @@ fn scoped_app(tag: &str) -> axum::Router {
 }
 
 fn unified_app(tag: &str) -> (axum::Router, Runtime) {
+    unified_app_with_host(tag, None)
+}
+
+fn unified_app_with_host(tag: &str, host_url: Option<String>) -> (axum::Router, Runtime) {
     let root =
         std::env::temp_dir().join(format!("aelio_server_unified_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -54,8 +61,8 @@ fn unified_app(tag: &str) -> (axum::Router, Runtime) {
     let agent = DurableRuntime::new(World::demo_tenant("tenant-1"), store).unwrap();
     let artifact_runtime = Runtime::open(RuntimeConfig {
         data_dir: root.join("runtime"),
-        host_url: None,
-        host_token: None,
+        host_token: host_url.as_ref().map(|_| "test-host-token".into()),
+        host_url,
         event_key_secret: [23; 32],
         queue_depth: DEFAULT_QUEUE_DEPTH,
     })
@@ -68,6 +75,29 @@ fn unified_app(tag: &str) -> (axum::Router, Runtime) {
         )),
         artifact_runtime,
     )
+}
+
+#[derive(Clone)]
+struct FakeHostState {
+    calls: std::sync::Arc<tokio::sync::Mutex<Vec<Value>>>,
+}
+
+async fn fake_host_target(
+    State(state): State<FakeHostState>,
+    Json(request): Json<Value>,
+) -> Json<Value> {
+    state.calls.lock().await.push(request.clone());
+    let output = match request["target"].as_str() {
+        Some("send_otp@1") => json!({"ok":true,"continuation":"auth.otp.verify"}),
+        Some("verify_otp@1") => json!({"ok":true}),
+        _ => json!({"ok":true}),
+    };
+    Json(json!({
+        "outcome":"ok",
+        "output":output,
+        "error":null,
+        "usage_tokens":0
+    }))
 }
 
 async fn call(
@@ -313,6 +343,68 @@ async fn unified_catalog_admits_every_tool_as_a_gated_runtime_proxy() {
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["args", "context"]);
     }
+}
+
+#[tokio::test]
+async fn public_agent_turn_executes_effect_only_through_the_runtime_proxy() {
+    let calls = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let host = Router::new()
+        .route("/internal/aelio/target", post(fake_host_target))
+        .with_state(FakeHostState {
+            calls: calls.clone(),
+        });
+    let server = tokio::spawn(async move { axum::serve(listener, host).await.unwrap() });
+    let (app, artifact_runtime) = tokio::task::spawn_blocking(move || {
+        unified_app_with_host("live_proxy", Some(format!("http://{address}")))
+    })
+    .await
+    .unwrap();
+    let (_, catalog) = call(&app, "GET", "/v1/catalog", None, None).await;
+    let (status, registration) = call(&app, "POST", "/v1/catalog", None, Some(catalog)).await;
+    assert_eq!(status, StatusCode::OK, "{registration}");
+
+    let (status, turn) = call(
+        &app,
+        "POST",
+        "/v1/turns",
+        None,
+        Some(json!({
+            "turn_id":"runtime-proxy-turn-1",
+            "user_id":"u1",
+            "utterance":"login with +919876543210"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{turn}");
+    assert_eq!(turn["suspended"], true);
+    let artifact_trace = turn["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["name"] == "Artifact.Ledger")
+        .expect("public decision trace must include the authoritative artifact ledger");
+    assert!(artifact_trace["detail"].as_str().unwrap().contains("proxy"));
+    assert!(!artifact_trace["detail"]
+        .as_str()
+        .unwrap()
+        .contains("+919876543210"));
+    let calls = calls.lock().await;
+    assert_eq!(
+        calls.len(),
+        1,
+        "one logical effect must produce one host call"
+    );
+    assert_eq!(calls[0]["target"], "send_otp@1");
+    assert_eq!(calls[0]["protocol"], "aelio-host/1");
+    assert_eq!(calls[0]["tenant"], "tenant-1");
+    assert_eq!(calls[0]["args"]["args"]["phone"], "+919876543210");
+    drop(calls);
+    server.abort();
+    tokio::task::spawn_blocking(move || drop((app, artifact_runtime)))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
