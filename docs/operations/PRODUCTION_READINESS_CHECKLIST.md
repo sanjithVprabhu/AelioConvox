@@ -25,9 +25,9 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / needs d
 
 | ID | Item | Acceptance | Status | Evidence |
 |---|---|---|---|---|
-| G0-1 | Safety checkpoint commit of current unified cutover (~69 modified + 11 untracked) | Commit exists; `git status` clean or only intentional follow-ups remain | [ ] | |
+| G0-1 | Safety checkpoint commit of current unified cutover (~69 modified + 11 untracked) | Commit exists; `git status` clean or only intentional follow-ups remain | [x] | `4cb8b307` |
 | G0-2 | Working branch / PR opened for remediation | PR URL exists; describes Gates 1–6 | [ ] | |
-| G0-3 | This checklist committed and treated as the execution index | File present under `docs/operations/` | [~] | this file |
+| G0-3 | This checklist committed and treated as the execution index | File present under `docs/operations/` | [x] | `c894117d` + follow-up |
 
 ---
 
@@ -35,9 +35,9 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / needs d
 
 | ID | Item | Acceptance | Status | Evidence |
 |---|---|---|---|---|
-| G1-1 | Pathway prototype cap = **8** (Mother §18) | `MAX_PROTOTYPES = 8`; validation rejects 9; tests cover 8 and 9 | [ ] | `aelio-runtime/src/artifact/views.rs` |
-| G1-2 | Adaptive sealing uses Mother §4.3 **canonical Sol + BLAKE3** | `AdaptiveDecisionEnvelopeV1` no longer hashes `serde_json` with SHA-256; same logical decision ⇒ stable BLAKE3; unknown fields still rejected | [ ] | `aelio-agent/src/adaptive.rs` |
-| G1-3 | Invented constants audited | Every magic number has mother cite, App/§33 constant, or FLAGS `PROVISIONAL` entry | [ ] | `FLAGS.md` + code cites |
+| G1-1 | Pathway prototype cap = **8** (Mother §18) | `MAX_PROTOTYPES = 8`; validation rejects 9; tests cover 8 and 9 | [x] | views.rs + artifact_views.rs |
+| G1-2 | Adaptive sealing uses Mother §4.3 **canonical Sol + BLAKE3** | `AdaptiveDecisionEnvelopeV1` no longer hashes `serde_json` with SHA-256; same logical decision ⇒ stable BLAKE3; unknown fields still rejected | [x] | adaptive.rs |
+| G1-3 | Invented constants audited | Every magic number has mother cite, App/§33 constant, or FLAGS `PROVISIONAL` entry | [~] | F-021 inventory opened |
 | G1-4 | No silent Mother weakenings remain in unified cutover paths | Grep/audit for known P0 sites; FLAGS for any deferral | [ ] | |
 
 ---
@@ -46,11 +46,11 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / needs d
 
 | ID | Item | Acceptance | Status | Evidence |
 |---|---|---|---|---|
-| G2-1 | Production agent turn path does **not** require `dyn ToolHost` (§14.1) | Production binary constructs turns without legacy ToolHost effect dispatch; effects only via runtime-owned proxies / adaptive host; test fails if agent dispatches effects directly | [ ] | `blocks/turn.rs`, `runtime_tool_host.rs` |
-| G2-2 | Unsafe SDK-only constructors fail closed or test/parity-only | `new_with_sdk_bridge` / `new_with_scoped_sdk_bridge` cannot leave `legacy_flow_execution_enabled == true` in prod builds | [ ] | `aelio-agent-api/src/lib.rs` |
-| G2-3 | Production constructor scan | Grep/source scan: every production `AppState` path disables legacy flow execution; negative test included | [ ] | |
-| G2-4 | Evidence doc ↔ requirements reconciled | Delete stale “may move from partial” language; `E2E-PUBLIC-001` status matches evidence | [ ] | scenario evidence + `aelio.json` |
-| G2-5 | Deliberate non-goals documented | Documented: no `fallback` escape in FlowLoweringV1; adaptive hot path Pure/non-Park; live matrix external; legacy interpreter parity-only | [ ] | `AUTHORED_FLOW_LOWERING.md`, master §14.4 |
+| G2-1 | Production agent turn path does **not** require `dyn ToolHost` (§14.1) | Production binary constructs turns without legacy ToolHost effect dispatch; effects only via runtime-owned proxies / adaptive host; test fails if agent dispatches effects directly | [x] | `CapabilityHost` on turn/invoke/world |
+| G2-2 | Unsafe SDK-only constructors fail closed or test/parity-only | `new_with_sdk_bridge` / `new_with_scoped_sdk_bridge` cannot leave `legacy_flow_execution_enabled == true` in prod builds | [x] | AppState::build always disables |
+| G2-3 | Production constructor scan | Grep/source scan: every production `AppState` path disables legacy flow execution; negative test included | [x] | constructor_authority_tests |
+| G2-4 | Evidence doc ↔ requirements reconciled | Delete stale “may move from partial” language; `E2E-PUBLIC-001` status matches evidence | [x] | scenario evidence |
+| G2-5 | Deliberate non-goals documented | Documented: no `fallback` escape in FlowLoweringV1; adaptive hot path Pure/non-Park; live matrix external; legacy interpreter parity-only | [x] | AUTHORED_FLOW_LOWERING.md |
 
 ---
 
@@ -174,6 +174,12 @@ These are the consensual product goals. Remediation work must preserve them.
 | Date | Gate/ID | Note |
 |---|---|---|
 | 2026-08-02 | — | Checklist created from consensus + Codex/Claude audit agreement. Functional local gate already green on dirty tree; Mother P0/P1 and commit/CI remain open. |
+| 2026-08-02 | G0-1/G0-3 | Cutover already on `aelio-final-wrap` (`4cb8b307`); checklist committed (`c894117d`). |
+| 2026-08-02 | G1-1 | Pathway `MAX_PROTOTYPES` → 8; boundary tests 8/9 added. |
+| 2026-08-02 | G1-2 | `AdaptiveDecisionEnvelopeV1` seals with canonical Sol + BLAKE3. |
+| 2026-08-02 | G2-1 | Production turn/effect path typed on `CapabilityHost`; raw `ToolHost::call` is parity/test extension. |
+| 2026-08-02 | G2-2/G2-3 | Every `AppState::build` disables legacy flow execution; SDK-only constructors documented as parity/test; explicit `*_for_legacy_parity` opt-in for demo fixtures; constructor_authority_tests green. |
+| 2026-08-02 | G2-4/G2-5 | Evidence doc stale language removed; authored-flow non-goals documented; F-020/F-021 residuals flagged. |
 
 ---
 

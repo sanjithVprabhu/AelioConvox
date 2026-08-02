@@ -4,7 +4,7 @@
 //! capability tag. Effectful steps always pass through `ToolCallBlock`.
 
 use crate::abilities::express::{self, Utterance};
-use crate::abilities::invoke::ToolHost;
+use crate::abilities::invoke::CapabilityHost;
 use crate::abilities::registry::Registry;
 use crate::abilities::sig::SignatureRegistry;
 use crate::blocks::tool_call::{
@@ -51,7 +51,7 @@ pub struct PathExecutionContext<'a> {
     pub policies: &'a [PolicySpec],
     pub policy: PolicyCtx,
     pub personality: Option<&'a PersonalitySpec>,
-    pub host: &'a mut dyn ToolHost,
+    pub host: &'a mut dyn CapabilityHost,
     pub signatures: &'a mut SignatureRegistry,
     pub once_seen: &'a mut HashSet<String>,
     pub effects: &'a mut EffectEnv,

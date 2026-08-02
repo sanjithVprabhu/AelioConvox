@@ -121,7 +121,8 @@ in-flight/queued HTTP drain, durable turn replay and persisted build resumption 
 
 ## Release interpretation
 
-All fifteen rows now have executable public-boundary coverage. `E2E-PUBLIC-001` may move from
-`partial` only after the complete release gate below passes and the requirement index points to
-these exact tests. Local deterministic coverage does not replace the external live-provider,
-channel, load, soak and crash-injection matrix tracked by `PRODUCTION-LIVE-001`.
+All fifteen rows have executable public-boundary coverage and `E2E-PUBLIC-001` is marked
+`implemented` in `docs/requirements/aelio.json`, pointing at the named tests above. Local
+deterministic coverage still does not replace the external live-provider, channel, load, soak and
+crash-injection matrix tracked by `PRODUCTION-LIVE-001`. Track remaining Mother/authority remediations
+and the live matrix in `docs/operations/PRODUCTION_READINESS_CHECKLIST.md`.

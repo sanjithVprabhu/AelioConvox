@@ -2,7 +2,7 @@
 
 use crate::abilities::bind::{resolve_all, BindSources};
 use crate::abilities::express;
-use crate::abilities::invoke::{tool_call_block, InvokeContext, InvokeReceipt, ToolHost};
+use crate::abilities::invoke::{tool_call_block, CapabilityHost, InvokeContext, InvokeReceipt};
 use crate::abilities::sig::SignatureRegistry;
 use crate::ops::effects::EffectEnv;
 use crate::policy::PolicyCtx;
@@ -25,7 +25,7 @@ pub enum ToolCallOutcome {
 pub struct ToolCallContext<'a> {
     pub policies: &'a [PolicySpec],
     pub policy: &'a PolicyCtx,
-    pub host: &'a mut dyn ToolHost,
+    pub host: &'a mut dyn CapabilityHost,
     pub signatures: &'a mut SignatureRegistry,
     pub once_seen: &'a mut HashSet<String>,
     pub effects: &'a mut EffectEnv,

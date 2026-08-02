@@ -1,10 +1,10 @@
-//! Adapter from the adaptive agent's `ToolHost` boundary into the authoritative artifact runtime.
+//! Adapter from the adaptive agent's `CapabilityHost` boundary into the authoritative artifact runtime.
 //!
 //! The agent is allowed to select a pinned capability. It is deliberately not allowed to execute
 //! that capability directly: execution enters the corresponding admitted proxy Flow, where
 //! policy, boundedness, idempotency, the effect ledger and host dispatch are enforced.
 
-use aelio_agent::abilities::invoke::ToolHost;
+use aelio_agent::abilities::invoke::CapabilityHost;
 use aelio_agent::tenant::ToolSpec;
 use aelio_agent::{AelioError, AelioResult, ReasonCode, Value};
 use aelio_runtime::{Runtime, RuntimeError, TurnReply, TurnSubmit};
@@ -27,14 +27,7 @@ impl RuntimeArtifactToolHost {
     }
 }
 
-impl ToolHost for RuntimeArtifactToolHost {
-    fn call(&mut self, tool_id: &str, _args: &IndexMap<String, Value>) -> AelioResult<Value> {
-        Err(AelioError::new(
-            ReasonCode::Validation,
-            format!("tool {tool_id} must be invoked with its pinned catalog context"),
-        ))
-    }
-
+impl CapabilityHost for RuntimeArtifactToolHost {
     fn call_with_context(
         &mut self,
         tool: &ToolSpec,

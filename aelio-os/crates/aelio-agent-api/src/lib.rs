@@ -69,11 +69,13 @@ impl AppState {
             BridgeConfig::default(),
             false,
             None,
+            false,
         )
     }
 
     /// Unified production constructor: the adaptive agent selects capabilities, but every tool
-    /// effect executes through a gated `aelio-runtime` proxy artifact.
+    /// effect executes through a gated `aelio-runtime` proxy artifact. Legacy FlowSpec execution
+    /// is always disabled.
     pub fn new_with_artifact_runtime(
         runtime: DurableRuntime,
         api_keys: Vec<String>,
@@ -86,10 +88,13 @@ impl AppState {
             BridgeConfig::default(),
             false,
             Some(artifact_runtime),
+            false,
         )
     }
 
-    /// Production constructor: installs the SDK-backed `ToolHost` used by the generic executor.
+    /// Parity/test constructor: installs the SDK-backed capability host used by wire-level
+    /// scenarios without an artifact runtime. Legacy FlowSpec execution remains disabled; do not
+    /// use this as a production authority path.
     pub fn new_with_sdk_bridge(
         runtime: DurableRuntime,
         api_keys: Vec<String>,
@@ -102,17 +107,60 @@ impl AppState {
             bridge_config,
             true,
             None,
+            false,
         )
     }
 
-    /// Production constructor with distinct runtime/SDK and administrative credentials.
+    /// Parity/test constructor with distinct runtime/SDK and administrative credentials.
+    /// Legacy FlowSpec execution remains disabled.
     pub fn new_with_scoped_sdk_bridge(
         runtime: DurableRuntime,
         api_keys: Vec<String>,
         admin_api_keys: Vec<String>,
         bridge_config: BridgeConfig,
     ) -> Self {
-        Self::build(runtime, api_keys, admin_api_keys, bridge_config, true, None)
+        Self::build(
+            runtime,
+            api_keys,
+            admin_api_keys,
+            bridge_config,
+            true,
+            None,
+            false,
+        )
+    }
+
+    /// Local/parity SDK wire fixtures that still drive the demo FlowSpec interpreter.
+    /// Production never calls this; prefer `new_with_artifact_runtime` + lowered flows.
+    pub fn new_with_scoped_sdk_bridge_for_legacy_parity(
+        runtime: DurableRuntime,
+        api_keys: Vec<String>,
+        admin_api_keys: Vec<String>,
+        bridge_config: BridgeConfig,
+    ) -> Self {
+        Self::build(
+            runtime,
+            api_keys,
+            admin_api_keys,
+            bridge_config,
+            true,
+            None,
+            true,
+        )
+    }
+
+    /// Local/parity HTTP fixtures only. Same as [`Self::new`] but re-enables the legacy FlowSpec
+    /// interpreter after the fail-closed default. Production never calls this.
+    pub fn new_for_legacy_parity(runtime: DurableRuntime, api_keys: Vec<String>) -> Self {
+        Self::build(
+            runtime,
+            api_keys.clone(),
+            api_keys,
+            BridgeConfig::default(),
+            false,
+            None,
+            true,
+        )
     }
 
     fn build(
@@ -122,6 +170,7 @@ impl AppState {
         bridge_config: BridgeConfig,
         install_host: bool,
         artifact_runtime: Option<aelio_runtime::Runtime>,
+        legacy_parity: bool,
     ) -> Self {
         let tenant_id = runtime.world.tenant.tenant_id.clone();
         let mut credentials = HashMap::new();
@@ -138,11 +187,14 @@ impl AppState {
                 );
             }
         }
+        // Every public AppState constructor refuses the legacy FlowSpec interpreter unless an
+        // explicit local/parity constructor opts back in after the fail-closed default.
+        runtime.world.disable_legacy_flow_execution();
+        if legacy_parity {
+            runtime.world.enable_legacy_flow_execution_for_parity();
+        }
         let bridge = SdkBridge::new(bridge_config);
-        if install_host {
-            runtime.install_tool_host(Box::new(bridge.tool_host(tenant_id)));
-        } else if let Some(artifact_runtime) = &artifact_runtime {
-            runtime.world.disable_legacy_flow_execution();
+        if let Some(artifact_runtime) = &artifact_runtime {
             runtime.install_tool_host(Box::new(runtime_tool_host::RuntimeArtifactToolHost::new(
                 artifact_runtime.clone(),
                 tenant_id.clone(),
@@ -150,12 +202,14 @@ impl AppState {
             runtime.world.set_adaptive_artifact_host(Box::new(
                 runtime_adaptive_host::RuntimeAdaptiveArtifactHost::new(artifact_runtime.clone()),
             ));
+        } else if install_host {
+            runtime.install_tool_host(Box::new(bridge.tool_host(tenant_id)));
         }
         Self {
             runtime: Arc::new(Mutex::new(runtime)),
             credentials: Arc::new(credentials),
             bridge,
-            requires_sdk_bridge: install_host,
+            requires_sdk_bridge: install_host && artifact_runtime.is_none(),
             artifact_runtime,
         }
     }
@@ -1332,5 +1386,81 @@ impl IntoResponse for ApiError {
             }),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod constructor_authority_tests {
+    use super::*;
+    use aelio_agent::runtime::World;
+    use aelio_agent::storage::AelioStore;
+    use aelio_db_query::Database;
+
+    fn demo_runtime(tag: &str) -> DurableRuntime {
+        let path = std::env::temp_dir().join(format!(
+            "aelio_appstate_ctor_{tag}_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        let store = AelioStore::new(Database::create(path).unwrap(), 3).unwrap();
+        let world = World::demo_tenant("tenant-1");
+        assert!(
+            world.legacy_flow_execution_enabled,
+            "demo worlds start with legacy enabled so the constructor must clear it"
+        );
+        DurableRuntime::new(world, store).unwrap()
+    }
+
+    #[test]
+    fn every_appstate_constructor_disables_legacy_flow_execution() {
+        let sdk = AppState::new_with_sdk_bridge(
+            demo_runtime("sdk"),
+            vec!["k".into()],
+            BridgeConfig::default(),
+        );
+        assert!(!sdk
+            .runtime
+            .blocking_lock()
+            .world
+            .legacy_flow_execution_enabled);
+
+        let scoped = AppState::new_with_scoped_sdk_bridge(
+            demo_runtime("scoped"),
+            vec!["k".into()],
+            vec!["admin".into()],
+            BridgeConfig::default(),
+        );
+        assert!(!scoped
+            .runtime
+            .blocking_lock()
+            .world
+            .legacy_flow_execution_enabled);
+
+        let scoped_parity = AppState::new_with_scoped_sdk_bridge_for_legacy_parity(
+            demo_runtime("scoped-parity"),
+            vec!["k".into()],
+            vec!["admin".into()],
+            BridgeConfig::default(),
+        );
+        assert!(scoped_parity
+            .runtime
+            .blocking_lock()
+            .world
+            .legacy_flow_execution_enabled);
+
+        let plain = AppState::new(demo_runtime("plain"), vec!["k".into()]);
+        assert!(!plain
+            .runtime
+            .blocking_lock()
+            .world
+            .legacy_flow_execution_enabled);
+
+        let parity = AppState::new_for_legacy_parity(demo_runtime("parity"), vec!["k".into()]);
+        assert!(parity
+            .runtime
+            .blocking_lock()
+            .world
+            .legacy_flow_execution_enabled);
     }
 }

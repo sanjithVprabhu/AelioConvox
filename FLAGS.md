@@ -184,3 +184,24 @@ into the schema-versioned unified artifact registry; proposed prompts cannot be 
 limits; Rust `Express` emits the authoritative frame; the widget validates/renders required
 fallbacks; WhatsApp deliberately uses the flattened representation. The public phase suite asserts
 Render frames. Additional element kinds are versioned extensions, not missing v1 authority.
+
+**Residual (2026-08-02):** Protocol F5 full frame ledgering for exact resume reconstruction remains
+stronger than “widget received a valid text@1 frame.” Track under Gate G3-16 of
+`docs/operations/PRODUCTION_READINESS_CHECKLIST.md` — either implement reaction-ledgered frames or
+keep this residual explicit in release notes. `PROVISIONAL` for open-source RC until chosen.
+
+---
+
+### F-021 — Invented bound inventory during unified cutover — `§4.4`, `§18`, `§21`, `§33`
+**What:** Unified cutover introduced several numeric bounds not yet cited from mother §33/App tables.
+Known sites after Mother §18 pathway-cap fix and adaptive BLAKE3 migration:
+- adaptive envelope size/depth/score/projected-input caps (`aelio-agent/src/adaptive.rs`) — candidate
+  cap 8 aligned with §18; other byte/depth caps need §4.4/§33 cites or stay provisional;
+- builder RRF `k` / ranking constants (`aelio-runtime/src/builder.rs`);
+- learning/gate thresholds such as 20 distinct observations / 0.95 agreement
+  (`aelio-runtime/src/learning.rs`, `gate.rs`) — Appendix K / steward thresholds where applicable.
+**Options:** (a) cite or move each into App/§33 constants now; (b) leave `PROVISIONAL` with this flag
+until the constant audit pass (Gate G1-3) closes them one-by-one.
+**Recommendation → (b) for this remediation slice**, with checklist Gate G1-3 owning the inventory.
+Pathway prototype cap is **not** provisional: clamped to **8** per Mother §18.
+Adaptive decision identity is **not** provisional: Mother §4.3 Sol + BLAKE3.

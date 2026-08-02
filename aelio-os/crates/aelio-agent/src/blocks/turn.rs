@@ -4,7 +4,7 @@
 //! → execute → synthesize → write back
 
 use crate::abilities::express::{self, ExpressVia, Utterance};
-use crate::abilities::invoke::ToolHost;
+use crate::abilities::invoke::CapabilityHost;
 use crate::abilities::learn::{
     lookup_tier_with_embedder, observe_and_promote, path_is_effectful, propose_path_greeting,
     propose_path_with_provider, situation_hash, situation_key, typecheck, ObserveOutcome,
@@ -94,7 +94,7 @@ pub struct TurnRuntime<'a> {
     pub proposals: &'a mut ProposalMap,
     pub signatures: &'a mut crate::abilities::sig::SignatureRegistry,
     pub once_seen: &'a mut HashSet<String>,
-    pub tool_host: &'a mut dyn ToolHost,
+    pub tool_host: &'a mut dyn CapabilityHost,
     pub adaptive_artifact_host: &'a mut dyn crate::adaptive::AdaptiveArtifactHost,
     pub llm_provider: &'a mut dyn LlmProvider,
     pub turn_recall: &'a mut dyn TurnRecall,

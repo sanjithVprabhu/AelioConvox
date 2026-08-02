@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use aelio_agent::abilities::invoke::{MockToolHost, ToolHost};
+use aelio_agent::abilities::invoke::{CapabilityHost, MockToolHost, ToolHost};
 use aelio_agent::abilities::learn::{situation_hash, situation_key};
 use aelio_agent::abilities::registry::{
     ProcedureEvidence, ProcedureProvenance, ProcedureSpec, ProcedureStatus, SituationFilter,
@@ -97,14 +97,21 @@ impl RecordingHost {
     }
 }
 
-impl ToolHost for RecordingHost {
-    fn call(&mut self, tool_id: &str, args: &IndexMap<String, Value>) -> AelioResult<Value> {
-        let result = self.inner.call(tool_id, args);
+impl CapabilityHost for RecordingHost {
+    fn call_with_context(
+        &mut self,
+        tool: &aelio_agent::tenant::ToolSpec,
+        args: &IndexMap<String, Value>,
+        idempotency_key: &str,
+        user_id: &str,
+        channel: &str,
+    ) -> AelioResult<Value> {
+        let result = self.inner.call_with_context(tool, args, idempotency_key, user_id, channel);
         self.records
             .lock()
             .expect("record lock")
             .push(RecordedToolCall {
-                tool_id: tool_id.into(),
+                tool_id: tool.id.clone(),
                 args: args.clone(),
                 raw: result.clone().map_err(|error| error.to_string()),
             });
@@ -117,6 +124,21 @@ impl ToolHost for RecordingHost {
 
     fn invocation_count_for(&self, tool_id: &str) -> Option<usize> {
         self.inner.invocation_count_for(tool_id)
+    }
+}
+
+impl ToolHost for RecordingHost {
+    fn call(&mut self, tool_id: &str, args: &IndexMap<String, Value>) -> AelioResult<Value> {
+        let result = self.inner.call(tool_id, args);
+        self.records
+            .lock()
+            .expect("record lock")
+            .push(RecordedToolCall {
+                tool_id: tool_id.into(),
+                args: args.clone(),
+                raw: result.clone().map_err(|error| error.to_string()),
+            });
+        result
     }
 }
 

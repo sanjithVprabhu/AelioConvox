@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 const VIEW_FORMAT: u32 = 1;
-const MAX_PROTOTYPES: usize = 256;
+/// Mother §18: "Cap: 8 pathways per decision point (v0)".
+const MAX_PROTOTYPES: usize = 8;
 const MAX_PROCEDURE_STEPS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -285,7 +286,7 @@ fn validate_pathway(value: &PathwayArtifactDraft) -> Result<(), ArtifactError> {
     validate_pin("fallback_artifact", &value.fallback_artifact)?;
     validate_pin("embedding_model", &value.embedding_model)?;
     if value.prototypes.is_empty() || value.prototypes.len() > MAX_PROTOTYPES {
-        return invalid("pathway prototypes must contain 1..=256 entries");
+        return invalid("pathway prototypes must contain 1..=8 entries (Mother §18)");
     }
     if !value.tau.is_finite()
         || !value.delta.is_finite()

@@ -9,22 +9,21 @@ use crate::types::{AelioError, AelioResult, ReasonCode, Recovery, ResponseRole, 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-/// Host-provided tool executor (tenant SDK bridge).
-pub trait ToolHost: Send {
-    fn call(&mut self, tool_id: &str, args: &IndexMap<String, Value>) -> AelioResult<Value>;
-
+/// Host-provided pinned capability executor. Production turns may only call through this
+/// boundary with a catalog `ToolSpec` (exact id/version/effects). Raw tool-id dispatch belongs
+/// on the optional [`ToolHost`] extension used by local/parity doubles — not on the production
+/// turn spine (§14.1).
+pub trait CapabilityHost: Send {
     /// Context-rich entry point used by the generic executor. Durable hosts override this to
-    /// bracket the effect with a lease/result record; simple hosts retain the direct call.
+    /// bracket the effect with a lease/result record.
     fn call_with_context(
         &mut self,
         tool: &ToolSpec,
         args: &IndexMap<String, Value>,
-        _idempotency_key: &str,
-        _user_id: &str,
-        _channel: &str,
-    ) -> AelioResult<Value> {
-        self.call(&tool.id, args)
-    }
+        idempotency_key: &str,
+        user_id: &str,
+        channel: &str,
+    ) -> AelioResult<Value>;
 
     /// Optional test/diagnostic counter. Production hosts may leave this unavailable.
     fn invocation_count(&self) -> Option<usize> {
@@ -40,6 +39,11 @@ pub trait ToolHost: Send {
     fn take_decision_trace(&mut self) -> Option<String> {
         None
     }
+}
+
+/// Local/parity tool executor that also permits raw tool-id dispatch for fixtures.
+pub trait ToolHost: CapabilityHost {
+    fn call(&mut self, tool_id: &str, args: &IndexMap<String, Value>) -> AelioResult<Value>;
 }
 
 /// In-memory mock host for tests.
@@ -62,16 +66,16 @@ impl MockToolHost {
     }
 }
 
-impl ToolHost for MockToolHost {
-    fn call(&mut self, tool_id: &str, args: &IndexMap<String, Value>) -> AelioResult<Value> {
-        self.calls.push((tool_id.to_string(), args.clone()));
-        match self.handlers.get(tool_id) {
-            Some(h) => h(args),
-            None => Err(AelioError::new(
-                ReasonCode::NotFound,
-                format!("tool {tool_id} not registered in host"),
-            )),
-        }
+impl CapabilityHost for MockToolHost {
+    fn call_with_context(
+        &mut self,
+        tool: &ToolSpec,
+        args: &IndexMap<String, Value>,
+        _idempotency_key: &str,
+        _user_id: &str,
+        _channel: &str,
+    ) -> AelioResult<Value> {
+        ToolHost::call(self, &tool.id, args)
     }
 
     fn invocation_count(&self) -> Option<usize> {
@@ -85,6 +89,19 @@ impl ToolHost for MockToolHost {
                 .filter(|(called_tool, _)| called_tool == tool_id)
                 .count(),
         )
+    }
+}
+
+impl ToolHost for MockToolHost {
+    fn call(&mut self, tool_id: &str, args: &IndexMap<String, Value>) -> AelioResult<Value> {
+        self.calls.push((tool_id.to_string(), args.clone()));
+        match self.handlers.get(tool_id) {
+            Some(h) => h(args),
+            None => Err(AelioError::new(
+                ReasonCode::NotFound,
+                format!("tool {tool_id} not registered in host"),
+            )),
+        }
     }
 }
 
@@ -106,7 +123,7 @@ pub struct InvokeReceipt {
 pub struct InvokeContext<'a> {
     pub policies: &'a [PolicySpec],
     pub policy: &'a PolicyCtx,
-    pub host: &'a mut dyn ToolHost,
+    pub host: &'a mut dyn CapabilityHost,
     pub signatures: &'a mut SignatureRegistry,
     pub once_seen: &'a mut std::collections::HashSet<String>,
     pub user_id: &'a str,
@@ -497,15 +514,7 @@ mod tests {
         struct FailingTracedHost {
             trace: Option<String>,
         }
-        impl ToolHost for FailingTracedHost {
-            fn call(
-                &mut self,
-                _tool_id: &str,
-                _args: &IndexMap<String, Value>,
-            ) -> AelioResult<Value> {
-                Err(AelioError::new(ReasonCode::NeedsRepair, "invalid otp"))
-            }
-
+        impl CapabilityHost for FailingTracedHost {
             fn call_with_context(
                 &mut self,
                 _tool: &ToolSpec,
@@ -520,6 +529,16 @@ mod tests {
 
             fn take_decision_trace(&mut self) -> Option<String> {
                 self.trace.take()
+            }
+        }
+
+        impl ToolHost for FailingTracedHost {
+            fn call(
+                &mut self,
+                _tool_id: &str,
+                _args: &IndexMap<String, Value>,
+            ) -> AelioResult<Value> {
+                Err(AelioError::new(ReasonCode::NeedsRepair, "invalid otp"))
             }
         }
 

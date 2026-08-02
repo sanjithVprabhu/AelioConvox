@@ -166,6 +166,53 @@ fn invalid_hygiene_unbounded_dataset_and_open_converter_fail_closed() {
 }
 
 #[test]
+fn pathway_prototype_cap_matches_mother_section_18() {
+    let eight = PathwayArtifactDraft {
+        id: "pathway.eight".into(),
+        version: 1,
+        decision_point: "root".into(),
+        fallback_artifact: "flow.fallback@1".into(),
+        instantiates_flow: false,
+        embedding_model: "embed.default@1".into(),
+        tau: 0.8,
+        delta: 0.1,
+        entropy_ceiling: 0.5,
+        prototypes: (0..8)
+            .map(|index| PathwayPrototype {
+                artifact: format!("flow.candidate{index}@1"),
+                embedding_hash: HASH_A.into(),
+            })
+            .collect(),
+        examples: vec![],
+    };
+    eight.lower(Provenance::default()).unwrap();
+
+    let nine = PathwayArtifactDraft {
+        id: "pathway.nine".into(),
+        version: 1,
+        decision_point: "root".into(),
+        fallback_artifact: "flow.fallback@1".into(),
+        instantiates_flow: false,
+        embedding_model: "embed.default@1".into(),
+        tau: 0.8,
+        delta: 0.1,
+        entropy_ceiling: 0.5,
+        prototypes: (0..9)
+            .map(|index| PathwayPrototype {
+                artifact: format!("flow.candidate{index}@1"),
+                embedding_hash: HASH_A.into(),
+            })
+            .collect(),
+        examples: vec![],
+    };
+    let err = nine.lower(Provenance::default()).unwrap_err();
+    assert!(
+        matches!(err, ArtifactError::Invalid(ref message) if message.contains("1..=8")),
+        "{err:?}"
+    );
+}
+
+#[test]
 fn typed_views_share_distinct_evidence_and_reviewed_approval_gate() {
     let directory = tempfile::tempdir().unwrap();
     let store = EmbeddedStore::open(directory.path()).unwrap();

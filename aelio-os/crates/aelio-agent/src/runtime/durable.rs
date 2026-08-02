@@ -4,7 +4,7 @@ use chrono::Utc;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use crate::abilities::invoke::{sanitize_response, MockToolHost, ToolHost};
+use crate::abilities::invoke::{sanitize_response, CapabilityHost, MockToolHost};
 use crate::abilities::registry::SituationFilter;
 use crate::blocks::flow::FlowInstance;
 use crate::blocks::turn::{TurnResult, TurnTraceStep};
@@ -236,7 +236,7 @@ struct DurableToolHost {
     tenant_id: String,
     owner: String,
     store: AelioStore,
-    inner: Box<dyn ToolHost>,
+    inner: Box<dyn CapabilityHost>,
 }
 
 impl DurableToolHost {
@@ -281,11 +281,7 @@ impl DurableToolHost {
     }
 }
 
-impl ToolHost for DurableToolHost {
-    fn call(&mut self, tool_id: &str, args: &IndexMap<String, Value>) -> AelioResult<Value> {
-        self.inner.call(tool_id, args)
-    }
-
+impl CapabilityHost for DurableToolHost {
     fn call_with_context(
         &mut self,
         tool: &ToolSpec,
@@ -588,8 +584,9 @@ impl DurableRuntime {
     }
 
     /// Install an external execution boundary without bypassing durable idempotency. Server
-    /// adapters must use this instead of replacing `world.tool_host` directly.
-    pub fn install_tool_host(&mut self, inner: Box<dyn ToolHost>) {
+    /// adapters must use this instead of replacing `world.tool_host` directly. Production installs
+    /// a [`CapabilityHost`] only — never a raw-dispatch legacy ToolHost on the hot path.
+    pub fn install_tool_host(&mut self, inner: Box<dyn CapabilityHost>) {
         let now = Utc::now().timestamp_millis();
         self.world.tool_host = Box::new(DurableToolHost {
             tenant_id: self.tenant_id.clone(),
@@ -3661,8 +3658,16 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
-    impl ToolHost for CountingHost {
-        fn call(&mut self, _tool_id: &str, _args: &IndexMap<String, Value>) -> AelioResult<Value> {
+    impl CapabilityHost for CountingHost {
+        fn call_with_context(
+            &mut self,
+            tool: &ToolSpec,
+            args: &IndexMap<String, Value>,
+            _idempotency_key: &str,
+            _user_id: &str,
+            _channel: &str,
+        ) -> AelioResult<Value> {
+            let _ = (tool, args);
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(Value::Map(indexmap::indexmap! {
                 "ok".into() => Value::Bool(true),

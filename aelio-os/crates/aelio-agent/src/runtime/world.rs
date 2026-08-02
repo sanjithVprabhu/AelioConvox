@@ -1,6 +1,6 @@
 //! In-memory tenant world for tests and local bake.
 
-use crate::abilities::invoke::{MockToolHost, ToolHost};
+use crate::abilities::invoke::{MockToolHost, CapabilityHost};
 use crate::abilities::learn::{default_situation_embedder, ProposalMap};
 use crate::abilities::registry::Registry;
 use crate::abilities::sig::SignatureRegistry;
@@ -23,7 +23,7 @@ pub struct World {
     pub proposals: ProposalMap,
     pub signatures: SignatureRegistry,
     pub once_seen: HashSet<String>,
-    pub tool_host: Box<dyn ToolHost>,
+    pub tool_host: Box<dyn CapabilityHost>,
     pub adaptive_artifact_host: Box<dyn crate::adaptive::AdaptiveArtifactHost>,
     pub user_state: IndexMap<String, String>,
     pub user_flows: IndexMap<String, crate::blocks::flow::FlowInstance>,
@@ -494,7 +494,7 @@ impl World {
         self.llm_provider = provider;
     }
 
-    pub fn set_tool_host(&mut self, host: Box<dyn ToolHost>) {
+    pub fn set_tool_host(&mut self, host: Box<dyn CapabilityHost>) {
         self.tool_host = host;
     }
 
@@ -507,6 +507,11 @@ impl World {
 
     pub fn disable_legacy_flow_execution(&mut self) {
         self.legacy_flow_execution_enabled = false;
+    }
+
+    /// Local/parity worlds only. Production `AppState` constructors never call this.
+    pub fn enable_legacy_flow_execution_for_parity(&mut self) {
+        self.legacy_flow_execution_enabled = true;
     }
 
     pub fn provider_calls(&self) -> &[ProviderCall] {

@@ -25,7 +25,8 @@ fn app(tag: &str, keys: Vec<String>) -> axum::Router {
     std::fs::create_dir_all(&path).unwrap();
     let store = AelioStore::new(Database::create(path).unwrap(), 3).unwrap();
     let runtime = DurableRuntime::new(World::demo_tenant("tenant-1"), store).unwrap();
-    router(AppState::new(runtime, keys))
+    // Demo HTTP fixtures still exercise the parity interpreter; production constructors leave it off.
+    router(AppState::new_for_legacy_parity(runtime, keys))
 }
 
 fn empty_app(tag: &str, keys: Vec<String>) -> axum::Router {
@@ -143,7 +144,7 @@ async fn public_sdk_socket_acks_and_discards_duplicate_tool_results() {
     std::fs::create_dir_all(&root).unwrap();
     let store = AelioStore::new(Database::create(root).unwrap(), 3).unwrap();
     let runtime = DurableRuntime::new(World::demo_tenant("tenant-1"), store).unwrap();
-    let state = AppState::new_with_scoped_sdk_bridge(
+    let state = AppState::new_with_scoped_sdk_bridge_for_legacy_parity(
         runtime,
         vec!["runtime-key".into()],
         vec!["admin-key".into()],
@@ -374,7 +375,7 @@ async fn public_sdk_disconnect_distinguishes_pre_dispatch_from_unknown_outcome()
     std::fs::create_dir_all(&root).unwrap();
     let store = AelioStore::new(Database::create(root).unwrap(), 3).unwrap();
     let runtime = DurableRuntime::new(World::demo_tenant("tenant-1"), store).unwrap();
-    let state = AppState::new_with_scoped_sdk_bridge(
+    let state = AppState::new_with_scoped_sdk_bridge_for_legacy_parity(
         runtime,
         vec!["runtime-key".into()],
         vec!["admin-key".into()],

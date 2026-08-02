@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aelio_agent::abilities::invoke::ToolHost;
+use aelio_agent::abilities::invoke::{CapabilityHost, ToolHost};
 use aelio_agent::runtime::durable::validate_catalog;
 use aelio_agent::tenant::TenantDecl;
 use aelio_agent::{AelioError, AelioResult, ReasonCode, Value};
@@ -648,6 +648,35 @@ pub struct BridgeToolHost {
     last_trace: Option<String>,
 }
 
+impl CapabilityHost for BridgeToolHost {
+    fn call_with_context(
+        &mut self,
+        tool: &aelio_agent::tenant::ToolSpec,
+        args: &IndexMap<String, Value>,
+        _idempotency_key: &str,
+        _user_id: &str,
+        _channel: &str,
+    ) -> AelioResult<Value> {
+        match self
+            .bridge
+            .invoke_versioned_traced(&self.tenant_id, &tool.id, &tool.version, args)
+        {
+            Ok((value, trace)) => {
+                self.last_trace = Some(trace);
+                Ok(value)
+            }
+            Err(error) => {
+                self.last_trace = error.decision_trace.as_deref().map(str::to_owned);
+                Err(error)
+            }
+        }
+    }
+
+    fn take_decision_trace(&mut self) -> Option<String> {
+        self.last_trace.take()
+    }
+}
+
 impl ToolHost for BridgeToolHost {
     fn call(&mut self, tool_id: &str, args: &IndexMap<String, Value>) -> AelioResult<Value> {
         let version = self
@@ -675,10 +704,6 @@ impl ToolHost for BridgeToolHost {
                 Err(error)
             }
         }
-    }
-
-    fn take_decision_trace(&mut self) -> Option<String> {
-        self.last_trace.take()
     }
 }
 

@@ -137,3 +137,12 @@ The gate proves structural validity, bounded execution, fixture conformance, sta
 properties and lifecycle requirements for supplied cases. It cannot prove that an author chose the
 correct business meaning. Reviewed effects still require an identified deployer, canary evidence,
 Guard monitoring and immediate conservative demotion.
+
+## Deliberate non-goals (format 1)
+
+- `escape.kind = fallback` — rejected until a reactor-owned continuation handoff format exists.
+- Semantic-only `FlowSpec` without `aelio.lowering` — visible, non-executable, creates demand.
+- Adaptive hot-path Pure/non-Park atomic invoke — suspendable work uses subject continuations.
+- Legacy `World.user_flows` interpreter — parity/local worlds only; `AppState` constructors disable it.
+- Live provider/load/soak — tracked by `PRODUCTION-LIVE-001` / Gate 5 of
+  `docs/operations/PRODUCTION_READINESS_CHECKLIST.md`, not by local deterministic green alone.

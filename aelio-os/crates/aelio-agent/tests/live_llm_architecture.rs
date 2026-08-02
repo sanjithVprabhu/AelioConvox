@@ -16,7 +16,7 @@ use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
 use aelio_agent::abilities::express::{synthesize_prompt_spec, synthesize_with_provider};
-use aelio_agent::abilities::invoke::{MockToolHost, ToolHost};
+use aelio_agent::abilities::invoke::{CapabilityHost, MockToolHost, ToolHost};
 use aelio_agent::abilities::learn::{
     propose_path_prompt_spec, propose_path_with_provider, situation_key, typecheck,
 };
@@ -195,6 +195,33 @@ struct CountingHost {
     calls: Arc<AtomicUsize>,
 }
 
+impl CapabilityHost for CountingHost {
+    fn call_with_context(
+        &mut self,
+        tool: &aelio_agent::tenant::ToolSpec,
+        args: &IndexMap<String, Value>,
+        _idempotency_key: &str,
+        _user_id: &str,
+        _channel: &str,
+    ) -> aelio_agent::AelioResult<Value> {
+        let _ = args;
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        match tool.id.as_str() {
+            "send_otp" => Ok(Value::Map(indexmap::indexmap! {
+                "ok".into() => Value::Bool(true),
+                "continuation".into() => Value::str("auth.otp.verify"),
+            })),
+            _ => Ok(Value::Map(indexmap::indexmap! {
+                "ok".into() => Value::Bool(true),
+            })),
+        }
+    }
+
+    fn invocation_count(&self) -> Option<usize> {
+        Some(self.calls.load(Ordering::SeqCst))
+    }
+}
+
 impl ToolHost for CountingHost {
     fn call(
         &mut self,
@@ -211,10 +238,6 @@ impl ToolHost for CountingHost {
                 "ok".into() => Value::Bool(true),
             })),
         }
-    }
-
-    fn invocation_count(&self) -> Option<usize> {
-        Some(self.calls.load(Ordering::SeqCst))
     }
 }
 

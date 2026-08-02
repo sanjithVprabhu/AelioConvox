@@ -24,6 +24,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 uuid = { version = "1", features = ["v4", "serde"] }
 aelio-db-query = { path = "../aelio-db-query" }
 aelio-render = { path = "../aelio-render" }
+aelio-sol.workspace = true
+aelio-kernel.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [dev-dependencies]

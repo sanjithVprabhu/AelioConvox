@@ -7,7 +7,6 @@
 use crate::types::{AelioError, AelioResult, ReasonCode};
 use aelio_render::RenderFrame;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 pub const ADAPTIVE_DECISION_FORMAT: u32 = 1;
@@ -320,13 +319,20 @@ impl AdaptiveDecisionEnvelopeV1 {
     }
 
     pub fn compute_hash(&self) -> AelioResult<String> {
-        let bytes = serde_json::to_vec(&serde_json::json!({
+        // Mother §4.3: content identity is BLAKE3 over canonical Sol bytes, never a second
+        // hash regime over serde_json text.
+        let json = serde_json::json!({
             "format": self.format,
             "candidates": self.candidates,
             "selected": self.selected,
-        }))
-        .map_err(|error| AelioError::new(ReasonCode::Internal, error.to_string()))?;
-        Ok(hex::encode(Sha256::digest(bytes)))
+        });
+        let sol = aelio_kernel::json_from(&json).map_err(|error| {
+            AelioError::new(
+                ReasonCode::Validation,
+                format!("adaptive decision is not Sol-canonical: {error}"),
+            )
+        })?;
+        Ok(aelio_sol::value_hash(&sol))
     }
 
     fn validate_fields(&self) -> AelioResult<()> {
@@ -534,6 +540,15 @@ mod tests {
         )
         .unwrap();
         decision.validate().unwrap();
+        let expected = aelio_sol::value_hash(
+            &aelio_kernel::json_from(&serde_json::json!({
+                "format": decision.format,
+                "candidates": decision.candidates,
+                "selected": decision.selected,
+            }))
+            .unwrap(),
+        );
+        assert_eq!(decision.decision_hash, expected);
         decision.candidates[0].score = 0.9;
         assert!(decision.validate().is_err());
     }
