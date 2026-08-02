@@ -36,12 +36,7 @@ impl Utterance {
                     mode: RenderMode::Append,
                     turn_id: turn_id.into(),
                     blocks: vec![confirm_block(
-                        "c0",
-                        &self.text,
-                        "Confirm",
-                        "Cancel",
-                        false,
-                        None,
+                        "c0", &self.text, "Confirm", "Cancel", false, None,
                     )],
                 },
                 _ => text_frame(turn_id, frame_id, &self.text),
@@ -396,7 +391,6 @@ pub fn utterance_to_value(u: &Utterance) -> Value {
         "via".into() => Value::str(format!("{:?}", u.via).to_lowercase()),
     })
 }
-
 
 #[cfg(test)]
 mod render_tests {

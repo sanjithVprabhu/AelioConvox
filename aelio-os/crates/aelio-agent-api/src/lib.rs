@@ -1,5 +1,8 @@
 //! Rust HTTP boundary for the durable Aelio runtime.
 
+pub mod adaptive_bridge;
+mod flow_lowering;
+mod runtime_adaptive_host;
 mod runtime_tool_host;
 pub mod sdk_bridge;
 
@@ -137,16 +140,16 @@ impl AppState {
         }
         let bridge = SdkBridge::new(bridge_config);
         if install_host {
-            runtime
-                .world
-                .set_tool_host(Box::new(bridge.tool_host(tenant_id)));
+            runtime.install_tool_host(Box::new(bridge.tool_host(tenant_id)));
         } else if let Some(artifact_runtime) = &artifact_runtime {
-            runtime
-                .world
-                .set_tool_host(Box::new(runtime_tool_host::RuntimeArtifactToolHost::new(
-                    artifact_runtime.clone(),
-                    tenant_id.clone(),
-                )));
+            runtime.world.disable_legacy_flow_execution();
+            runtime.install_tool_host(Box::new(runtime_tool_host::RuntimeArtifactToolHost::new(
+                artifact_runtime.clone(),
+                tenant_id.clone(),
+            )));
+            runtime.world.set_adaptive_artifact_host(Box::new(
+                runtime_adaptive_host::RuntimeAdaptiveArtifactHost::new(artifact_runtime.clone()),
+            ));
         }
         Self {
             runtime: Arc::new(Mutex::new(runtime)),
@@ -179,6 +182,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/workers/complete", post(worker_complete))
         .route("/v1/admin/workers/fail", post(worker_fail))
         .route("/v1/admin/exploration", post(configure_exploration))
+        .route("/v1/admin/sdk-delivery", get(list_sdk_delivery_audit))
+        .route("/v1/admin/tool-outcomes", get(list_tool_outcomes))
+        .route("/v1/admin/open-loops", get(list_open_loops))
         .route("/v1/admin/proposals", get(list_learning_proposals))
         .route(
             "/v1/admin/proposals/{id}/approve",
@@ -192,6 +198,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/admin/procedures/{id}/suspend",
             post(suspend_learning_procedure),
+        )
+        .route(
+            "/v1/admin/procedures/{id}/bind-artifact",
+            post(bind_procedure_artifact),
+        )
+        .route(
+            "/v1/admin/flows/{id}/bind-artifact",
+            post(bind_flow_artifact),
         )
         .route(
             "/v1/admin/flow-candidates",
@@ -223,11 +237,22 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     let semantic_embedder = runtime.has_semantic_embedder();
     let catalog_registered =
         !runtime.world.tenant.states.is_empty() && !runtime.world.tenant.personalities.is_empty();
+    let unmaterialized_flows = if state.artifact_runtime.is_some() {
+        runtime
+            .world
+            .tenant
+            .flows
+            .iter()
+            .filter(|flow| runtime.world.registry.flow_artifact(&flow.id).is_none())
+            .count()
+    } else {
+        0
+    };
     let sdk_required = state.requires_sdk_bridge && !runtime.world.tenant.tools.is_empty();
     let sdk = state.bridge.catalog_status(&tenant_id);
     let sdk_registered = sdk.is_some();
     let sdk_available = sdk.is_some_and(|status| status.available);
-    let ready = catalog_registered && (!sdk_required || sdk_available);
+    let ready = catalog_registered && unmaterialized_flows == 0 && (!sdk_required || sdk_available);
     Json(serde_json::json!({
         "status": if ready { "ok" } else { "degraded" },
         "ready": ready,
@@ -239,6 +264,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         "embedding_space_id": embedding_space_id,
         "authentication_configured": !state.is_open(),
         "catalog_registered": catalog_registered,
+        "unmaterialized_flows": unmaterialized_flows,
         "sdk_required": sdk_required,
         "sdk_registered": sdk_registered,
         "sdk_available": sdk_available,
@@ -322,7 +348,7 @@ async fn register_catalog(
         )));
     }
     validate_catalog(&catalog).map_err(ApiError)?;
-    provision_catalog_proxies(&state, &catalog, &identity.principal)
+    let catalog = provision_catalog_artifacts(&state, catalog, &identity.principal)
         .await
         .map_err(ApiError)?;
     let mut runtime = state.runtime.lock().await;
@@ -330,11 +356,19 @@ async fn register_catalog(
     let tools = catalog.tools.len();
     let flows = catalog.flows.len();
     runtime.register_catalog(catalog).map_err(ApiError)?;
+    let materialization_pending = runtime
+        .world
+        .tenant
+        .flows
+        .iter()
+        .filter(|flow| runtime.world.registry.flow_artifact(&flow.id).is_none())
+        .count();
     Ok(Json(serde_json::json!({
         "status": "active",
         "tenant_id": tenant_id,
         "tools": tools,
-        "flows": flows
+        "flows": flows,
+        "materialization_pending": materialization_pending,
     })))
 }
 
@@ -342,18 +376,27 @@ async fn register_catalog(
 /// A partially provisioned set is safe after a crash because proposed/canary artifacts are
 /// immutable and rerunning admission is idempotent; the adaptive catalog itself is activated only
 /// after every proxy has passed its gate.
-async fn provision_catalog_proxies(
+async fn provision_catalog_artifacts(
     state: &AppState,
-    catalog: &TenantDecl,
+    catalog: TenantDecl,
     deployer: &str,
-) -> Result<(), AelioError> {
+) -> Result<TenantDecl, AelioError> {
     let Some(runtime) = state.artifact_runtime.clone() else {
-        return Ok(());
+        return Ok(catalog);
     };
-    let catalog = catalog.clone();
     let deployer = deployer.to_owned();
     tokio::task::spawn_blocking(move || {
-        for tool in catalog.tools {
+        let mut catalog = catalog;
+        for tool in &catalog.tools {
+            let effect = tool.effect.ok_or_else(|| {
+                AelioError::new(
+                    ReasonCode::Validation,
+                    format!(
+                        "unified catalog tool {} requires an exact pure|read|write|external effect",
+                        tool.id
+                    ),
+                )
+            })?;
             let version = tool.version.parse::<u32>().map_err(|_| {
                 AelioError::new(
                     ReasonCode::Validation,
@@ -370,26 +413,68 @@ async fn provision_catalog_proxies(
                 .install_tool_proxy(
                     aelio_runtime::ToolProxySpec {
                         tenant: catalog.tenant_id.clone(),
-                        tool_id: tool.id,
+                        tool_id: tool.id.clone(),
                         version,
-                        effect: if tool.effectful {
-                            aelio_runtime::ArtifactEffect::External
-                        } else {
-                            aelio_runtime::ArtifactEffect::Read
+                        effect: match effect {
+                            aelio_agent::tenant::ToolEffect::Pure => {
+                                aelio_runtime::ArtifactEffect::Pure
+                            }
+                            aelio_agent::tenant::ToolEffect::Read => {
+                                aelio_runtime::ArtifactEffect::Read
+                            }
+                            aelio_agent::tenant::ToolEffect::Write => {
+                                aelio_runtime::ArtifactEffect::Write
+                            }
+                            aelio_agent::tenant::ToolEffect::External => {
+                                aelio_runtime::ArtifactEffect::External
+                            }
                         },
-                        policy_tags: tool.capability_tags,
+                        policy_tags: tool.capability_tags.clone(),
                     },
                     Some(deployer.clone()),
                 )
                 .map_err(|error| AelioError::new(map_artifact_error(&error), error.to_string()))?;
         }
-        Ok(())
+        flow_lowering::materialize_declared_flows(&runtime, &mut catalog, &deployer)?;
+        let consumer = adaptive_bridge::AdaptiveDecisionConsumer::new(runtime);
+        for artifact in catalog.flow_artifacts.values() {
+            consumer.verify_executable_pin(&catalog.tenant_id, artifact)?;
+        }
+        for flow in &catalog.flows {
+            if catalog.flow_artifacts.contains_key(&flow.id) {
+                continue;
+            }
+            consumer
+                .runtime()
+                .record_capability_request(
+                    &catalog.tenant_id,
+                    aelio_runtime::CapabilityRequestDraft {
+                        normalized_need: format!(
+                            "materialize authored flow {}@{} into one admitted runtime artifact",
+                            flow.id, flow.version
+                        ),
+                        inputs: vec![aelio_runtime::ArtifactInput {
+                            name: "turn".into(),
+                            imprint: "aelio.turn.input@1".into(),
+                            required: true,
+                            sensitivity: "internal".into(),
+                        }],
+                        output: "aelio.turn.output@1".into(),
+                        allowed_effects: vec![],
+                        requester: "catalog.flow".into(),
+                        reason: aelio_runtime::CapabilityReason::InterfaceNotClosed,
+                        evidence_refs: vec![],
+                    },
+                )
+                .map_err(|error| AelioError::new(map_artifact_error(&error), error.to_string()))?;
+        }
+        Ok(catalog)
     })
     .await
     .map_err(|error| {
         AelioError::new(
             ReasonCode::Internal,
-            format!("tool proxy admission worker failed: {error}"),
+            format!("catalog artifact admission worker failed: {error}"),
         )
     })?
 }
@@ -414,6 +499,86 @@ fn map_artifact_error(error: &aelio_runtime::RuntimeError) -> ReasonCode {
 async fn active_catalog(State(state): State<AppState>) -> Json<aelio_agent::tenant::TenantDecl> {
     let runtime = state.runtime.lock().await;
     Json(runtime.world.tenant.clone())
+}
+
+async fn bind_procedure_artifact(
+    State(state): State<AppState>,
+    Extension(identity): Extension<AuthenticatedTenant>,
+    Path(procedure_id): Path<String>,
+    Json(artifact): Json<aelio_agent::adaptive::ArtifactPinV1>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let artifact_runtime = state.artifact_runtime.clone().ok_or_else(|| {
+        ApiError(AelioError::new(
+            ReasonCode::Unavailable,
+            "the unified artifact runtime is not configured",
+        ))
+    })?;
+    let tenant_id = identity.tenant_id.clone();
+    let verified_artifact = artifact.clone();
+    tokio::task::spawn_blocking(move || {
+        adaptive_bridge::AdaptiveDecisionConsumer::new(artifact_runtime)
+            .verify_atomic_pin(&tenant_id, &verified_artifact)
+    })
+    .await
+    .map_err(|error| {
+        ApiError(AelioError::new(
+            ReasonCode::Internal,
+            format!("artifact verification worker failed: {error}"),
+        ))
+    })?
+    .map_err(ApiError)?;
+
+    let actor = identity.principal;
+    let mut runtime = state.runtime.lock().await;
+    runtime
+        .bind_procedure_artifact(&procedure_id, artifact.clone(), &actor)
+        .map_err(ApiError)?;
+    Ok(Json(serde_json::json!({
+        "status":"active",
+        "procedure_id":procedure_id,
+        "artifact":artifact,
+        "binding":"immutable"
+    })))
+}
+
+async fn bind_flow_artifact(
+    State(state): State<AppState>,
+    Extension(identity): Extension<AuthenticatedTenant>,
+    Path(flow_id): Path<String>,
+    Json(artifact): Json<aelio_agent::adaptive::ArtifactPinV1>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let artifact_runtime = state.artifact_runtime.clone().ok_or_else(|| {
+        ApiError(AelioError::new(
+            ReasonCode::Unavailable,
+            "the unified artifact runtime is not configured",
+        ))
+    })?;
+    let tenant_id = identity.tenant_id.clone();
+    let verified_artifact = artifact.clone();
+    tokio::task::spawn_blocking(move || {
+        adaptive_bridge::AdaptiveDecisionConsumer::new(artifact_runtime)
+            .verify_executable_pin(&tenant_id, &verified_artifact)
+    })
+    .await
+    .map_err(|error| {
+        ApiError(AelioError::new(
+            ReasonCode::Internal,
+            format!("flow artifact verification worker failed: {error}"),
+        ))
+    })?
+    .map_err(ApiError)?;
+
+    let actor = identity.principal;
+    let mut runtime = state.runtime.lock().await;
+    runtime
+        .bind_flow_artifact(&flow_id, artifact.clone(), &actor)
+        .map_err(ApiError)?;
+    Ok(Json(serde_json::json!({
+        "status":"active",
+        "flow_id":flow_id,
+        "artifact":artifact,
+        "binding":"immutable"
+    })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -650,9 +815,13 @@ async fn review_flow_candidate(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FlowCandidateActivateRequest {
     #[serde(default)]
     allow_replace: bool,
+    /// Required by the unified runtime. Local/parity worlds may omit it while the legacy flow
+    /// interpreter remains explicitly enabled.
+    artifact: Option<aelio_agent::adaptive::ArtifactPinV1>,
 }
 
 async fn activate_flow_candidate(
@@ -662,7 +831,7 @@ async fn activate_flow_candidate(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let mut runtime = state.runtime.lock().await;
     runtime
-        .activate_candidate_flow(&key, request.allow_replace)
+        .activate_candidate_flow_with_artifact(&key, request.allow_replace, request.artifact)
         .map_err(ApiError)?;
     Ok(Json(serde_json::json!({"status": "active"})))
 }
@@ -715,10 +884,18 @@ async fn handle_sdk_socket(socket: WebSocket, state: AppState, tenant_id: String
                 let Some(invocation) = invocation else {
                     break;
                 };
+                let invocation_id = invocation.invocation_id.clone();
                 let Ok(encoded) = serde_json::to_string(&invocation) else {
                     break;
                 };
                 if sender.send(Message::Text(encoded.into())).await.is_err() {
+                    break;
+                }
+                if state
+                    .bridge
+                    .mark_dispatched(&connection_id, &invocation_id)
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -739,7 +916,7 @@ async fn handle_sdk_message(
     };
     match parsed.get("type").and_then(serde_json::Value::as_str) {
         Some("register") => {
-            let registration: RegisterMessage = match serde_json::from_value(parsed) {
+            let mut registration: RegisterMessage = match serde_json::from_value(parsed) {
                 Ok(registration) => registration,
                 Err(error) => {
                     return Some(wire_error(
@@ -760,15 +937,16 @@ async fn handle_sdk_message(
             if let Err(error) = validate_catalog(&registration.catalog) {
                 return Some(wire_aelio_error(&error));
             }
-            if let Err(error) = provision_catalog_proxies(
+            registration.catalog = match provision_catalog_artifacts(
                 state,
-                &registration.catalog,
+                registration.catalog,
                 &format!("sdk-connection:{connection_id}"),
             )
             .await
             {
-                return Some(wire_aelio_error(&error));
-            }
+                Ok(catalog) => catalog,
+                Err(error) => return Some(wire_aelio_error(&error)),
+            };
             {
                 let mut runtime = state.runtime.lock().await;
                 if let Err(error) = runtime.register_catalog(registration.catalog.clone()) {
@@ -783,17 +961,49 @@ async fn handle_sdk_message(
                 Err(error) => Some(wire_aelio_error(&error)),
             }
         }
-        Some("result") => match serde_json::from_value::<ResultMessage>(parsed) {
-            Ok(result) => state
-                .bridge
-                .complete(connection_id, result)
-                .err()
-                .map(|error| wire_aelio_error(&error)),
-            Err(error) => Some(wire_error(
-                "invalid_result",
-                &format!("result failed schema validation: {error}"),
-            )),
-        },
+        Some("result") => {
+            match serde_json::from_value::<ResultMessage>(parsed) {
+                Ok(result) => {
+                    let invocation_id = result.invocation_id.clone();
+                    match state.bridge.complete(connection_id, result) {
+                        Ok(disposition) => {
+                            let disposition = match disposition {
+                                aelio_wire::ResultDisposition::Accepted => "accepted",
+                                aelio_wire::ResultDisposition::Duplicate => "duplicate",
+                                aelio_wire::ResultDisposition::Late => "late",
+                                aelio_wire::ResultDisposition::UnknownCorrelation => "unknown",
+                            };
+                            if disposition != "unknown" {
+                                let mut runtime = state.runtime.lock().await;
+                                if let Err(error) = runtime
+                                    .record_sdk_delivery_disposition(&invocation_id, disposition)
+                                {
+                                    return Some(wire_aelio_error(&error));
+                                }
+                            }
+                            let delivery_ledger =
+                                state.bridge.delivery_trace(&invocation_id).ok().and_then(
+                                    |trace| serde_json::from_str::<serde_json::Value>(&trace).ok(),
+                                );
+                            Some(
+                                serde_json::json!({
+                                    "type":"result_ack",
+                                    "invocation_id":invocation_id,
+                                    "disposition":disposition,
+                                    "delivery_ledger":delivery_ledger,
+                                })
+                                .to_string(),
+                            )
+                        }
+                        Err(error) => Some(wire_aelio_error(&error)),
+                    }
+                }
+                Err(error) => Some(wire_error(
+                    "invalid_result",
+                    &format!("result failed schema validation: {error}"),
+                )),
+            }
+        }
         Some("pong") => None,
         Some(_) => Some(wire_error(
             "unsupported_message",
@@ -801,6 +1011,73 @@ async fn handle_sdk_message(
         )),
         None => Some(wire_error("invalid_message", "message type is required")),
     }
+}
+
+async fn list_sdk_delivery_audit(
+    State(state): State<AppState>,
+    Query(query): Query<LearningListQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let runtime = state.runtime.lock().await;
+    let rows = runtime
+        .list_sdk_delivery_dispositions(query.limit.unwrap_or(100))
+        .map_err(ApiError)?;
+    Ok(Json(serde_json::json!({
+        "items": rows.into_iter().map(|row| serde_json::json!({
+            "key":row.envelope.key,
+            "status":row.envelope.status,
+            "version":row.version,
+            "event":row.envelope.value,
+        })).collect::<Vec<_>>()
+    })))
+}
+
+async fn list_tool_outcomes(
+    State(state): State<AppState>,
+    Query(query): Query<LearningListQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let runtime = state.runtime.lock().await;
+    let rows = runtime
+        .list_tool_outcomes(query.status.as_deref(), query.limit.unwrap_or(100))
+        .map_err(ApiError)?;
+    Ok(Json(serde_json::json!({
+        "items":rows.into_iter().map(|row| {
+            let idempotency_hash = hex::encode(Sha256::digest(row.envelope.value.key.as_bytes()));
+            let subject_hash = hex::encode(Sha256::digest(row.envelope.value.user_id.as_bytes()));
+            serde_json::json!({
+                "idempotency_hash":idempotency_hash,
+                "subject_hash":subject_hash,
+                "tool_id":row.envelope.value.tool_id,
+                "tool_version":row.envelope.value.tool_version,
+                "state":row.envelope.value.state,
+                "attempts":row.envelope.value.attempts,
+                "reason_code":row.envelope.value.reason_code,
+                "version":row.version,
+            })
+        }).collect::<Vec<_>>()
+    })))
+}
+
+async fn list_open_loops(
+    State(state): State<AppState>,
+    Query(query): Query<LearningListQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let runtime = state.runtime.lock().await;
+    let rows = runtime
+        .list_open_loops(query.limit.unwrap_or(100))
+        .map_err(ApiError)?;
+    Ok(Json(serde_json::json!({
+        "items":rows.into_iter().map(|row| {
+            let subject_hash = hex::encode(Sha256::digest(row.envelope.owner.as_bytes()));
+            let intent_hash = hex::encode(Sha256::digest(row.envelope.value.text.as_bytes()));
+            serde_json::json!({
+                "subject_hash":subject_hash,
+                "intent_hash":intent_hash,
+                "state":row.envelope.value.open_loop_state,
+                "created_at_ms":row.envelope.created_at_ms,
+                "version":row.version,
+            })
+        }).collect::<Vec<_>>()
+    })))
 }
 
 fn wire_aelio_error(error: &AelioError) -> String {

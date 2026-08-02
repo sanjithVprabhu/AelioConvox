@@ -245,6 +245,18 @@ pub struct PrismHitResponse {
 #[derive(Debug, Serialize)]
 pub struct PrismResponse {
     pub results: Vec<PrismHitResponse>,
+    pub decision: PrismDecisionResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrismDecisionResponse {
+    pub authority: &'static str,
+    pub collection: String,
+    pub modalities: Vec<&'static str>,
+    pub predicate_count: usize,
+    pub projection: Vec<String>,
+    pub limit: u64,
+    pub result_count: usize,
 }
 
 #[derive(Debug, Serialize)]

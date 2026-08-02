@@ -20,7 +20,7 @@ fn artifact(id: &str, body: serde_json::Value) -> Artifact {
         ArtifactClass::Flow,
         ArtifactTier::Auto,
         "1",
-        "kernel@1",
+        env!("CARGO_PKG_VERSION"),
         ArtifactInterface {
             inputs: vec![ArtifactInput {
                 name: "input".into(),

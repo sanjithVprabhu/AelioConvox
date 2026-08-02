@@ -153,7 +153,10 @@ pub fn core_kind_set() -> BTreeSet<String> {
     CORE_KINDS.iter().map(|s| (*s).to_string()).collect()
 }
 
-pub fn handshake(hello: &Hello, session_id: impl Into<String>) -> Result<(Welcome, CapabilitySet), RenderError> {
+pub fn handshake(
+    hello: &Hello,
+    session_id: impl Into<String>,
+) -> Result<(Welcome, CapabilitySet), RenderError> {
     if hello.protocol != PROTOCOL_ID {
         return Err(RenderError::Rejected(
             "handshake_version_unsupported".into(),
@@ -174,8 +177,8 @@ pub fn handshake(hello: &Hello, session_id: impl Into<String>) -> Result<(Welcom
         ));
     }
     let limits = ClientLimits {
-        max_blocks: hello.limits.max_blocks.min(MAX_BLOCKS_PER_FRAME).max(1),
-        max_nesting: hello.limits.max_nesting.min(MAX_NESTING).max(1),
+        max_blocks: hello.limits.max_blocks.clamp(1, MAX_BLOCKS_PER_FRAME),
+        max_nesting: hello.limits.max_nesting.clamp(1, MAX_NESTING),
     };
     let welcome = Welcome {
         session_id: session_id.into(),
@@ -219,10 +222,7 @@ pub fn status_block(block_id: &str, state: &str, label: &str) -> Block {
         block_id: block_id.into(),
         kind: "status@1".into(),
         body: serde_json::json!({ "state": state, "label": label }),
-        fallback: Some(Box::new(text_block(
-            &format!("{block_id}_fb"),
-            label,
-        ))),
+        fallback: Some(Box::new(text_block(&format!("{block_id}_fb"), label))),
         on: BTreeMap::new(),
         meta: None,
     }
@@ -242,10 +242,7 @@ pub fn choice_block(
         block_id: block_id.into(),
         kind: "choice@1".into(),
         body: serde_json::json!({ "options": opts, "multi": multi }),
-        fallback: Some(Box::new(text_block(
-            &format!("{block_id}_fb"),
-            fallback_md,
-        ))),
+        fallback: Some(Box::new(text_block(&format!("{block_id}_fb"), fallback_md))),
         on: BTreeMap::new(),
         meta: None,
     }
@@ -354,9 +351,7 @@ fn validate_block(
             return Err(RenderError::Invalid("fallback_missing".into()));
         };
         if fb.kind != "text@1" {
-            return Err(RenderError::Invalid(
-                "fallback must be kind text@1".into(),
-            ));
+            return Err(RenderError::Invalid("fallback must be kind text@1".into()));
         }
         validate_body("text@1", &fb.body)?;
     }
@@ -475,10 +470,7 @@ fn validate_body(kind: &str, body: &Json) -> Result<(), RenderError> {
     }
 }
 
-fn req_str<'a>(
-    o: &'a serde_json::Map<String, Json>,
-    key: &str,
-) -> Result<&'a str, RenderError> {
+fn req_str<'a>(o: &'a serde_json::Map<String, Json>, key: &str) -> Result<&'a str, RenderError> {
     o.get(key)
         .and_then(Json::as_str)
         .filter(|s| !s.is_empty() || key == "md" || key == "source")

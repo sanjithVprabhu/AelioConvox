@@ -878,6 +878,10 @@ Every release runs these through the public boundary and stores the decision log
 Each scenario asserts response, final state, effect count, ledger kinds/order, artifact versions,
 continuation state, decision-log explanation, and replay result.
 
+Current evidence and the exact unclosed assertion for every row are tracked in
+`docs/new_arch/AELIO_PUBLIC_BOUNDARY_SCENARIO_EVIDENCE.md`. Component coverage is intentionally not
+counted as full public coverage there.
+
 ---
 
 ## 11. Traceability and CI policy
@@ -955,24 +959,157 @@ system whose intelligence can grow while its authority remains closed, testable,
 
 ---
 
-## 14. Immediate next implementation slice
+## 14. Implementation checkpoint and completed local cutover
 
-Begin with **Phase 0**, then implement **Phase 1 as one vertical artifact slice**:
+As of 2026-08-01, Phases 0–5 and 7–9 have executable local evidence. The repository now has the
+immutable artifact authority, twelve-step durable builder, Mint refusal/gating, fixture-only
+sandbox, generic distinct-evidence lifecycle, Prism/Aelio DB storage, runtime-owned tool proxies,
+TypeScript authority scan, redacted decision logs, backup/verify/atomic restore, readiness and
+graceful drain. Flow, Harness, Prompt, Imprint, Glu/converter, Dataset, Pathway and Procedure have
+typed registry views. A learned Procedure can only invoke one already admitted Flow/Harness through
+the runtime; mining evidence cannot register another interpreter.
 
-```text
-BuildSpec fixture
-  -> admit + name lease
-  -> store immutable artifact candidate
-  -> sandbox example through existing runtime
-  -> lifecycle transition to canary
-  -> retrieve through Prism
-  -> invoke pinned flow through /v1/turns
-  -> inspect ledger
-  -> restart server
-  -> replay with identical bag hash
-```
+`AGENT-UNIFICATION-001` is locally implemented. Production fails closed unless an authored flow has
+an exact admitted runtime artifact binding, and every bound flow is runtime-owned. A semantic
+`FlowSpec` alone is intentionally not executable: postconditions and admissible capabilities do not
+contain enough information to invent effect order, repair edges or user-visible replies safely.
+Executable authorship therefore adds the closed `FlowLoweringV1` HOW layer. Rust validates it,
+resolves symbolic capability names to one exact tool/version, rewrites and gates the immutable Sol
+graph, installs its pin into the same catalog snapshot, and only then permits activation. The legacy
+`FlowInstance` interpreter remains available to explicit local/parity worlds but is neither hydrated,
+mutated nor persisted by unified production construction.
 
-Do not begin with live recursive model building. Prove that one manually supplied BuildSpec becomes
-one durable, gated, discoverable, executable and replayable artifact using the current kernel and
-Aelio DB. Once this slice is green, the twelve-step builder can safely automate how that artifact
-is authored without changing how it is trusted or executed.
+`E2E-PUBLIC-001` is now implemented. The complete fifteen-scenario matrix in §10 runs through
+public Rust boundaries with executable evidence indexed in
+`docs/new_arch/AELIO_PUBLIC_BOUNDARY_SCENARIO_EVIDENCE.md`, including real SIGTERM/restart and a
+host-backed historical database-read replay. The deterministic local matrix does not replace
+`PRODUCTION-LIVE-001`.
+
+`PRODUCTION-LIVE-001` remains external by definition: real provider/channel/load/soak/crash-window
+evidence belongs to opt-in release CI and cannot be truthfully manufactured by a local deterministic
+test run.
+
+The first adaptive cutover slice is now executable. `AdaptiveDecisionV1` is a closed, bounded,
+tamper-evident contract with exact artifact pins; Tier-0/1 lookup emits it and records structured
+shadow parity. The Rust API consumer revalidates hash, tenant resolution, lifecycle, executable
+class and output shape, and turns insufficiency into deduplicated non-executable demand. An
+immutable administrative binding connects a promoted legacy procedure id to one admitted runtime
+artifact and survives registry refresh. The public turn test proves the selected artifact executes
+inside the durable turn using the original turn id as its child idempotency identity and replays the
+same result.
+
+The procedure hot-turn bridge admits only pure artifacts whose complete dependency graph is
+statically non-suspending. A Park, nested Flow target, non-pure effect or dependency cycle is
+rejected before that atomic execution path.
+
+Suspendable authored flows now have a separate runtime-owned path. `TenantDecl.flow_artifacts`
+binds an authored flow id to one exact admitted Flow/Harness/Procedure pin during atomic catalog
+publication. Activation writes a subject-hashed continuation index before reactor execution;
+Park/restart/resume and single-active-rail exclusion are owned by `aelio-runtime`, while the legacy
+`World.active_flow` remains null. The next public turn resumes that exact instance before semantic
+triage, and durable turn replay does not redeliver the wake. Tests cover runtime database reopen,
+competing activation rejection, completion, reactivation and the full catalog-to-public-turn path.
+
+Catalog Flow lowering is now automatic for the closed executable declaration: the control plane
+compiles `FlowLoweringV1`, rather than accepting an already gated raw runtime graph. Calls may name
+only `$cap:<binding>`; raw target ids are rejected. Zero/multiple capability matches, unknown or
+unused bindings, non-canonical versions, missing exact effects, unbounded cases, Park-inside-Loop,
+attempt overflow and same-version content drift all fail publication. Abstract-only flows still
+record a deduplicated off-path materialization demand, readiness reports the missing binding, and a
+matched unbound flow performs no effect. Reviewed learned flows are subject to the same rule and
+cannot leave `Approved` without a verified executable pin atomically installed in
+`flow_artifacts`.
+
+The public login acceptance artifact now proves the compiler-owned runtime rail end to end:
+exactly one OTP effect under `Once`, Park, wrong-code repair without resend, database/process reopen,
+correct-code completion, and subject-index closure. This is evidence for the runtime contract, not
+a claim that semantic intent alone can safely invent a workflow.
+
+### 14.1 Next slice: adaptive decision purity
+
+Refactor `aelio-agent` so one turn produces a closed `AdaptiveDecisionV1`; during the migration the
+only permitted consumer adapter is the fail-closed `aelio-runtime` host installed by the Rust
+server. Remove that adapter from the agent crate when §14.3 switches the public root Harness.
+The result must contain exactly one of:
+
+- `invoke { artifact_id, artifact_version, artifact_hash, projected_input }`;
+- `reply { render_frame }` for a pure, non-stateful response;
+- `insufficient { capability_request }`;
+- `abstain { closed_reason }`.
+
+It must not contain raw tool calls, arbitrary programs, unpinned ids, or a replacement flow-state
+object. Understanding, bounded retrieval, candidate scoring and missing-capability detection remain
+agent responsibilities. Policy, effect authorization, continuation mutation and execution remain
+runtime responsibilities.
+
+Acceptance tests:
+
+- compiling `aelio-agent` without its legacy `ToolHost` execution adapter is possible;
+- decision serialization is closed (`deny_unknown_fields`), bounded and rejects non-finite scores;
+- every invocation pin resolves to an immutable canary/promoted artifact with an exact hash;
+- no decision branch can carry a tool id unless that id is inside the pinned artifact;
+- a missing candidate emits one deduplicated `CapabilityRequest` and performs no inline build.
+
+### 14.2 Completed slice: catalog Flow lowering
+
+Each executable authored `aelio-agent::FlowSpec` carries one closed symbolic lowering declaration
+that Rust compiles into an immutable runtime Flow graph. `admissible` capability tags resolve during
+admission to exact tool-proxy pins; zero or multiple matches fail catalog publication. The lowered
+graph owns Park, attempts, TTL, declared fail-closed escalation/free-range escape and terminal
+outputs. It calls the adaptive decision boundary only at declared classifier/model seams, never as
+an instruction interpreter. `fallback` continuation handoff is reserved for a future lowering
+format and is rejected by format 1 before artifact admission; it is not represented as a magic
+response for another interpreter to execute.
+
+Acceptance tests:
+
+- login/OTP parks in a kernel continuation and survives process/database reopen;
+- wrong OTP takes the typed repair edge without replacing the continuation;
+- correct OTP performs the exact pinned transition and closes the continuation once;
+- prompt/tool/version drift rejects the new snapshot and retains the old exact pin; runtime target
+  failure follows the declared escalation/free-range escape instead of silently rebinding;
+- a read-only detour cannot advance, replace or erase an active flow;
+- a second flow intent becomes a durable open loop, not a stack or hidden agent map.
+
+### 14.3 Completed production cutover and parity retention
+
+The old and new rails run in shadow on deterministic inputs. Only the runtime rail may dispatch effects.
+Store both decision hashes and a structured parity reason. After zero unexplained mismatches across
+the scenario corpus:
+
+The production constructor disables legacy flow execution, never hydrates or persists
+`World.user_flows`, consumes exact adaptive artifact pins, and places suspendable state in runtime
+subject continuations. TypeScript performs catalog/transport/provider/tool adaptation only. The old
+rail is retained solely for explicit parity/local tests for one release; its later deletion is code
+hygiene, not an authority dependency. Source scans and public tests prove no production agent flow
+mutation or direct effect dispatch remains.
+
+The migration must not be declared complete merely because tool calls pass through a proxy. The
+authority boundary is complete only when the reactor also owns continuation state and consumes the
+adaptive choice as a pinned artifact invocation.
+
+### 14.4 Verified release checkpoint (2026-08-02)
+
+The deterministic local release gate passed after the public-boundary work above:
+
+- `cargo test --workspace --all-features`, including corruption, property, lifecycle, replay,
+  restart, migration, tenant-isolation and public scenario tests;
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` and formatting/diff checks;
+- `pnpm typecheck`, the normative requirement/convergence validators and production authority scan;
+- `pnpm test:all`, including an optimized Rust server build plus live local Rust/TypeScript server,
+  SDK WebSocket, web-widget, WhatsApp, confirmation, authentication, identity, database/admin and
+  memory scenarios.
+
+Tenant-scoped database and runtime construction also rejects an empty credential set, malformed
+credentials and duplicate token ownership rather than silently allowing one tenant binding to
+replace another. Five real-provider tests remain explicitly ignored until release CI supplies
+provider credentials and network access; production load/soak and managed crash-window evidence
+therefore remains `PRODUCTION-LIVE-001`, not a local guarantee.
+
+The catalog compiler checkpoint additionally proves symbolic capability resolution, exact effects,
+fixture-gated admission, immutable same-version drift rejection with the old snapshot retained,
+compiler-owned escalation on target failure, OTP repair without resend, database/runtime reopen,
+correct completion, TTL expiry/reactivation, and zero unified-production persistence through the
+legacy flow-instance table. The closed SDK protocol is typechecked and the SDK host snapshot is
+activated only after Rust accepts the complete catalog; concurrent duplicate registration is
+rejected.

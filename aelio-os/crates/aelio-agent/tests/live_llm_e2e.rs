@@ -1,3 +1,5 @@
+#![cfg(feature = "direct-provider-tests")]
+
 //! Live LLM + durable store end-to-end verification.
 //!
 //! Run (requires network + key):

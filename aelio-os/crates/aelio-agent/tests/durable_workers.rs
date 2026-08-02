@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Barrier};
 
+use aelio_agent::adaptive::{
+    AdaptiveArtifactHost, AdaptiveArtifactTurnV1, AdaptiveDecisionEnvelopeV1, ArtifactPinV1,
+};
 use aelio_agent::contract::AbilityPath;
 use aelio_agent::runtime::{
     BehavioralOutcomeSignal, BehavioralSignalKind, ColdProposal, ColdProposalState,
@@ -13,7 +16,7 @@ use aelio_agent::tenant::{
     FlowActivation, FlowEscape, FlowSpec, FlowStep, Preemption, ViolationAction,
 };
 use aelio_agent::types::{LookupTier, TenantMode};
-use aelio_agent::{Predicate, ReasonCode};
+use aelio_agent::{AelioError, Predicate, ReasonCode};
 use aelio_db_query::Database;
 
 fn store(tag: &str) -> AelioStore {
@@ -26,6 +29,37 @@ fn store(tag: &str) -> AelioStore {
     let mut store = AelioStore::new(Database::create(path).unwrap(), 3).unwrap();
     store.migrate_tenant("tenant-1", 0).unwrap();
     store
+}
+
+struct VerifyingArtifactHost;
+
+impl AdaptiveArtifactHost for VerifyingArtifactHost {
+    fn verify_executable_pin(
+        &mut self,
+        tenant: &str,
+        artifact: &ArtifactPinV1,
+    ) -> Result<(), AelioError> {
+        assert_eq!(tenant, "tenant-1");
+        if artifact.id != "learned.followup.runtime" {
+            return Err(AelioError::new(
+                ReasonCode::NotFound,
+                "test artifact is not admitted",
+            ));
+        }
+        Ok(())
+    }
+
+    fn invoke(
+        &mut self,
+        _tenant: &str,
+        _instance_id: &str,
+        _decision: &AdaptiveDecisionEnvelopeV1,
+    ) -> Result<AdaptiveArtifactTurnV1, AelioError> {
+        Err(AelioError::new(
+            ReasonCode::Unavailable,
+            "activation verification must not execute the artifact",
+        ))
+    }
 }
 
 fn job(id: &str) -> ScheduledJob {
@@ -95,6 +129,7 @@ fn learned_flow(id: &str, trigger: &str) -> FlowSpec {
         terminal_states: vec!["authenticated".into()],
         ttl_secs: Some(300),
         max_attempts: 3,
+        lowering: None,
     }
 }
 
@@ -606,6 +641,26 @@ fn repeated_success_promotes_durably_and_next_turn_is_tier_zero() {
 }
 
 #[test]
+fn unified_world_never_hydrates_or_persists_legacy_flow_instances() {
+    let shared = store("unified_no_legacy_flow_state");
+    let mut world = aelio_agent::World::demo_tenant("tenant-1");
+    world.disable_legacy_flow_execution();
+    let mut runtime = DurableRuntime::new(world, shared.clone()).unwrap();
+    runtime
+        .run_turn(DurableTurnRequest {
+            turn_id: "unified-no-flow-turn".into(),
+            user_id: "unified-user".into(),
+            utterance: "hi".into(),
+        })
+        .unwrap();
+    let legacy: Option<StoredRecord<Option<aelio_agent::blocks::flow::FlowInstance>>> = shared
+        .get("tenant-1", LogicalTable::FlowInstances, "unified-user")
+        .unwrap();
+    assert!(legacy.is_none());
+    assert!(runtime.world.user_flows.is_empty());
+}
+
+#[test]
 fn normalized_rank_query_learns_through_the_same_tier_ladder() {
     let shared = store("rank_tier_ladder");
     let mut world = aelio_agent::World::demo_tenant("tenant-1");
@@ -915,6 +970,77 @@ fn candidate_flow_requires_review_preserves_protected_rails_and_survives_restart
         .flows
         .iter()
         .any(|flow| flow.id == "learned-followup"));
+}
+
+#[test]
+fn unified_candidate_flow_stays_approved_until_an_executable_artifact_is_bound() {
+    let shared = store("candidate_flow_materialization_gate");
+    let source_key = promote_source(
+        shared.clone(),
+        "flow-source-materialized",
+        "flow-source-materialized-situation",
+        AbilityPath::seq(["crm.clients.query"]),
+        passing_evidence(),
+        Some(("clients_query", "1")),
+    );
+    let mut world = aelio_agent::World::demo_tenant("tenant-1");
+    world.disable_legacy_flow_execution();
+    world.set_adaptive_artifact_host(Box::new(VerifyingArtifactHost));
+    let mut runtime = DurableRuntime::new(world, shared).unwrap();
+    runtime
+        .propose_candidate_flow(
+            learned_flow("learned-followup-materialized", "run materialized followup"),
+            vec![source_key],
+        )
+        .unwrap();
+    let key = runtime
+        .list_candidate_flows(Some("pending_review"), 10)
+        .unwrap()[0]
+        .envelope
+        .key
+        .clone();
+    runtime
+        .review_candidate_flow(&key, true, "tenant-admin", None)
+        .unwrap();
+
+    let error = runtime.activate_candidate_flow(&key, false).unwrap_err();
+    assert_eq!(error.code, ReasonCode::GateNotMet);
+    let approved = runtime.list_candidate_flows(Some("approved"), 10).unwrap();
+    assert_eq!(approved.len(), 1);
+    assert_eq!(
+        approved[0].envelope.value.state,
+        FlowCandidateState::Approved
+    );
+    assert!(!runtime
+        .world
+        .tenant
+        .flows
+        .iter()
+        .any(|flow| flow.id == "learned-followup-materialized"));
+
+    let artifact = ArtifactPinV1 {
+        id: "learned.followup.runtime".into(),
+        version: 1,
+        hash: "ab".repeat(32),
+    };
+    runtime
+        .activate_candidate_flow_with_artifact(&key, false, Some(artifact.clone()))
+        .unwrap();
+    assert_eq!(
+        runtime
+            .world
+            .tenant
+            .flow_artifacts
+            .get("learned-followup-materialized"),
+        Some(&artifact)
+    );
+    assert_eq!(
+        runtime.list_candidate_flows(Some("active"), 10).unwrap()[0]
+            .envelope
+            .value
+            .state,
+        FlowCandidateState::Active
+    );
 }
 
 #[test]

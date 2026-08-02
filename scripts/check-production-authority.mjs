@@ -76,6 +76,21 @@ assert.match(app, /TypeScript is not an execution authority/);
 const client = readFileSync(join(serverRoot, 'aelio-runtime-client.ts'), 'utf8');
 assert.match(client, /['"]\/agent\/v1\/turns['"]/);
 
+const sdkRoute = readFileSync(join(serverRoot, 'routes/sdk.ts'), 'utf8');
+assert.doesNotMatch(sdkRoute, /\.pushFlow\s*\(/);
+const rustCatalogAdmission = sdkRoute.indexOf('await deps.aelioRuntime.pushAgentCatalog');
+const hostSnapshotActivation = sdkRoute.indexOf('sdkBridge.register({');
+assert(rustCatalogAdmission >= 0 && hostSnapshotActivation > rustCatalogAdmission,
+  'Rust must admit the catalog before TypeScript activates the SDK host snapshot');
+
+const rustAgentApi = readFileSync(
+  join(root, 'aelio-os/crates/aelio-agent-api/src/lib.rs'),
+  'utf8',
+);
+assert.match(rustAgentApi, /new_with_artifact_runtime/);
+assert.match(rustAgentApi, /runtime\.world\.disable_legacy_flow_execution\(\)/);
+assert.match(rustAgentApi, /flow_lowering::materialize_declared_flows/);
+
 const allServerFiles = [];
 const walk = (directory) => {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {

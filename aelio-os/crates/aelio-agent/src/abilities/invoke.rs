@@ -144,63 +144,67 @@ pub fn tool_call_block(
     let key = idem_key(&part_refs);
 
     // Invoke.Call — the only effectful line
-    let raw = context
-        .host
-        .call_with_context(tool, args, &key, context.user_id, context.channel)?;
+    let raw_result =
+        context
+            .host
+            .call_with_context(tool, args, &key, context.user_id, context.channel);
     let decision_trace = context.host.take_decision_trace();
+    let raw = raw_result.map_err(|error| error.with_decision_trace(decision_trace.clone()))?;
     context.once_seen.insert(key.clone());
 
-    // Signature on RAW before cleaning
-    let shape = sig::compute(&raw);
-    let sig_hash = sig::hash(&shape);
+    let result = (|| {
+        // Signature on RAW before cleaning
+        let shape = sig::compute(&raw);
+        let sig_hash = sig::hash(&shape);
 
-    // Error envelopes have a deliberately different shape from success responses. Classify them
-    // after recording the raw signature but before extracting success fields; otherwise a valid
-    // typed tool error is misreported as SigMismatch merely because `ok` is absent.
-    let role = sig::classify(&raw, tool.output_semantics.role_hint.as_deref());
-    if role == ResponseRole::Error {
-        let classified = classify_error(&raw, &tool.errors);
-        return Err(
-            AelioError::new(classified.0, classified.1).with_detail(sanitize_response(&raw, tool)?)
-        );
-    }
+        // Error envelopes have a deliberately different shape from success responses. Classify them
+        // after recording the raw signature but before extracting success fields; otherwise a valid
+        // typed tool error is misreported as SigMismatch merely because `ok` is absent.
+        let role = sig::classify(&raw, tool.output_semantics.role_hint.as_deref());
+        if role == ResponseRole::Error {
+            let classified = classify_error(&raw, &tool.errors);
+            return Err(AelioError::new(classified.0, classified.1)
+                .with_detail(sanitize_response(&raw, tool)?));
+        }
 
-    let (mut extracted, used_llm) =
-        if let Some(plan) = sig::match_plan(context.signatures, &sig_hash) {
-            (sig::extract(&raw, &plan)?, false)
-        } else {
-            // Cold path: Interpret → validate against declared semantics → propose. Promotion is a
-            // separate evidence-gated cold-loop operation.
-            let interpreted = structural_interpret(&raw, tool)?;
-            let declared_paths = tool
-                .output_semantics
-                .fields
-                .iter()
-                .map(|(name, field)| (name.clone(), field.path.clone()))
-                .collect();
-            let plan = sig::propose_with_paths(&raw, &interpreted, &declared_paths);
-            context.signatures.plans.insert(plan.sig_hash.clone(), plan);
-            (interpreted, true)
-        };
+        let (mut extracted, used_llm) =
+            if let Some(plan) = sig::match_plan(context.signatures, &sig_hash) {
+                (sig::extract(&raw, &plan)?, false)
+            } else {
+                // Cold path: Interpret → validate against declared semantics → propose. Promotion is a
+                // separate evidence-gated cold-loop operation.
+                let interpreted = structural_interpret(&raw, tool)?;
+                let declared_paths = tool
+                    .output_semantics
+                    .fields
+                    .iter()
+                    .map(|(name, field)| (name.clone(), field.path.clone()))
+                    .collect();
+                let plan = sig::propose_with_paths(&raw, &interpreted, &declared_paths);
+                context.signatures.plans.insert(plan.sig_hash.clone(), plan);
+                (interpreted, true)
+            };
 
-    // Declared semantics, not learned structure: any output field the tenant marked `pii` or
-    // `secret` must never leave this function in the clear. `extracted` flows straight into the
-    // execution frame's evidence, which is bound into `Express.Synthesize`'s prompt (rendered
-    // verbatim into the text sent to the model — only the *logged* copy is redacted) and persisted
-    // to memory and the ledger. Redact by declared field name here so the OTP never reaches a
-    // prompt or a log. (§15.3, decisions T2/C3.)
-    redact_sensitive_extracted(tool, &mut extracted);
+        // Declared semantics, not learned structure: any output field the tenant marked `pii` or
+        // `secret` must never leave this function in the clear. `extracted` flows straight into the
+        // execution frame's evidence, which is bound into `Express.Synthesize`'s prompt (rendered
+        // verbatim into the text sent to the model — only the *logged* copy is redacted) and persisted
+        // to memory and the ledger. Redact by declared field name here so the OTP never reaches a
+        // prompt or a log. (§15.3, decisions T2/C3.)
+        redact_sensitive_extracted(tool, &mut extracted);
 
-    Ok(InvokeReceipt {
-        tool_id: tool.id.clone(),
-        args_hash: key,
-        safe_response: sanitize_response(&raw, tool)?,
-        role,
-        extracted,
-        used_llm_interpret: used_llm,
-        sig_hash,
-        decision_trace,
-    })
+        Ok(InvokeReceipt {
+            tool_id: tool.id.clone(),
+            args_hash: key,
+            safe_response: sanitize_response(&raw, tool)?,
+            role,
+            extracted,
+            used_llm_interpret: used_llm,
+            sig_hash,
+            decision_trace: decision_trace.clone(),
+        })
+    })();
+    result.map_err(|error| error.with_decision_trace(decision_trace))
 }
 
 fn structural_interpret(raw: &Value, tool: &ToolSpec) -> AelioResult<IndexMap<String, Value>> {
@@ -332,6 +336,7 @@ mod tests {
             name: "send_otp".into(),
             version: "1".into(),
             capability_tags: vec!["auth.otp.send".into()],
+            effect: None,
             effectful: true,
             idempotent: false,
             dry_run_available: true,
@@ -485,5 +490,69 @@ mod tests {
             keys.push(receipt.args_hash);
         }
         assert_ne!(keys[0], keys[1]);
+    }
+
+    #[test]
+    fn authoritative_trace_survives_a_failed_tool_invocation() {
+        struct FailingTracedHost {
+            trace: Option<String>,
+        }
+        impl ToolHost for FailingTracedHost {
+            fn call(
+                &mut self,
+                _tool_id: &str,
+                _args: &IndexMap<String, Value>,
+            ) -> AelioResult<Value> {
+                Err(AelioError::new(ReasonCode::NeedsRepair, "invalid otp"))
+            }
+
+            fn call_with_context(
+                &mut self,
+                _tool: &ToolSpec,
+                _args: &IndexMap<String, Value>,
+                _idempotency_key: &str,
+                _user_id: &str,
+                _channel: &str,
+            ) -> AelioResult<Value> {
+                self.trace = Some("{\"steps\":[{\"kind\":\"error\"}]}".into());
+                Err(AelioError::new(ReasonCode::NeedsRepair, "invalid otp"))
+            }
+
+            fn take_decision_trace(&mut self) -> Option<String> {
+                self.trace.take()
+            }
+        }
+
+        let policies = [PolicySpec {
+            id: "allow-test-effect".into(),
+            effect: PolicyEffect::Allow,
+            subject: PolicySubject::default(),
+            action: PolicyAction::default(),
+            condition: Predicate::True,
+            reason_code: "test".into(),
+            priority: 1,
+        }];
+        let mut host = FailingTracedHost { trace: None };
+        let mut signatures = SignatureRegistry::default();
+        let mut once_seen = HashSet::new();
+        let error = tool_call_block(
+            &secret_echo_tool(),
+            &IndexMap::new(),
+            &mut InvokeContext {
+                policies: &policies,
+                policy: &PolicyCtx::default(),
+                host: &mut host,
+                signatures: &mut signatures,
+                once_seen: &mut once_seen,
+                user_id: "u1",
+                channel: "test",
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ReasonCode::NeedsRepair);
+        assert_eq!(
+            error.decision_trace.as_deref(),
+            Some("{\"steps\":[{\"kind\":\"error\"}]}")
+        );
     }
 }

@@ -37,6 +37,8 @@ use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnInput {
+    /// Stable durable turn id used to derive child artifact idempotency keys.
+    pub turn_id: String,
     pub utterance: String,
     pub user_id: String,
     pub channel: String,
@@ -93,6 +95,7 @@ pub struct TurnRuntime<'a> {
     pub signatures: &'a mut crate::abilities::sig::SignatureRegistry,
     pub once_seen: &'a mut HashSet<String>,
     pub tool_host: &'a mut dyn ToolHost,
+    pub adaptive_artifact_host: &'a mut dyn crate::adaptive::AdaptiveArtifactHost,
     pub llm_provider: &'a mut dyn LlmProvider,
     pub turn_recall: &'a mut dyn TurnRecall,
     /// The runtime's configured embedder — bag-of-hash offline, or the gateway-served OpenAI /
@@ -100,6 +103,7 @@ pub struct TurnRuntime<'a> {
     /// intent classification, term bridging, promotion embedding) goes through this one handle.
     pub embedder: &'a dyn crate::embedding::Embedder,
     pub inline_learning_enabled: bool,
+    pub legacy_flow_execution_enabled: bool,
     pub(crate) durable_memory_enabled: bool,
 }
 
@@ -107,6 +111,115 @@ impl<'a> TurnRuntime<'a> {
     pub fn run(&mut self, input: &TurnInput) -> TurnResult {
         let mut steps = Vec::new();
         let mut llm_calls = 0u32;
+
+        let active_runtime_subject = match self
+            .adaptive_artifact_host
+            .has_active_subject(&self.tenant.tenant_id, &input.user_id)
+        {
+            Ok(active) => active,
+            Err(error) => {
+                steps.push(TurnTraceStep {
+                    name: "FlowGate.Runtime".into(),
+                    detail: format!("probe_failed reason={:?}", error.code),
+                });
+                return rejected_path_turn(
+                    steps,
+                    "The active runtime flow could not be inspected safely.",
+                );
+            }
+        };
+        if active_runtime_subject {
+            if self.matching_flow(&input.utterance, input).is_some() {
+                steps.push(TurnTraceStep {
+                    name: "FlowGate.Defer".into(),
+                    detail: "second flow intent deferred; active runtime continuation unchanged"
+                        .into(),
+                });
+                return deferred_runtime_flow_turn(steps);
+            }
+            if let Some((decision, procedure_id)) = self.declared_read_only_detour(input) {
+                steps.push(TurnTraceStep {
+                    name: "FlowGate.Detour".into(),
+                    detail: "declared non-instantiating read-only pathway; continuation unchanged"
+                        .into(),
+                });
+                return self.execute_adaptive_artifact(
+                    input,
+                    Some(decision),
+                    LookupTier::Tier1,
+                    Depth::Boundary,
+                    None,
+                    Some(procedure_id),
+                    steps,
+                    0,
+                );
+            } else {
+                let projected_wake = serde_json::json!({
+                    "turn": {
+                        "utterance": input.utterance,
+                        "channel": input.channel,
+                        "state_id": input.state_id,
+                    }
+                });
+                let resumed = self.adaptive_artifact_host.resume_subject(
+                    &self.tenant.tenant_id,
+                    &input.user_id,
+                    projected_wake,
+                );
+                if let Some(trace) = self.adaptive_artifact_host.take_decision_trace() {
+                    steps.push(TurnTraceStep {
+                        name: "Artifact.Ledger".into(),
+                        detail: trace,
+                    });
+                }
+                match resumed {
+                    Ok(Some(outcome)) => {
+                        let suspended = outcome.suspended;
+                        let Some(reply) = adaptive_output_utterance(outcome.output) else {
+                            return rejected_path_turn(
+                                steps,
+                                "The active runtime flow returned an invalid response.",
+                            );
+                        };
+                        steps.push(TurnTraceStep {
+                            name: "FlowGate.Runtime".into(),
+                            detail: format!(
+                                "resumed authority=aelio-runtime suspended={suspended}"
+                            ),
+                        });
+                        return TurnResult {
+                            reply,
+                            llm_calls: 0,
+                            tier: None,
+                            depth: Depth::Deep,
+                            steps,
+                            opened_loop: suspended,
+                            new_state: None,
+                            active_flow: None,
+                            situation_hash: None,
+                            proposal_id: None,
+                            suspended,
+                        };
+                    }
+                    Ok(None) => {
+                        return rejected_path_turn(
+                            steps,
+                            "The active runtime flow disappeared before it could resume.",
+                        );
+                    }
+                    Err(error) => {
+                        steps.push(TurnTraceStep {
+                            name: "FlowGate.Runtime".into(),
+                            detail: format!("failed reason={:?}", error.code),
+                        });
+                        return rejected_path_turn(
+                            steps,
+                            "The active runtime flow could not be resumed safely.",
+                        );
+                    }
+                }
+            }
+        }
 
         if input
             .active_flow
@@ -306,6 +419,68 @@ impl<'a> TurnRuntime<'a> {
                 name: "FlowMatch".into(),
                 detail: format!("matched {} before semantic triage", flow.id),
             });
+            if let Some(artifact) = self.registry.flow_artifact(&flow.id).cloned() {
+                let margin = crate::blocks::flow::trigger_surface_match(
+                    clause,
+                    &flow.activation.trigger_surface,
+                );
+                let projected_input = serde_json::json!({
+                    "turn": {
+                        "utterance": input.utterance,
+                        "channel": input.channel,
+                        "state_id": input.state_id,
+                    }
+                });
+                let decision = crate::adaptive::AdaptiveDecisionEnvelopeV1::seal(
+                    vec![crate::adaptive::ArtifactCandidateV1 {
+                        artifact: artifact.clone(),
+                        score: margin.clamp(-1.0, 1.0),
+                        reason: crate::adaptive::CandidateReasonV1::AuthoredFlowActivation,
+                    }],
+                    crate::adaptive::AdaptiveDecisionV1::Invoke {
+                        artifact,
+                        projected_input,
+                    },
+                );
+                let mut result = self.execute_bound_flow(input, &flow, decision, &mut steps);
+                result.llm_calls = result.llm_calls.saturating_add(llm_calls);
+                return result;
+            }
+            if !self.legacy_flow_execution_enabled {
+                let effectful =
+                    flow.steps
+                        .iter()
+                        .flat_map(|step| &step.admissible)
+                        .any(|capability| {
+                            self.registry
+                                .lookup_tool_by_capability(capability)
+                                .iter()
+                                .any(|tool| tool.effectful)
+                        });
+                let demand = crate::adaptive::AdaptiveFlowDemandV1 {
+                    flow_id: flow.id.clone(),
+                    flow_version: flow.version.clone(),
+                    effectful,
+                };
+                let recorded = demand.validate().and_then(|_| {
+                    self.adaptive_artifact_host
+                        .record_flow_demand(&self.tenant.tenant_id, &demand)
+                });
+                steps.push(TurnTraceStep {
+                    name: "FlowMaterialization".into(),
+                    detail: match recorded {
+                        Ok(()) => "missing runtime artifact; demand recorded off-path".into(),
+                        Err(error) => format!(
+                            "missing runtime artifact; demand unavailable reason={:?}",
+                            error.code
+                        ),
+                    },
+                });
+                return rejected_path_turn(
+                    steps,
+                    "This flow has not passed runtime materialization and admission yet.",
+                );
+            }
             let mut result = self.activate_flow(input, &flow, &mut steps);
             result.llm_calls = result.llm_calls.saturating_add(llm_calls);
             return result;
@@ -502,10 +677,23 @@ impl<'a> TurnRuntime<'a> {
             name: "LookupTier".into(),
             detail: format!("{:?}", tier.tier),
         });
+        let adaptive_decision = record_adaptive_shadow(&tier, &sh, input, &mut steps);
 
         match tier.tier {
             LookupTier::Tier0 | LookupTier::Tier1 => {
                 let procedure_id = tier.procedure_id.clone();
+                if tier.artifact.is_some() {
+                    return self.execute_adaptive_artifact(
+                        input,
+                        adaptive_decision,
+                        tier.tier,
+                        Depth::Deep,
+                        Some(sh),
+                        procedure_id,
+                        steps,
+                        llm_calls,
+                    );
+                }
                 let Some(path) = tier.path else {
                     return rejected_path_turn(
                         steps,
@@ -801,7 +989,6 @@ impl<'a> TurnRuntime<'a> {
             name: "LookupTier".into(),
             detail: format!("{:?}", tier.tier),
         });
-
         let returning = matches!(
             session.last_seen.as_deref(),
             Some(s) if !s.is_empty()
@@ -812,7 +999,20 @@ impl<'a> TurnRuntime<'a> {
         );
 
         if matches!(tier.tier, LookupTier::Tier0 | LookupTier::Tier1) {
+            let adaptive_decision = record_adaptive_shadow(&tier, &sh, input, steps);
             let procedure_id = tier.procedure_id.clone();
+            if tier.artifact.is_some() {
+                return self.execute_adaptive_artifact(
+                    input,
+                    adaptive_decision,
+                    tier.tier,
+                    Depth::Shallow,
+                    Some(sh),
+                    procedure_id,
+                    steps.clone(),
+                    0,
+                );
+            }
             let Some(path) = tier.path else {
                 return rejected_path_turn(
                     steps.clone(),
@@ -862,6 +1062,18 @@ impl<'a> TurnRuntime<'a> {
             name: "TypeCheck".into(),
             detail: "ok".into(),
         });
+        record_adaptive_shadow(
+            &crate::abilities::learn::TierLookup {
+                tier: LookupTier::Tier2,
+                procedure_id: None,
+                path: Some(path.clone()),
+                margin: 0.0,
+                artifact: None,
+            },
+            &sh,
+            input,
+            steps,
+        );
         let reply = if reply_class.reply_type == ReplyType::Generic {
             // After proposal, can still template
             express::greeting_template(
@@ -892,6 +1104,77 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: Some(sh),
             proposal_id: Some(prop_id),
             suspended: false,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_adaptive_artifact(
+        &mut self,
+        input: &TurnInput,
+        decision: Option<crate::adaptive::AdaptiveDecisionEnvelopeV1>,
+        tier: LookupTier,
+        depth: Depth,
+        situation_hash: Option<String>,
+        procedure_id: Option<String>,
+        mut steps: Vec<TurnTraceStep>,
+        llm_calls: u32,
+    ) -> TurnResult {
+        let Some(decision) = decision else {
+            return rejected_path_turn(steps, "The adaptive decision was invalid.");
+        };
+        let invoked =
+            self.adaptive_artifact_host
+                .invoke(&self.tenant.tenant_id, &input.turn_id, &decision);
+        if let Some(trace) = self.adaptive_artifact_host.take_decision_trace() {
+            steps.push(TurnTraceStep {
+                name: "Artifact.Ledger".into(),
+                detail: trace,
+            });
+        }
+        match invoked {
+            Ok(outcome) => {
+                let suspended = outcome.suspended;
+                let Some(reply) = adaptive_output_utterance(outcome.output) else {
+                    steps.push(TurnTraceStep {
+                        name: "AdaptiveInvoke".into(),
+                        detail: "rejected invalid closed output".into(),
+                    });
+                    return rejected_path_turn(
+                        steps,
+                        "The admitted procedure returned an invalid response.",
+                    );
+                };
+                steps.push(TurnTraceStep {
+                    name: "AdaptiveInvoke".into(),
+                    detail: format!(
+                        "completed decision_hash={} authority=aelio-runtime",
+                        decision.decision_hash
+                    ),
+                });
+                TurnResult {
+                    reply,
+                    llm_calls,
+                    tier: Some(tier),
+                    depth,
+                    steps,
+                    opened_loop: suspended,
+                    new_state: None,
+                    active_flow: None,
+                    situation_hash,
+                    proposal_id: procedure_id,
+                    suspended,
+                }
+            }
+            Err(error) => {
+                steps.push(TurnTraceStep {
+                    name: "AdaptiveInvoke".into(),
+                    detail: format!("failed reason={:?}", error.code),
+                });
+                rejected_path_turn(
+                    steps,
+                    "The admitted procedure could not be executed safely.",
+                )
+            }
         }
     }
 
@@ -1041,7 +1324,7 @@ impl<'a> TurnRuntime<'a> {
                 for trace in &frame.artifact_traces {
                     steps.push(TurnTraceStep {
                         name: "Artifact.Ledger".into(),
-                        detail: trace.clone(),
+                        detail: trace.to_string(),
                     });
                 }
                 if let Some(reply) = frame.reply {
@@ -1099,9 +1382,15 @@ impl<'a> TurnRuntime<'a> {
                 successful: false,
             },
             Err(error) => {
+                if let Some(trace) = &error.decision_trace {
+                    steps.push(TurnTraceStep {
+                        name: "Artifact.Ledger".into(),
+                        detail: trace.to_string(),
+                    });
+                }
                 steps.push(TurnTraceStep {
                     name: "Execute".into(),
-                    detail: format!("failed: {:?}", error.code),
+                    detail: trace_safe_error_detail(&error),
                 });
                 TierPathOutcome {
                     reply: express::apologize(
@@ -1172,6 +1461,87 @@ impl<'a> TurnRuntime<'a> {
             .map(|(_, flow)| flow)
     }
 
+    fn declared_read_only_detour(
+        &self,
+        input: &TurnInput,
+    ) -> Option<(crate::adaptive::AdaptiveDecisionEnvelopeV1, String)> {
+        let permission_envelope = self
+            .states
+            .iter()
+            .find(|state| state.id == input.state_id)
+            .map(|state| state.permission_envelope.clone())
+            .unwrap_or_default();
+        let reachable = self.registry.reachable_capabilities(&permission_envelope);
+        let intent_label = self
+            .classify_declared_intent(&input.utterance, &reachable)
+            .map(|intent| intent.label)
+            .or_else(|| {
+                crate::abilities::understand::is_exact_greeting(&input.utterance)
+                    .then(|| "greeting".into())
+            })
+            .or_else(|| {
+                (classify_depth(&input.utterance).depth == Depth::Boundary)
+                    .then(|| "boundary".into())
+            });
+        let intent_label = intent_label?;
+        let eligible = self.registry.procedures.values().filter(|procedure| {
+            procedure.status == crate::abilities::registry::ProcedureStatus::Promoted
+                && procedure
+                    .situation_filter
+                    .state
+                    .as_deref()
+                    .is_none_or(|state| state == input.state_id)
+                && procedure.situation_filter.intent_class.as_deref() == Some(&intent_label)
+                && self.registry.procedure_artifact(&procedure.id).is_some()
+        });
+        let mut selected = None;
+        for procedure in eligible {
+            let instantiates_flow = procedure
+                .path
+                .steps
+                .iter()
+                .any(|step| step.ability_id.starts_with("Flow."));
+            let effectful_dependency = procedure.tool_deps.iter().any(|tool_id| {
+                self.registry
+                    .tools
+                    .get(tool_id)
+                    .is_none_or(|tool| tool.effectful)
+            });
+            if instantiates_flow
+                || procedure.contract.effectful
+                || effectful_dependency
+                || path_is_effectful(self.registry, &procedure.path)
+            {
+                return None;
+            }
+            if selected.is_none() {
+                let artifact = self.registry.procedure_artifact(&procedure.id)?.clone();
+                selected = Some((procedure.id.clone(), artifact));
+            }
+        }
+        let (procedure_id, artifact) = selected?;
+        let projected_input = serde_json::json!({
+            "turn": {
+                "utterance": input.utterance,
+                "channel": input.channel,
+                "state_id": input.state_id,
+            }
+        });
+        crate::adaptive::AdaptiveDecisionEnvelopeV1::seal(
+            vec![crate::adaptive::ArtifactCandidateV1 {
+                artifact: artifact.clone(),
+                score: 1.0,
+                reason: crate::adaptive::CandidateReasonV1::NearSituation,
+            }],
+            crate::adaptive::AdaptiveDecisionV1::Invoke {
+                artifact,
+                projected_input,
+            },
+        )
+        .ok()
+        .map(|decision| (decision, procedure_id))
+    }
+
     fn activate_flow(
         &mut self,
         input: &TurnInput,
@@ -1184,6 +1554,74 @@ impl<'a> TurnRuntime<'a> {
         });
         let mut instance = crate::blocks::flow::start_instance(flow);
         self.run_flow_step(input, flow, &mut instance, steps)
+    }
+
+    fn execute_bound_flow(
+        &mut self,
+        input: &TurnInput,
+        flow: &FlowSpec,
+        decision: crate::types::AelioResult<crate::adaptive::AdaptiveDecisionEnvelopeV1>,
+        steps: &mut Vec<TurnTraceStep>,
+    ) -> TurnResult {
+        let Ok(decision) = decision else {
+            return rejected_path_turn(
+                steps.clone(),
+                "The authored flow activation decision was invalid.",
+            );
+        };
+        let started = self.adaptive_artifact_host.start_subject(
+            &self.tenant.tenant_id,
+            &input.user_id,
+            &input.turn_id,
+            &decision,
+        );
+        if let Some(trace) = self.adaptive_artifact_host.take_decision_trace() {
+            steps.push(TurnTraceStep {
+                name: "Artifact.Ledger".into(),
+                detail: trace,
+            });
+        }
+        match started {
+            Ok(outcome) => {
+                let suspended = outcome.suspended;
+                let Some(reply) = adaptive_output_utterance(outcome.output) else {
+                    return rejected_path_turn(
+                        steps.clone(),
+                        "The runtime-owned flow returned an invalid response.",
+                    );
+                };
+                steps.push(TurnTraceStep {
+                    name: "ActivateFlow.Runtime".into(),
+                    detail: format!(
+                        "flow={} authority=aelio-runtime suspended={} decision_hash={}",
+                        flow.id, suspended, decision.decision_hash
+                    ),
+                });
+                TurnResult {
+                    reply,
+                    llm_calls: 0,
+                    tier: None,
+                    depth: Depth::Deep,
+                    steps: steps.clone(),
+                    opened_loop: suspended,
+                    new_state: None,
+                    active_flow: None,
+                    situation_hash: None,
+                    proposal_id: None,
+                    suspended,
+                }
+            }
+            Err(error) => {
+                steps.push(TurnTraceStep {
+                    name: "ActivateFlow.Runtime".into(),
+                    detail: format!("failed reason={:?}", error.code),
+                });
+                rejected_path_turn(
+                    steps.clone(),
+                    "The admitted authored flow could not be started safely.",
+                )
+            }
+        }
     }
 
     fn resume_flow(
@@ -1371,6 +1809,12 @@ impl<'a> TurnRuntime<'a> {
             }
             Err(error) => {
                 instance.attempts += 1;
+                if let Some(trace) = &error.decision_trace {
+                    steps.push(TurnTraceStep {
+                        name: "Artifact.Ledger".into(),
+                        detail: trace.to_string(),
+                    });
+                }
                 steps.push(TurnTraceStep {
                     name: "Invoke.Error".into(),
                     detail: format!(
@@ -2095,18 +2539,31 @@ impl<'a> TurnRuntime<'a> {
         }
         tools.sort();
         tools.dedup();
-        let action = if tools.is_empty() {
+        let display_tools = tools
+            .iter()
+            .map(|tool_id| {
+                self.registry
+                    .tools
+                    .get(tool_id)
+                    .map(|tool| tool.name.as_str())
+                    .unwrap_or(tool_id.as_str())
+            })
+            .collect::<Vec<_>>();
+        let action = if display_tools.is_empty() {
             path.steps
                 .iter()
                 .map(|step| step.ability_id.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
         } else {
-            tools.join(", ")
+            display_tools.join(", ")
         };
         steps.push(TurnTraceStep {
             name: "EffectConfirm".into(),
-            detail: format!("withheld pending explicit confirmation: {action}"),
+            detail: format!(
+                "withheld pending explicit confirmation: {action}; tool_ids={}",
+                tools.join(",")
+            ),
         });
         Some(TurnResult {
             reply: express::confirm("execute this action", &action),
@@ -2181,7 +2638,23 @@ impl<'a> TurnRuntime<'a> {
                     .extend(claims.iter().map(|claim| claim.id.clone()));
                 reply
             })
-        }
+    }
+}
+
+fn adaptive_output_utterance(
+    output: crate::adaptive::AdaptiveArtifactOutputV1,
+) -> Option<Utterance> {
+    match (output.text, output.frame) {
+        (Some(text), None) => Some(Utterance::plain(text, ExpressVia::Template)),
+        (None, Some(frame)) => Some(Utterance {
+            text: aelio_render::flatten_to_text(&frame),
+            via: ExpressVia::Template,
+            template_id: None,
+            claim_refs: vec![],
+            frame: Some(frame),
+        }),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2388,6 +2861,26 @@ fn failed_turn(message: &str, instance: &FlowInstance, steps: &[TurnTraceStep]) 
     )
 }
 
+fn deferred_runtime_flow_turn(steps: Vec<TurnTraceStep>) -> TurnResult {
+    TurnResult {
+        reply: express::template(
+            "flow_intent_deferred",
+            "I’m finishing your current task first. I’ve saved this request and will return to it next.",
+            &IndexMap::new(),
+        ),
+        llm_calls: 0,
+        tier: None,
+        depth: Depth::Deep,
+        steps,
+        opened_loop: true,
+        new_state: None,
+        active_flow: None,
+        situation_hash: None,
+        proposal_id: None,
+        suspended: true,
+    }
+}
+
 /// Conservative lexical guard for the deterministic multi-clause gate: tells an independently
 /// actionable clause ("cancel my order") from a bare noun conjunct ("invoices") that the crude
 /// marker splitter produced. Real clause detection is the LLM `Understand.SplitClauses` ability's
@@ -2464,6 +2957,83 @@ fn rejected_path_turn(steps: Vec<TurnTraceStep>, message: &str) -> TurnResult {
         situation_hash: None,
         proposal_id: None,
         suspended: false,
+    }
+}
+
+/// Decision logs may explain closed structural mismatches because these messages contain only
+/// declared field names, paths and type tags. Other error messages can originate in a tenant tool
+/// and therefore stay hidden from the redacted trace.
+fn trace_safe_error_detail(error: &AelioError) -> String {
+    if matches!(error.code, crate::types::ReasonCode::SigMismatch) {
+        format!("failed: {:?}: {}", error.code, error.message)
+    } else {
+        format!("failed: {:?}", error.code)
+    }
+}
+
+fn record_adaptive_shadow(
+    tier: &crate::abilities::learn::TierLookup,
+    situation_hash: &str,
+    input: &TurnInput,
+    steps: &mut Vec<TurnTraceStep>,
+) -> Option<crate::adaptive::AdaptiveDecisionEnvelopeV1> {
+    let projected = serde_json::json!({
+        "turn": {
+            "utterance": input.utterance,
+            "channel": input.channel,
+            "state_id": input.state_id,
+        }
+    });
+    match crate::adaptive::from_tier_lookup(tier, situation_hash, projected) {
+        Ok(decision) => {
+            let (selected, parity, reason) = match &decision.selected {
+                crate::adaptive::AdaptiveDecisionV1::Invoke { artifact, .. } => (
+                    format!("invoke {}", artifact.key()),
+                    true,
+                    "exact_artifact_pin",
+                ),
+                crate::adaptive::AdaptiveDecisionV1::Insufficient { .. } => (
+                    "insufficient".into(),
+                    matches!(tier.tier, LookupTier::Tier3),
+                    if tier.tier == LookupTier::Tier3 {
+                        "both_miss"
+                    } else {
+                        "legacy_path_not_admitted"
+                    },
+                ),
+                crate::adaptive::AdaptiveDecisionV1::Abstain { .. } => (
+                    "abstain".into(),
+                    false,
+                    "legacy_procedure_lacks_unified_artifact",
+                ),
+                crate::adaptive::AdaptiveDecisionV1::Reply { .. } => {
+                    ("reply".into(), false, "unexpected_reply_at_tier_seam")
+                }
+            };
+            steps.push(TurnTraceStep {
+                name: "AdaptiveDecision.Shadow".into(),
+                detail: format!(
+                    "selected={selected} decision_hash={}",
+                    decision.decision_hash
+                ),
+            });
+            steps.push(TurnTraceStep {
+                name: "AdaptiveParity".into(),
+                detail: format!("match={parity} reason={reason}"),
+            });
+            Some(decision)
+        }
+        Err(error) => {
+            steps.push(TurnTraceStep {
+                name: "AdaptiveDecision.Shadow".into(),
+                detail: format!("invalid reason={:?}", error.code),
+            });
+            steps.push(TurnTraceStep {
+                name: "AdaptiveParity".into(),
+                detail: "match=false reason=invalid_closed_decision".into(),
+            });
+            None
+        }
     }
 }
 

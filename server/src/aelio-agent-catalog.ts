@@ -14,6 +14,15 @@ export function buildAgentCatalog(
   options: { memoryEnabled?: boolean } = {},
 ): Json {
   const tools = registration.functions.map(toAgentTool);
+  const toolIds = new Set<string>();
+  for (const tool of tools) {
+    if (toolIds.has(tool.id)) {
+      throw new Error(
+        `SDK function names collide after canonicalization at "${tool.id}"; rename one function`,
+      );
+    }
+    toolIds.add(tool.id);
+  }
   const capabilities = tools
     .map((tool) => tool.capability_tags[0])
     .filter((capability): capability is string => Boolean(capability));
@@ -23,6 +32,39 @@ export function buildAgentCatalog(
     tools,
     options.memoryEnabled === true,
   );
+  const capabilityByTool = new Map(
+    tools.flatMap((tool) => [
+      [tool.id, tool.capability_tags[0] ?? tool.id],
+      [tool.name, tool.capability_tags[0] ?? tool.id],
+    ] as const),
+  );
+  const flows = (registration.flows ?? []).map((flow) => flow.aelio
+    ? { id: flow.id, name: flow.description, ...flow.aelio }
+    : {
+        id: flow.id,
+        version: '1',
+        name: flow.description,
+        activation: {
+          hard_preconditions: [{ op: 'eq', path: 'state', value: flow.state }],
+          trigger_surface: [flow.id, flow.description],
+          margin_threshold: 0.7,
+        },
+        learnable: false,
+        preemption: 'hold',
+        steps: flow.steps.map((step) => ({
+          id: step.id,
+          intent: step.goal,
+          postcondition: { op: 'true' },
+          admissible: step.tool ? [capabilityByTool.get(step.tool) ?? step.tool] : [],
+          on_violation: 'escape',
+          suspendable: false,
+        })),
+        escape: { kind: 'free_range' },
+        terminal_states: [],
+        ttl_secs: 300,
+        max_attempts: Math.max(1, flow.steps.length),
+        lowering: null,
+      });
   return {
     tenant_id: tenant,
     mode: 'live',
@@ -49,9 +91,11 @@ export function buildAgentCatalog(
     }],
     states,
     policies,
-    // Closed Mother-DSL artifacts are registered separately and are never
-    // weakened into the older goal/step representation.
-    flows: [],
+    // Semantic WHAT plus symbolic HOW are admitted together. Rust resolves every `$cap:` call to
+    // one exact tool proxy, gates the immutable artifact, and inserts the resulting pin before this
+    // catalog snapshot can become active.
+    flows,
+    flow_artifacts: {},
     attributes: [],
   };
 }
@@ -96,10 +140,14 @@ function toAgentTool(fn: FunctionDefinition) {
     ]),
   );
   return {
-    id: fn.name,
+    // The Mother DSL deliberately has a narrower identifier alphabet than JavaScript. Keep the
+    // public SDK name in `name`, while `id` is the stable kernel/artifact identifier. Invocation
+    // translates back to `name` at the SDK boundary.
+    id: canonicalAgentToolId(fn.name),
     name: fn.name,
     version: '1',
-    capability_tags: [fn.intent ?? snakeCase(fn.name)],
+    capability_tags: [fn.intent ?? canonicalAgentToolId(fn.name)],
+    effect: fn.safety === 'read' ? 'read' : 'write',
     effectful: fn.safety !== 'read',
     idempotent: fn.safety === 'read',
     dry_run_available: false,
@@ -116,7 +164,10 @@ function toAgentStates(
   allCapabilities: string[],
 ) {
   const capabilityByTool = new Map(
-    tools.map((tool) => [tool.id, tool.capability_tags[0] ?? tool.id]),
+    tools.flatMap((tool) => {
+      const capability = tool.capability_tags[0] ?? tool.id;
+      return [[tool.id, capability], [tool.name, capability]] as const;
+    }),
   );
   const capability = (name: string) => capabilityByTool.get(name) ?? name;
   const mapped = states.map((state) => ({
@@ -202,7 +253,7 @@ function agentType(type: string): string {
   } as Record<string, string>)[type] ?? 'str';
 }
 
-function snakeCase(value: string): string {
+export function canonicalAgentToolId(value: string): string {
   return value
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .replace(/[^A-Za-z0-9]+/g, '_')

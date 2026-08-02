@@ -14,10 +14,10 @@ pub mod embed;
 mod error;
 pub mod nl;
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::{Path, Request, State};
+use axum::extract::{Extension, Path, Request, State};
 use axum::http::header::AUTHORIZATION;
 use axum::middleware::{self, Next};
 use axum::response::Response;
@@ -40,18 +40,30 @@ pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T
 /// The set of accepted API keys, or "open" (no auth) when none are configured.
 enum KeySet {
     Open,
-    Keys(HashSet<String>),
+    Keys(HashMap<String, String>),
 }
 
 impl KeySet {
-    fn accepts(&self, token: &str) -> bool {
+    fn authority(&self, token: &str) -> Option<String> {
         match self {
-            KeySet::Open => true,
-            KeySet::Keys(s) => s.contains(token),
+            KeySet::Open => Some("open".into()),
+            KeySet::Keys(keys) => keys.get(token).cloned(),
         }
     }
     fn is_open(&self) -> bool {
         matches!(self, KeySet::Open)
+    }
+}
+
+#[derive(Clone)]
+struct DatabaseAuthority {
+    namespace: String,
+}
+
+impl DatabaseAuthority {
+    fn table(&self, logical: &str) -> String {
+        let digest = blake3::hash(self.namespace.as_bytes()).to_hex();
+        format!("aelio_{}_{}", &digest[..16], logical)
     }
 }
 
@@ -77,7 +89,12 @@ impl AppState {
         let keys = if api_keys.is_empty() {
             KeySet::Open
         } else {
-            KeySet::Keys(api_keys.into_iter().collect())
+            KeySet::Keys(
+                api_keys
+                    .into_iter()
+                    .map(|token| (token, "default".into()))
+                    .collect(),
+            )
         };
         AppState {
             db: Arc::new(RwLock::new(db)),
@@ -86,6 +103,42 @@ impl AppState {
             embedder: None,
             segment_backend,
         }
+    }
+
+    /// Build a production state where every credential is irreversibly bound to one tenant
+    /// namespace. Logical table names remain stable on the wire; physical names are scoped before
+    /// every engine operation, including text/vector/graph and Prism planning.
+    pub fn new_tenant_scoped(
+        db: Database,
+        credentials: Vec<(String, String)>,
+    ) -> Result<Self, String> {
+        if credentials.is_empty() {
+            return Err("at least one tenant database credential is required".into());
+        }
+        if credentials
+            .iter()
+            .any(|(tenant, token)| tenant.trim().is_empty() || token.len() < 16)
+        {
+            return Err(
+                "tenant ids must be non-empty and database API tokens at least 16 characters"
+                    .into(),
+            );
+        }
+        let mut bindings = HashMap::with_capacity(credentials.len());
+        for (tenant, token) in credentials {
+            if bindings.insert(token, tenant).is_some() {
+                return Err("a database API token cannot be bound to multiple tenants".into());
+            }
+        }
+        let segment_backend = db.segment_backend();
+        let keys = KeySet::Keys(bindings);
+        Ok(Self {
+            db: Arc::new(RwLock::new(db)),
+            keys: Arc::new(keys),
+            llm: None,
+            embedder: None,
+            segment_backend,
+        })
     }
 
     /// Attach an LLM backend, enabling the `/nl` endpoint.
@@ -153,10 +206,13 @@ pub fn router(state: AppState) -> Router {
 /// <key>` header must carry an accepted key.
 async fn auth(
     State(state): State<AppState>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Result<Response, AppError> {
     if state.keys.is_open() {
+        req.extensions_mut().insert(DatabaseAuthority {
+            namespace: "open".into(),
+        });
         return Ok(next.run(req).await);
     }
     let presented = req
@@ -164,10 +220,11 @@ async fn auth(
         .get(AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "));
-    match presented {
-        Some(token) if state.keys.accepts(token) => Ok(next.run(req).await),
-        _ => Err(AppError::Unauthorized),
-    }
+    let Some(namespace) = presented.and_then(|token| state.keys.authority(token)) else {
+        return Err(AppError::Unauthorized);
+    };
+    req.extensions_mut().insert(DatabaseAuthority { namespace });
+    Ok(next.run(req).await)
 }
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -181,6 +238,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
 
 async fn create_table(
     State(state): State<AppState>,
+    Extension(authority): Extension<DatabaseAuthority>,
     Json(body): Json<CreateTableRequest>,
 ) -> Result<Json<CreateTableResponse>, AppError> {
     // Resolve kinds first (owned names + kinds), then borrow for the catalog call.
@@ -190,15 +248,17 @@ async fn create_table(
     }
     let cols: Vec<(&str, ColumnKind)> = named.iter().map(|(n, k)| (n.as_str(), *k)).collect();
     let mut db = state.db.write().await;
-    let table_id = db.create_table(&body.name, &cols)?;
+    let table_id = db.create_table(&authority.table(&body.name), &cols)?;
     Ok(Json(CreateTableResponse { table_id }))
 }
 
 async fn insert_row(
     State(state): State<AppState>,
+    Extension(authority): Extension<DatabaseAuthority>,
     Path(table): Path<String>,
     Json(mut body): Json<RowRequest>,
 ) -> Result<Json<InsertResponse>, AppError> {
+    let table = authority.table(&table);
     resolve_row_embeds(&state, &table, &mut body.values).await?;
     let pairs = to_value_pairs(body);
     let vals: Vec<(&str, Value)> = pairs.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
@@ -209,9 +269,11 @@ async fn insert_row(
 
 async fn update_row(
     State(state): State<AppState>,
+    Extension(authority): Extension<DatabaseAuthority>,
     Path((table, id)): Path<(String, u64)>,
     Json(mut body): Json<RowRequest>,
 ) -> Result<Json<MutateResponse>, AppError> {
+    let table = authority.table(&table);
     resolve_row_embeds(&state, &table, &mut body.values).await?;
     let pairs = to_value_pairs(body);
     let vals: Vec<(&str, Value)> = pairs.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
@@ -326,8 +388,10 @@ async fn resolve_semantic(
 
 async fn delete_row(
     State(state): State<AppState>,
+    Extension(authority): Extension<DatabaseAuthority>,
     Path((table, id)): Path<(String, u64)>,
 ) -> Result<Json<MutateResponse>, AppError> {
+    let table = authority.table(&table);
     let mut db = state.db.write().await;
     let applied = db.delete(&table, id)?;
     Ok(Json(MutateResponse { applied }))
@@ -335,8 +399,10 @@ async fn delete_row(
 
 async fn get_row(
     State(state): State<AppState>,
+    Extension(authority): Extension<DatabaseAuthority>,
     Path((table, id)): Path<(String, u64)>,
 ) -> Result<Json<RowValueResponse>, AppError> {
+    let table = authority.table(&table);
     let db = state.db.read().await;
     let vals = db
         .get_row_values(&table, id)?
@@ -350,9 +416,11 @@ async fn get_row(
 
 async fn scan_rows(
     State(state): State<AppState>,
+    Extension(authority): Extension<DatabaseAuthority>,
     Path(table): Path<String>,
     Json(body): Json<QueryRequest>,
 ) -> Result<Json<ScanResponse>, AppError> {
+    let table = authority.table(&table);
     let q = body.to_hybrid().map_err(AppError::BadRequest)?;
     let db = state.db.read().await;
     let hits = db.scan_values(&table, &q)?;
@@ -371,9 +439,11 @@ async fn scan_rows(
 
 async fn query(
     State(state): State<AppState>,
+    Extension(authority): Extension<DatabaseAuthority>,
     Path(table): Path<String>,
     Json(mut body): Json<QueryRequest>,
 ) -> Result<Json<QueryResponse>, AppError> {
+    let table = authority.table(&table);
     body.validate_shape().map_err(AppError::BadRequest)?;
     resolve_semantic(&state, &table, &mut body).await?;
     let q = body.to_hybrid().map_err(AppError::BadRequest)?;
@@ -390,9 +460,12 @@ async fn query(
 /// configured async provider before the validated query enters the synchronous embedded engine.
 async fn prism_query(
     State(state): State<AppState>,
+    Extension(authority): Extension<DatabaseAuthority>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<PrismResponse>, AppError> {
     let mut query = parse_prism(&body).map_err(AppError::BadRequest)?;
+    let logical_collection = query.from.clone();
+    query.from = authority.table(&query.from);
 
     if let Some((index, column, text)) =
         query
@@ -411,6 +484,32 @@ async fn prism_query(
         query.matches[index] = MatchClause::Vector { on: column, vector };
     }
 
+    let mut modalities = query
+        .matches
+        .iter()
+        .map(|clause| match clause {
+            MatchClause::Key { .. } => "scalar",
+            MatchClause::Text { .. } => "text",
+            MatchClause::Vector { .. } | MatchClause::VectorEmbed { .. } => "vector",
+            MatchClause::Graph { .. } => "graph",
+            MatchClause::Fusion { .. } => "fusion",
+        })
+        .collect::<Vec<_>>();
+    if modalities.is_empty() || !query.where_clauses.is_empty() {
+        modalities.push("scalar");
+    }
+    modalities.sort_unstable();
+    modalities.dedup();
+    let decision = PrismDecisionResponse {
+        authority: "aelio-prism",
+        collection: logical_collection,
+        modalities,
+        predicate_count: query.where_clauses.len(),
+        projection: query.select.clone(),
+        limit: query.limit,
+        result_count: 0,
+    };
+
     let database = state.db.clone();
     let hits = tokio::task::spawn_blocking(move || {
         let db = database.blocking_read();
@@ -419,7 +518,7 @@ async fn prism_query(
     .await
     .map_err(|error| AppError::Internal(format!("Prism worker failed: {error}")))?
     .map_err(map_prism_error)?;
-    let results = hits
+    let results: Vec<PrismHitResponse> = hits
         .into_iter()
         .map(|hit| PrismHitResponse {
             row_id: hit.row_id,
@@ -431,7 +530,13 @@ async fn prism_query(
                 .collect(),
         })
         .collect();
-    Ok(Json(PrismResponse { results }))
+    Ok(Json(PrismResponse {
+        decision: PrismDecisionResponse {
+            result_count: results.len(),
+            ..decision
+        },
+        results,
+    }))
 }
 
 fn map_prism_error(error: PrismExecError) -> AppError {
@@ -445,9 +550,11 @@ fn map_prism_error(error: PrismExecError) -> AppError {
 
 async fn explain(
     State(state): State<AppState>,
+    Extension(authority): Extension<DatabaseAuthority>,
     Path(table): Path<String>,
     Json(mut body): Json<QueryRequest>,
 ) -> Result<Json<ExplainResponse>, AppError> {
+    let table = authority.table(&table);
     body.validate_shape().map_err(AppError::BadRequest)?;
     resolve_semantic(&state, &table, &mut body).await?;
     let q = body.to_hybrid().map_err(AppError::BadRequest)?;
@@ -458,6 +565,7 @@ async fn explain(
 
 async fn nl_query(
     State(state): State<AppState>,
+    Extension(authority): Extension<DatabaseAuthority>,
     Path(table): Path<String>,
     Json(body): Json<NlRequest>,
 ) -> Result<Json<NlResponse>, AppError> {
@@ -465,6 +573,8 @@ async fn nl_query(
         AppError::Unavailable("natural-language queries are not configured (no LLM backend)".into())
     })?;
 
+    let logical_table = table;
+    let table = authority.table(&logical_table);
     // Ground the model in the table's real schema.
     let cols = {
         let db = state.db.read().await;
@@ -472,7 +582,7 @@ async fn nl_query(
             .ok_or_else(|| AppError::NotFound(format!("no such table: {table}")))?
     };
     let semantic_enabled = state.embedder.is_some();
-    let system = nl::system_prompt(&table, &cols, semantic_enabled);
+    let system = nl::system_prompt(&logical_table, &cols, semantic_enabled);
     let schema = nl::query_tool_schema(semantic_enabled);
 
     // Compile NL → structured query (the model must call the tool; we get its input back).
@@ -497,8 +607,11 @@ async fn nl_query(
 
 async fn schema(
     State(state): State<AppState>,
+    Extension(authority): Extension<DatabaseAuthority>,
     Path(table): Path<String>,
 ) -> Result<Json<SchemaResponse>, AppError> {
+    let logical_table = table;
+    let table = authority.table(&logical_table);
     let db = state.db.read().await;
     let cols = db
         .columns(&table)
@@ -514,7 +627,10 @@ async fn schema(
             }
         })
         .collect();
-    Ok(Json(SchemaResponse { table, columns }))
+    Ok(Json(SchemaResponse {
+        table: logical_table,
+        columns,
+    }))
 }
 
 async fn flush(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {

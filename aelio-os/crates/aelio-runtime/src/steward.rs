@@ -19,6 +19,12 @@ pub struct DependencyCascade {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct KernelMigration {
+    pub kernel_version: String,
+    pub demoted: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct DemandBuild {
     pub request: CapabilityRequest,
     pub job: crate::BuildJob,
@@ -150,7 +156,7 @@ impl Runtime {
                         candidate.status,
                         ArtifactStatus::Canary | ArtifactStatus::Promoted
                     )
-                    || !pins_contain(&candidate.artifact.pins, &departed)
+                    || !artifact_depends_on(&candidate.artifact, &departed)
                 {
                     continue;
                 }
@@ -197,6 +203,45 @@ impl Runtime {
         })
     }
 
+    /// Conservatively returns promoted machine-built artifacts to canary when their immutable
+    /// kernel pin differs from the running runtime. Human/vendor artifacts are not described as
+    /// learned evidence and are therefore left for explicit operator migration.
+    pub fn steward_kernel_migration(&self, tenant: &str) -> Result<KernelMigration, RuntimeError> {
+        let current = env!("CARGO_PKG_VERSION").to_owned();
+        let mut artifacts =
+            ArtifactRepository::open(self.inner.store.clone()).map_err(artifact_error)?;
+        let mut candidates = artifacts.list(tenant, 1_000).map_err(artifact_error)?;
+        candidates.sort_by_key(|record| record.artifact.key());
+        let mut demoted = Vec::new();
+        for candidate in candidates {
+            if candidate.status != ArtifactStatus::Promoted
+                || candidate.artifact.provenance.built_by.is_none()
+                || candidate.artifact.kernel_version == current
+            {
+                continue;
+            }
+            let pin = candidate.artifact.key();
+            artifacts
+                .transition(
+                    tenant,
+                    &candidate.artifact.id,
+                    candidate.artifact.version,
+                    ArtifactTransition {
+                        expected: ArtifactStatus::Promoted,
+                        trigger: ArtifactTrigger::KernelBump,
+                        actor: ArtifactActor::System,
+                        evidence_snapshot_hash: Some(candidate.artifact.hash.clone()),
+                    },
+                )
+                .map_err(artifact_error)?;
+            demoted.push(pin);
+        }
+        Ok(KernelMigration {
+            kernel_version: current,
+            demoted,
+        })
+    }
+
     pub fn steward_propose_promotion<T: Serialize>(
         &self,
         tenant: &str,
@@ -216,7 +261,8 @@ impl Runtime {
     }
 }
 
-fn pins_contain(pins: &ArtifactPins, needle: &str) -> bool {
+fn artifact_depends_on(artifact: &crate::Artifact, needle: &str) -> bool {
+    let pins: &ArtifactPins = &artifact.pins;
     [
         &pins.targets,
         &pins.artifacts,
@@ -228,4 +274,10 @@ fn pins_contain(pins: &ArtifactPins, needle: &str) -> bool {
     ]
     .into_iter()
     .any(|group| group.iter().any(|pin| pin == needle))
+        || artifact.interface.output == needle
+        || artifact
+            .interface
+            .inputs
+            .iter()
+            .any(|input| input.imprint == needle)
 }

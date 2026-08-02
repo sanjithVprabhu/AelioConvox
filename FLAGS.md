@@ -86,11 +86,11 @@ the trusted kernel single-sourced, contains crashes, and lets the existing serve
 incrementally. Native bindings have a smaller hop but a much larger build/distribution matrix;
 duplicating the interpreter destroys the “one executor” replay guarantee.
 
-**Status 2026-08-01 → PARTIALLY RESOLVED.** `aelio-server` is now the authoritative Rust process;
-`aelio-runtime`, `aelio-agent-api`, and `aelio-db-api` are mounted together, and the host boundary is
-versioned/authenticated. The remaining blocking half is Phase 6/8 of the unified master plan:
-adaptive agent choices must become pinned runtime artifact invocations, and legacy TypeScript
-decision modules must leave the production dependency graph.
+**Status 2026-08-01 → RESOLVED.** `aelio-server` is the authoritative Rust process;
+`aelio-runtime`, `aelio-agent-api`, and `aelio-db-api` are mounted together. Adaptive effects invoke
+pinned, gated runtime proxies. The production TypeScript graph imports only `@aelio/core/edge`, and
+`scripts/check-production-authority.mjs` recursively proves that no TypeScript decision rail is
+reachable from server startup. Killing Rust fails turns closed; there is no edge fallback executor.
 
 ### F-012 — `aelio-store` has no Aelio DB production implementation — `§24`, `§29`, F10
 **What:** `aelio-store` contains the trait and `MemoryStore` only. The durable continuation/WAL
@@ -114,6 +114,12 @@ reaches inside hanging external calls.”
 runtime service. BLOCKING for untrusted/live adapters.** Reverse SDK calls should use Appendix H’s
 authoritative server deadline rather than an in-process closure.
 
+**Status 2026-08-01 → RESOLVED FOR PRODUCTION ADAPTERS.** The live reverse host is an authenticated
+HTTP request with the kernel deadline applied to the request and a bounded client timeout. Closed
+DSL execution is bounded and contains no arbitrary code. Trusted synchronous closures remain test
+and embedded-adapter surfaces and cannot be forcibly preempted; this limitation is documented and
+is not an untrusted production execution path.
+
 ### F-014 — Park inside Once remains an ambiguous crash state — `§8.4`
 **What:** the current resume cursor skips a second claim in-process, but after restart the Once row
 still says `intent`; continuation recovery can resume because it does not call `once_begin` again.
@@ -123,6 +129,9 @@ An operator or competing start using the same key sees unknown outcome. The stat
 **Recommendation → add a durable `parked` Once state tied to continuation hash, or reject Park under
 Once in the Planner for v0. Prefer the Planner rejection until evidence requires the feature.**
 
+**Status 2026-08-01 → RESOLVED.** The Planner rejects `Park` anywhere under `Once`, with regression
+coverage. There is therefore no ambiguous persisted intent state in the admitted v0 language.
+
 ### F-015 — App I handler frame representation refinement — `App I`
 **What:** durable Try-handler frames store the pinned handler index, while App I’s prose shows the
 handler code-prefix. Because the envelope pins the exact flow revision, the index is deterministic
@@ -131,10 +140,15 @@ and sufficient, but the byte format differs from the illustrated normative field
 **Recommendation → store both `handler_index` and `handler_prefix` and cross-check them at decode;
 this preserves O(1) resume and makes the envelope self-explanatory.**
 
+**Status 2026-08-01 → RESOLVED.** Continuations store both fields, bounds-check the index and verify
+the prefix against the pinned flow before handler resume.
+
 ### F-017 — Flow Forge v0 (prompt → draft → plan → store) — `§15/§18/§31`, cold path
 **What:** Product need: enter a natural-language prompt, draft a closed App E flow, Planner-validate, optionally store. Mother doc allows LLM as author under a gate; full §16 artifact gate + pathway prototypes are P1. No end-to-end “forge” unit existed (ProposePath emits ability paths, not kernel trees).
 **Options:** (a) minimal forge over a vendor Call catalog (`forge.say@1`) with mock + OpenAI drafters, HTTP `/v1/flows/forge` + CLI `aelio forge`; (b) wait for full gate.
-**Recommendation → (a) PROVISIONAL.** Catalog starts tiny; expand Call ids + promotion wiring next. Does not weaken locked ISA — Planner still rejects illegal trees.
+**Resolution 2026-08-01 → (a), RATIFIED AS FORGE V0.** The catalog remains deliberately small. Model
+output is only an authoring draft: closed parsing, the production Planner, sandbox and lifecycle gate
+remain mandatory. Expanding the vendor catalog requires explicit admitted targets and evidence.
 
 ---
 
@@ -153,11 +167,10 @@ are implemented and tested. Ordering/cursors/general scans remain deliberately a
 **Options:** (a) Mint inside Aelio (`aelio-prompt` artifact + root lock + `aelio-runtime` MintShelf over Aelio DB + CLI `aelio mint` / HTTP `/v1/mint`); (b) keep free-text prompts in the TS harness.
 **Recommendation → (a) PROVISIONAL.** Root (`aelio.mint.root@1`) is never mintable. Sufficiency refusal is required (mock refuses blood-type-from-demographics). OpenAI drafter optional. Forge wiring to pin Mint coins is next.
 
-**Status 2026-08-01 → PARTIALLY RESOLVED.** `aelio-prompt::mint`, `MintShelf`, tenant-filtered Prism
-recall, CLI/HTTP Mint, root immutability, mock/OpenAI drafters, and sufficiency refusal exist. Root
-and minted prompts now lower into the schema-versioned unified artifact registry; proposed prompts
-cannot be recalled. This flag remains open only for the prompt-class shadow/canary predicate and
-Forge pinning of admitted Mint artifacts.
+**Status 2026-08-01 → RESOLVED.** `aelio-prompt::mint`, `MintShelf`, tenant-filtered Prism recall,
+CLI/HTTP Mint, root immutability, closed `undeterminable` refusal, exact-contract exemplars,
+mock/vendor drafters and prompt-class sandbox/lifecycle gating exist. Root and minted prompts lower
+into the schema-versioned unified artifact registry; proposed prompts cannot be recalled or used.
 
 ---
 
@@ -167,4 +180,7 @@ Forge pinning of admitted Mint artifacts.
 ### F-020 — Render Protocol E2E (aelio-render + @aelio/chat-sdk) — `AELIO_RENDER_PROTOCOL`
 **What:** Product needs typed RenderFrame down / EventFrame up between Rust agent Express and the web widget. Previously only plain `Utterance.text` crossed the seam.
 **Options:** (a) ship closed-kind `aelio-render` + TS `@aelio/chat-sdk`, author frames in Rust before send, TS validates + renders with mandatory fallbacks; (b) invent frames from free text in TS.
-**Recommendation → (a) PROVISIONAL.** Hello/Welcome on widget init; agent `ensure_render_frame` emits `text@1` (and `confirm@1` for Confirm); WhatsApp keeps flattened text. Ledgering of frames (F5) and full element registry remain follow-ups.
+**Resolution 2026-08-01 → (a), RATIFIED V1.** Hello/Welcome negotiates closed kinds and bounded
+limits; Rust `Express` emits the authoritative frame; the widget validates/renders required
+fallbacks; WhatsApp deliberately uses the flattened representation. The public phase suite asserts
+Render frames. Additional element kinds are versioned extensions, not missing v1 authority.

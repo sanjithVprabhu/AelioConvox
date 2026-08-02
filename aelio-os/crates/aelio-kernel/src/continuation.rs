@@ -270,10 +270,11 @@ fn frame_to_sol(nid: &str, frame: &Frame) -> Result<SolValue, String> {
             fields.push(("frame", SolValue::str("Try")));
             fields.push(("phase", SolValue::str("body")));
         }
-        Frame::TryHandler(index) => {
+        Frame::TryHandler { index, prefix } => {
             fields.push(("frame", SolValue::str("Try")));
             fields.push(("phase", SolValue::str("handler")));
             fields.push(("handler_index", uint(*index as u64)?));
+            fields.push(("handler_prefix", SolValue::str(prefix)));
         }
         Frame::TryFinally(error) => {
             fields.push(("frame", SolValue::str("Try")));
@@ -353,7 +354,10 @@ fn frame_from_sol(value: &SolValue) -> Result<(String, Frame), String> {
         "Loop" => Frame::Loop(u64_value(map, "iter_count")?),
         "Try" => match string(map, "phase")?.as_str() {
             "body" => Frame::TryBody,
-            "handler" => Frame::TryHandler(usize_value(map, "handler_index")?),
+            "handler" => Frame::TryHandler {
+                index: usize_value(map, "handler_index")?,
+                prefix: string(map, "handler_prefix")?,
+            },
             "finally" => {
                 let error = match map.get("pending_error") {
                     Some(SolValue::Null) => None,

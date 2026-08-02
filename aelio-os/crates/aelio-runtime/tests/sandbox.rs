@@ -359,6 +359,22 @@ fn canary_requires_a_gate_applied_proposal_and_demotes_on_guard_violation() {
         }
     }
 
+    let promoted_demotion = runtime
+        .observe_canary(
+            "tenant-a",
+            "gate.promote",
+            1,
+            CanaryObservation {
+                input_hash: value_hash(&SolValue::str("promoted-unsafe-input")),
+                downstream_success: true,
+                guard_violation: true,
+                ledger_hash: value_hash(&SolValue::str("promoted-guard-ledger")),
+            },
+        )
+        .unwrap();
+    assert_eq!(promoted_demotion.record.status, ArtifactStatus::Shadow);
+    assert!(promoted_demotion.promotion_proposal.is_none());
+
     let demoted_flow = constant_flow("gate.demote");
     runtime.push_flow(demoted_flow.clone()).unwrap();
     runtime

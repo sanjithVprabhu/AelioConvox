@@ -151,52 +151,70 @@ export const FlowStepDefinitionSchema = z.object({
 });
 export type FlowStepDefinition = z.infer<typeof FlowStepDefinitionSchema>;
 
-const AelioTargetSchema = z.object({
-  id: z.string().min(1),
-  class: z.enum(['compute', 'io', 'model', 'tool', 'flow']),
-  effect: z.enum(['pure', 'read', 'write', 'external']),
-  input_imprint: z.string().min(1),
-  output_imprint: z.string().min(1),
-  bounded: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('cost'), max_units: z.number().int().positive() }),
-    z.object({ kind: z.literal('deadline'), max_ms: z.number().int().positive() }),
-    z.object({ kind: z.literal('registered_flow') }),
-  ]),
-  policy_tags: z.array(z.string().min(1)).optional(),
-  origin: z.enum(['tenant', 'vendor']).optional(),
-});
+const FlowCapabilityBindingSchema = z.object({
+  name: z.string().min(1).max(128),
+  step_id: z.string().min(1).max(256),
+  capability: z.string().min(1).max(256),
+  deadline_ms: z.number().int().min(1).max(300_000),
+}).strict();
 
-const AelioPromptSchema = z.object({
-  target_id: z.string().min(1),
-  template_id: z.string().min(1),
-  version: z.string().min(1),
-  body: z.string().min(1).max(65_536),
-  slots: z
-    .array(
-      z.object({
-        name: z.string().min(1),
-        ty: z.enum(['null', 'bool', 'int', 'float', 'str', 'list', 'map']),
-        sensitivity: z.enum(['public', 'internal', 'pii', 'secret']),
-      }),
-    )
-    .optional(),
-  layers: z
-    .array(
-      z.object({
-        id: z.string().min(3),
-        text: z.string().min(1).max(65_536),
-      }),
-    )
-    .optional(),
-});
+const FlowFixtureSchema = z.object({
+  binding: z.string().min(1).max(128),
+  output: AelioJsonValueSchema,
+  usage_tokens: z.number().int().nonnegative().optional(),
+}).strict();
 
+const FlowGateCaseSchema = z.object({
+  input: AelioJsonValueSchema,
+  wakes: z.array(AelioJsonValueSchema).max(64).optional(),
+  expect_park: z.boolean().optional(),
+  expected: AelioJsonValueSchema,
+  fixtures: z.array(FlowFixtureSchema).max(256).optional(),
+}).strict();
+
+const FlowLoweringSchema = z.object({
+  format: z.literal(1),
+  /** Calls must use `$cap:<binding>`; Rust rejects every raw executable target id. */
+  program: AelioJsonValueSchema,
+  bindings: z.array(FlowCapabilityBindingSchema).max(256),
+  cases: z.array(FlowGateCaseSchema).min(20).max(128),
+}).strict();
+
+const FlowEscapeSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('fallback'), flow_id: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal('free_range') }).strict(),
+  z.object({ kind: z.literal('escalate') }).strict(),
+]);
+
+const AelioSemanticFlowStepSchema = z.object({
+  id: z.string().min(1).max(256),
+  intent: z.string().min(1).max(2_048),
+  postcondition: AelioPredicateSchema,
+  admissible: z.array(z.string().min(1).max(256)).max(64),
+  on_violation: z.enum(['repair', 'escape']),
+  suspendable: z.boolean(),
+}).strict();
+
+/**
+ * Closed authored-flow declaration. This is not a raw runtime FlowPush: executable calls remain
+ * symbolic until the Rust catalog boundary resolves and gates exact immutable tool pins.
+ */
 export const AelioFlowArtifactSchema = z.object({
-  flow_id: z.string().min(1),
-  flow_rev: z.string().min(1),
-  program: z.unknown(),
-  targets: z.array(AelioTargetSchema),
-  prompts: z.array(AelioPromptSchema).optional(),
-});
+  version: z.string().regex(/^[1-9][0-9]*$/),
+  activation: z.object({
+    hard_preconditions: z.array(AelioPredicateSchema).max(64),
+    trigger_surface: z.array(z.string().min(1).max(512)).min(1).max(256),
+    margin_threshold: z.number().finite().min(0).max(1),
+  }).strict(),
+  learnable: z.boolean(),
+  preemption: z.enum(['hold', 'suspend_yield', 'yield']),
+  steps: z.array(AelioSemanticFlowStepSchema).min(1).max(256),
+  escape: FlowEscapeSchema,
+  terminal_states: z.array(z.string().min(1).max(256)).max(256),
+  ttl_secs: z.number().int().min(1).max(31_536_000).nullable(),
+  max_attempts: z.number().int().min(1).max(1_000),
+  lowering: FlowLoweringSchema,
+}).strict();
 export type AelioFlowArtifact = z.infer<typeof AelioFlowArtifactSchema>;
 
 export const FlowDefinitionSchema = z.object({

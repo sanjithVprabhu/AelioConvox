@@ -6,9 +6,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use aelio_db_query::{
-    execute_prism, ColumnKind, Database, HashEmbedder, PrismEmbedder, Value,
-};
+use aelio_db_query::{execute_prism, ColumnKind, Database, HashEmbedder, PrismEmbedder, Value};
 use aelio_query::{
     check_prism, parse_prism, recall, CollectionRegistry, CollectionSchema, PrismColKind,
     PrismColumn, RecallModality,
@@ -20,10 +18,8 @@ struct TmpDir(PathBuf);
 impl TmpDir {
     fn new(tag: &str) -> Self {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!(
-            "aelio_prism_life_{tag}_{}_{n}",
-            std::process::id()
-        ));
+        let p =
+            std::env::temp_dir().join(format!("aelio_prism_life_{tag}_{}_{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         TmpDir(p)
@@ -48,8 +44,18 @@ fn table_schema() -> Vec<(&'static str, ColumnKind)> {
 
 fn prism_collection() -> CollectionSchema {
     let mut columns = BTreeMap::new();
-    columns.insert("id".into(), PrismColumn { kind: PrismColKind::Utf8 });
-    columns.insert("body".into(), PrismColumn { kind: PrismColKind::Text });
+    columns.insert(
+        "id".into(),
+        PrismColumn {
+            kind: PrismColKind::Utf8,
+        },
+    );
+    columns.insert(
+        "body".into(),
+        PrismColumn {
+            kind: PrismColKind::Text,
+        },
+    );
     columns.insert(
         "embedding".into(),
         PrismColumn {
@@ -59,9 +65,24 @@ fn prism_collection() -> CollectionSchema {
             },
         },
     );
-    columns.insert("category".into(), PrismColumn { kind: PrismColKind::Utf8 });
-    columns.insert("active".into(), PrismColumn { kind: PrismColKind::Bool });
-    columns.insert("version".into(), PrismColumn { kind: PrismColKind::Int });
+    columns.insert(
+        "category".into(),
+        PrismColumn {
+            kind: PrismColKind::Utf8,
+        },
+    );
+    columns.insert(
+        "active".into(),
+        PrismColumn {
+            kind: PrismColKind::Bool,
+        },
+    );
+    columns.insert(
+        "version".into(),
+        PrismColumn {
+            kind: PrismColKind::Int,
+        },
+    );
     CollectionSchema {
         name: "prompts".into(),
         columns,
@@ -71,7 +92,9 @@ fn prism_collection() -> CollectionSchema {
 }
 
 fn models() -> BTreeMap<String, String> {
-    [("embedding".into(), "hash-8".into())].into_iter().collect()
+    [("embedding".into(), "hash-8".into())]
+        .into_iter()
+        .collect()
 }
 
 fn row(
@@ -160,7 +183,8 @@ fn collection_store_retrieve_edit_delete_via_prism() {
         "fulltext recall must find reply prompt: {hits:?}"
     );
     assert!(
-        hits.iter().any(|h| h.fields.get("id") == Some(&Value::Utf8("reply.v1".into()))),
+        hits.iter()
+            .any(|h| h.fields.get("id") == Some(&Value::Utf8("reply.v1".into()))),
         "expected reply.v1 in fulltext hits: {hits:?}"
     );
     // Projection: no embedding leaked
@@ -174,10 +198,7 @@ fn collection_store_retrieve_edit_delete_via_prism() {
     )
     .unwrap();
     let hits = execute_prism(&db, &q_vec, &model_map, Some(&emb)).unwrap();
-    assert!(
-        !hits.is_empty(),
-        "vector recall must return hits: {hits:?}"
-    );
+    assert!(!hits.is_empty(), "vector recall must return hits: {hits:?}");
     assert_eq!(
         hits[0].fields.get("id"),
         Some(&Value::Utf8("reply.v1".into())),
@@ -198,7 +219,11 @@ fn collection_store_retrieve_edit_delete_via_prism() {
     .unwrap();
     check_prism(&reg, "demo", &filtered).unwrap();
     let hits = execute_prism(&db, &filtered, &model_map, Some(&emb)).unwrap();
-    assert_eq!(hits.len(), 1, "login filter should isolate otp.v1: {hits:?}");
+    assert_eq!(
+        hits.len(),
+        1,
+        "login filter should isolate otp.v1: {hits:?}"
+    );
     assert_eq!(
         hits[0].fields.get("id"),
         Some(&Value::Utf8("otp.v1".into()))
@@ -272,10 +297,7 @@ fn collection_store_retrieve_edit_delete_via_prism() {
     }))
     .unwrap();
     let hits = execute_prism(&db, &gone, &model_map, Some(&emb)).unwrap();
-    assert!(
-        hits.is_empty(),
-        "deleted otp.v1 must not recall: {hits:?}"
-    );
+    assert!(hits.is_empty(), "deleted otp.v1 must not recall: {hits:?}");
 }
 
 #[test]

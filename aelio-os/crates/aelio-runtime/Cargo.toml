@@ -11,6 +11,7 @@ description = "Authoritative Aelio turn actors over the mother-document kernel a
 [dependencies]
 aelio-convert.workspace = true
 aelio-kernel.workspace = true
+aelio-learn.workspace = true
 aelio-prompt.workspace = true
 aelio-query.workspace = true
 aelio-sol.workspace = true

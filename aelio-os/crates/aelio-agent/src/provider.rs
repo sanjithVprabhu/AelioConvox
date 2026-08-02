@@ -570,12 +570,14 @@ pub struct HttpProviderConfig {
     pub extra_headers: IndexMap<String, String>,
 }
 
+#[cfg(feature = "direct-provider-tests")]
 pub struct OpenAiCompatibleProvider {
     config: HttpProviderConfig,
     client: reqwest::blocking::Client,
     calls: Vec<ProviderCall>,
 }
 
+#[cfg(feature = "direct-provider-tests")]
 impl OpenAiCompatibleProvider {
     pub fn new(config: HttpProviderConfig) -> AelioResult<Self> {
         if config.endpoint.trim().is_empty() || config.model.trim().is_empty() {
@@ -617,6 +619,7 @@ impl OpenAiCompatibleProvider {
     }
 }
 
+#[cfg(feature = "direct-provider-tests")]
 impl LlmProvider for OpenAiCompatibleProvider {
     fn complete(&mut self, request: &LlmRequest) -> AelioResult<LlmResponse> {
         let started = Instant::now();

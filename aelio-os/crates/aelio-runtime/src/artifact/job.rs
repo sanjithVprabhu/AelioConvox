@@ -92,12 +92,18 @@ pub struct BuildReaction {
 #[serde(deny_unknown_fields)]
 pub struct BuildCandidateMeasurement {
     pub pin: String,
+    #[serde(default = "legacy_embedding_space")]
+    pub embedding_space: String,
     pub measured_similarity: f64,
     pub rrf_score: f64,
     pub text_rank: u32,
     pub vector_rank: u32,
     pub interface: super::ArtifactInterface,
     pub description: String,
+}
+
+fn legacy_embedding_space() -> String {
+    "aelio.embedding.lexical@1".into()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]

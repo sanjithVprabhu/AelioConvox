@@ -178,6 +178,12 @@ aelio.flow('onboarding_setup', {
 aelio.setCustomerState(userId, 'onboarding')
 ```
 
+The short form above is semantic only: Rust records materialization demand but does not guess an
+executable program. Add the closed `aelio` semantic/lowering contract with `$cap:` bindings and
+sandbox cases to make it executable. See
+[`AUTHORED_FLOW_LOWERING.md`](../../docs/operations/AUTHORED_FLOW_LOWERING.md). Raw tool ids and
+parallel direct flow pushes are intentionally rejected by the unified runtime.
+
 ## API
 
 - `aelio.expose(name, handler, schema)` — register a callable function.

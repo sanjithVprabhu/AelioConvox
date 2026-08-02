@@ -44,7 +44,10 @@ pub enum Frame {
     /// Number of fully completed iterations before the currently suspended iteration.
     Loop(u64),
     TryBody,
-    TryHandler(usize),
+    TryHandler {
+        index: usize,
+        prefix: String,
+    },
     TryFinally(Option<ErrV1>),
     Fallback {
         step_index: usize,
@@ -574,7 +577,9 @@ impl<'b, B: Backend> Executor<'b, B> {
                         cursor.pop_front();
                         Some(Frame::TryBody)
                     }
-                    Some(Frame::TryHandler(_)) | Some(Frame::TryFinally(_)) => cursor.pop_front(),
+                    Some(Frame::TryHandler { .. }) | Some(Frame::TryFinally(_)) => {
+                        cursor.pop_front()
+                    }
                     Some(other) => return Err(frame_mismatch(nid, other.clone())),
                     None => None,
                 };
@@ -583,14 +588,30 @@ impl<'b, B: Backend> Executor<'b, B> {
                 let resuming_finally = matches!(phase, Some(Frame::TryFinally(_)));
                 match phase {
                     Some(Frame::TryFinally(error)) => pending_error = error,
-                    Some(Frame::TryHandler(index)) => match self.exec(&catch[index].1, cursor) {
-                        Ok(Flow::Suspend(mut suspension)) => {
-                            suspension.push_frame(nid, Frame::TryHandler(index));
-                            return Ok(Flow::Suspend(suspension));
+                    Some(Frame::TryHandler { index, prefix }) => {
+                        let Some((declared_prefix, handler)) = catch.get(index) else {
+                            return Err(ErrV1::new(
+                                ReasonCode::Shape,
+                                nid,
+                                "continuation Try handler index is out of bounds",
+                            ));
+                        };
+                        if declared_prefix != &prefix {
+                            return Err(ErrV1::new(
+                                ReasonCode::Shape,
+                                nid,
+                                "continuation Try handler prefix does not match pinned flow",
+                            ));
                         }
-                        Ok(Flow::Done) => {}
-                        Err(error) => pending_error = Some(error),
-                    },
+                        match self.exec(handler, cursor) {
+                            Ok(Flow::Suspend(mut suspension)) => {
+                                suspension.push_frame(nid, Frame::TryHandler { index, prefix });
+                                return Ok(Flow::Suspend(suspension));
+                            }
+                            Ok(Flow::Done) => {}
+                            Err(error) => pending_error = Some(error),
+                        }
+                    }
                     None | Some(Frame::TryBody) => match self.exec(body, cursor) {
                         Ok(Flow::Suspend(mut suspension)) => {
                             suspension.push_frame(nid, Frame::TryBody);
@@ -602,7 +623,13 @@ impl<'b, B: Backend> Executor<'b, B> {
                                 self.write(nid, err_into, error.to_sol())?;
                                 match self.exec(&catch[index].1, &mut VecDeque::new()) {
                                     Ok(Flow::Suspend(mut suspension)) => {
-                                        suspension.push_frame(nid, Frame::TryHandler(index));
+                                        suspension.push_frame(
+                                            nid,
+                                            Frame::TryHandler {
+                                                index,
+                                                prefix: catch[index].0.clone(),
+                                            },
+                                        );
                                         return Ok(Flow::Suspend(suspension));
                                     }
                                     Ok(Flow::Done) => {}

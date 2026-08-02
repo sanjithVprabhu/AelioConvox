@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, rishabh-dev]
   pull_request:
@@ -47,3 +48,25 @@ jobs:
       - run: pnpm typecheck
       - run: AELIO_TEST_MODE=1 OPENAI_API_KEY= GEMINI_API_KEY= ANTHROPIC_API_KEY= pnpm test:all
       - run: AELIO_TEST_MODE=1 OPENAI_API_KEY= pnpm test:phase6:lifecycle
+
+  live-provider:
+    name: Opt-in live OpenAI architecture matrix
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aelio-os
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.75
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aelio-os
+      - name: Require live-provider credential
+        run: test -n "$OPENAI_API_KEY"
+      - name: Run ignored live E2E cases explicitly
+        run: cargo test -p aelio-agent --features direct-provider-tests --test live_llm_e2e -- --ignored --nocapture
+      - name: Run ignored live architecture case explicitly
+        run: cargo test -p aelio-agent --features direct-provider-tests --test live_llm_architecture -- --ignored --nocapture

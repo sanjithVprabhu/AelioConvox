@@ -191,6 +191,8 @@ pub struct TierLookup {
     pub procedure_id: Option<String>,
     pub path: Option<AbilityPath>,
     pub margin: f64,
+    /// Exact unified artifact binding. A legacy path without this pin is shadow-only.
+    pub artifact: Option<crate::adaptive::ArtifactPinV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +239,7 @@ pub fn lookup_tier_with_embedder(
             procedure_id: Some(proc.id.clone()),
             path: Some(proc.path.clone()),
             margin: 1.0,
+            artifact: reg.procedure_artifact(&proc.id).cloned(),
         };
     }
 
@@ -246,6 +249,7 @@ pub fn lookup_tier_with_embedder(
             procedure_id: None,
             path: None,
             margin: 0.0,
+            artifact: None,
         };
     };
 
@@ -294,6 +298,7 @@ pub fn lookup_tier_with_embedder(
                 procedure_id: Some(proc.id.clone()),
                 path: Some(proc.path.clone()),
                 margin,
+                artifact: reg.procedure_artifact(&proc.id).cloned(),
             };
         }
         return TierLookup {
@@ -301,6 +306,7 @@ pub fn lookup_tier_with_embedder(
             procedure_id: None,
             path: None,
             margin,
+            artifact: None,
         };
     }
 
@@ -309,6 +315,7 @@ pub fn lookup_tier_with_embedder(
         procedure_id: None,
         path: None,
         margin: 0.0,
+        artifact: None,
     }
 }
 
@@ -1354,6 +1361,7 @@ mod tests {
             name: "write_order".into(),
             version: "1".into(),
             capability_tags: vec!["orders.write".into()],
+            effect: None,
             effectful: true,
             idempotent: false,
             dry_run_available: false,
@@ -1459,6 +1467,7 @@ mod tests {
             name: "send_otp".into(),
             version: "1".into(),
             capability_tags: vec!["auth.otp.send".into()],
+            effect: None,
             effectful: true,
             idempotent: false,
             dry_run_available: true,

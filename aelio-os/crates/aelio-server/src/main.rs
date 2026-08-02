@@ -8,6 +8,9 @@ use aelio_server::{router, ServerState};
 use std::net::SocketAddr;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if run_maintenance_command()? {
+        return Ok(());
+    }
     // Build all synchronous state before entering Tokio. Several runtime adapters intentionally
     // use reqwest's blocking client inside dedicated blocking workers; constructing or dropping
     // those clients while an async runtime is entered can mask an ordinary configuration error
@@ -92,15 +95,36 @@ fn build_application() -> Result<(SocketAddr, axum::Router), Box<dyn std::error:
     } else {
         return Err("AELIO_LLM_EMBED_URL is required for the adaptive Rust agent".into());
     };
-    let database_state = aelio_db_api::AppState::new(database, api_tokens.clone())
-        .with_embedder(std::sync::Arc::new(DatabaseEmbedder(embedder.clone())));
+    let database_state = if allow_insecure {
+        aelio_db_api::AppState::new(database, vec![])
+    } else {
+        aelio_db_api::AppState::new_tenant_scoped(
+            database,
+            api_tokens
+                .iter()
+                .cloned()
+                .map(|token| (tenant_id.clone(), token))
+                .collect(),
+        )?
+    }
+    .with_embedder(std::sync::Arc::new(DatabaseEmbedder(embedder.clone())));
     let agent_runtime = DurableRuntime::new_with_embedder(world, agent_store, embedder)?;
     let agent_state = aelio_agent_api::AppState::new_with_artifact_runtime(
         agent_runtime,
         api_tokens.clone(),
         runtime.clone(),
     );
-    let state = ServerState::new(runtime, api_tokens, allow_insecure)?;
+    let state = if allow_insecure {
+        ServerState::new(runtime, vec![], true)?
+    } else {
+        ServerState::new_tenant_scoped(
+            runtime,
+            api_tokens
+                .into_iter()
+                .map(|token| (tenant_id.clone(), token))
+                .collect(),
+        )?
+    };
     if allow_insecure {
         eprintln!(
             "WARNING: AELIO_ALLOW_INSECURE_OPEN=1; the Rust runtime accepts unauthenticated requests"
@@ -171,5 +195,53 @@ fn secret_32(name: &str) -> Result<[u8; 32], String> {
 }
 
 async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler must install");
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => { let _ = result; }
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+    eprintln!("shutdown signal received; draining admitted HTTP work");
+}
+
+fn run_maintenance_command() -> Result<bool, Box<dyn std::error::Error>> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let Some(command) = args.first().and_then(|value| value.to_str()) else {
+        return Ok(false);
+    };
+    let path = |index: usize| {
+        args.get(index)
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| format!("missing path argument {index}"))
+    };
+    match command {
+        "backup" if args.len() == 3 => {
+            let manifest = aelio_server::backup::create_backup(&path(1)?, &path(2)?)?;
+            println!("backup verified: {} files", manifest.files.len());
+            Ok(true)
+        }
+        "verify-backup" if args.len() == 2 => {
+            let manifest = aelio_server::backup::verify_backup(&path(1)?)?;
+            println!("backup valid: {} files", manifest.files.len());
+            Ok(true)
+        }
+        "restore" if args.len() == 3 => {
+            let manifest = aelio_server::backup::restore_backup(&path(1)?, &path(2)?)?;
+            println!("restore complete: {} files", manifest.files.len());
+            Ok(true)
+        }
+        "backup" | "verify-backup" | "restore" => Err(
+            "usage: aelio-server backup <stopped-data-dir> <new-backup-dir> | verify-backup <backup-dir> | restore <backup-dir> <new-data-dir>"
+                .into(),
+        ),
+        _ => Ok(false),
+    }
 }

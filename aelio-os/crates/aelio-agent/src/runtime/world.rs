@@ -24,6 +24,7 @@ pub struct World {
     pub signatures: SignatureRegistry,
     pub once_seen: HashSet<String>,
     pub tool_host: Box<dyn ToolHost>,
+    pub adaptive_artifact_host: Box<dyn crate::adaptive::AdaptiveArtifactHost>,
     pub user_state: IndexMap<String, String>,
     pub user_flows: IndexMap<String, crate::blocks::flow::FlowInstance>,
     pub llm_provider: Box<dyn LlmProvider>,
@@ -33,6 +34,9 @@ pub struct World {
     pub embedder: std::sync::Arc<dyn Embedder>,
     /// Local bake may warm immediately; durable production uses behavioral signals + cold loop.
     pub inline_learning_enabled: bool,
+    /// Transitional local/parity switch. Unified production constructors disable this so an
+    /// unmaterialized FlowSpec cannot regain effect or continuation authority.
+    pub legacy_flow_execution_enabled: bool,
     /// True only when a wrapper can actually commit user-scoped memory durably.
     pub(crate) durable_memory_enabled: bool,
 }
@@ -44,8 +48,10 @@ impl World {
         let mut world = Self::demo_tenant(tenant_id);
         world.replace_tenant(TenantDecl::empty(tenant_id))?;
         world.tool_host = Box::new(MockToolHost::default());
+        world.adaptive_artifact_host = Box::new(crate::adaptive::UnavailableAdaptiveArtifactHost);
         world.llm_provider = Box::new(UnavailableLlmProvider::default());
         world.inline_learning_enabled = false;
+        world.legacy_flow_execution_enabled = false;
         Ok(world)
     }
 
@@ -66,6 +72,9 @@ impl World {
         register_tool_capabilities(&mut registry);
         for flow in &tenant.flows {
             registry.register_flow(flow.clone());
+        }
+        for (flow_id, artifact) in &tenant.flow_artifacts {
+            registry.bind_flow_artifact(flow_id, artifact.clone())?;
         }
         for id in [
             "State.Direction",
@@ -140,6 +149,7 @@ impl World {
                 name: "send_otp".into(),
                 version: "1".into(),
                 capability_tags: vec!["auth.otp.send".into()],
+                effect: Some(crate::tenant::ToolEffect::External),
                 effectful: true,
                 idempotent: false,
                 dry_run_available: true,
@@ -187,6 +197,7 @@ impl World {
                 name: "verify_otp".into(),
                 version: "1".into(),
                 capability_tags: vec!["auth.otp.verify".into()],
+                effect: Some(crate::tenant::ToolEffect::External),
                 effectful: true,
                 idempotent: false,
                 dry_run_available: false,
@@ -243,6 +254,7 @@ impl World {
                 name: "clients_query".into(),
                 version: "1".into(),
                 capability_tags: vec!["crm.clients.query".into()],
+                effect: Some(crate::tenant::ToolEffect::Read),
                 effectful: false,
                 idempotent: true,
                 dry_run_available: true,
@@ -351,6 +363,7 @@ impl World {
             terminal_states: vec!["authenticated".into()],
             ttl_secs: Some(300),
             max_attempts: 3,
+            lowering: None,
         }];
 
         tenant.attributes = vec![
@@ -454,12 +467,14 @@ impl World {
             signatures: SignatureRegistry::default(),
             once_seen: HashSet::new(),
             tool_host: Box::new(tool_host),
+            adaptive_artifact_host: Box::new(crate::adaptive::UnavailableAdaptiveArtifactHost),
             user_state: IndexMap::new(),
             user_flows: IndexMap::new(),
             llm_provider: Box::new(ScriptedLlmProvider::deterministic()),
             turn_recall: Box::new(NoopTurnRecall),
             embedder: std::sync::Arc::new(default_situation_embedder()),
             inline_learning_enabled: true,
+            legacy_flow_execution_enabled: true,
             durable_memory_enabled: false,
         }
     }
@@ -483,6 +498,17 @@ impl World {
         self.tool_host = host;
     }
 
+    pub fn set_adaptive_artifact_host(
+        &mut self,
+        host: Box<dyn crate::adaptive::AdaptiveArtifactHost>,
+    ) {
+        self.adaptive_artifact_host = host;
+    }
+
+    pub fn disable_legacy_flow_execution(&mut self) {
+        self.legacy_flow_execution_enabled = false;
+    }
+
     pub fn provider_calls(&self) -> &[ProviderCall] {
         self.llm_provider.calls()
     }
@@ -496,6 +522,17 @@ impl World {
         user_id: &str,
         utterance: &str,
         channel: &str,
+    ) -> TurnResult {
+        let local_turn_id = format!("local-turn-{}", self.effect_env.ledger.len());
+        self.run_turn_on_channel_with_id(user_id, utterance, channel, &local_turn_id)
+    }
+
+    pub fn run_turn_on_channel_with_id(
+        &mut self,
+        user_id: &str,
+        utterance: &str,
+        channel: &str,
+        turn_id: &str,
     ) -> TurnResult {
         let state_id = self
             .user_state
@@ -514,6 +551,7 @@ impl World {
 
         let active_flow = self.user_flows.get(user_id).cloned();
         let input = TurnInput {
+            turn_id: turn_id.into(),
             utterance: utterance.into(),
             user_id: user_id.into(),
             channel: channel.into(),
@@ -539,10 +577,12 @@ impl World {
             signatures: &mut self.signatures,
             once_seen: &mut self.once_seen,
             tool_host: self.tool_host.as_mut(),
+            adaptive_artifact_host: self.adaptive_artifact_host.as_mut(),
             llm_provider: self.llm_provider.as_mut(),
             turn_recall: self.turn_recall.as_mut(),
             embedder: self.embedder.as_ref(),
             inline_learning_enabled: self.inline_learning_enabled,
+            legacy_flow_execution_enabled: self.legacy_flow_execution_enabled,
             durable_memory_enabled: self.durable_memory_enabled,
         };
         let result = rt.run(&input);
@@ -550,14 +590,16 @@ impl World {
         if let Some(ref st) = result.new_state {
             self.user_state.insert(user_id.into(), st.clone());
         }
-        match &result.active_flow {
-            Some(flow) => {
-                self.user_flows.insert(user_id.into(), flow.clone());
+        if self.legacy_flow_execution_enabled {
+            match &result.active_flow {
+                Some(flow) => {
+                    self.user_flows.insert(user_id.into(), flow.clone());
+                }
+                None if !result.suspended => {
+                    self.user_flows.shift_remove(user_id);
+                }
+                None => {}
             }
-            None if !result.suspended => {
-                self.user_flows.shift_remove(user_id);
-            }
-            None => {}
         }
 
         // Emit only after the in-memory state/flow commit. DurableRuntime adds a separate durable
@@ -596,6 +638,7 @@ impl World {
             .filter(|record| record.kind == "turn_user" && record.payload.as_str() == Some(user_id))
             .count() as u64;
         let input = TurnInput {
+            turn_id: format!("shadow-turn-{turn_index}"),
             utterance: utterance.into(),
             user_id: user_id.into(),
             channel: "shadow".into(),
@@ -619,10 +662,12 @@ impl World {
             signatures: &mut self.signatures,
             once_seen: &mut self.once_seen,
             tool_host: self.tool_host.as_mut(),
+            adaptive_artifact_host: self.adaptive_artifact_host.as_mut(),
             llm_provider: self.llm_provider.as_mut(),
             turn_recall: self.turn_recall.as_mut(),
             embedder: self.embedder.as_ref(),
             inline_learning_enabled: false,
+            legacy_flow_execution_enabled: self.legacy_flow_execution_enabled,
             durable_memory_enabled: self.durable_memory_enabled,
         }
         .run_shadow_path(&input, path)
@@ -663,5 +708,110 @@ fn register_tool_capabilities(registry: &mut Registry) {
         }
         .with_tool_deps(tool_ids);
         registry.register_ability(contract);
+    }
+}
+
+#[cfg(test)]
+mod adaptive_execution_tests {
+    use super::*;
+    use crate::abilities::learn::{situation_hash, situation_key};
+    use crate::abilities::registry::{
+        ProcedureEvidence, ProcedureProvenance, ProcedureSpec, ProcedureStatus, SituationFilter,
+    };
+    use crate::adaptive::{
+        AdaptiveArtifactHost, AdaptiveArtifactOutputV1, AdaptiveArtifactTurnV1,
+        AdaptiveDecisionEnvelopeV1, ArtifactPinV1,
+    };
+    use std::sync::{Arc, Mutex};
+
+    struct RecordingArtifactHost {
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl AdaptiveArtifactHost for RecordingArtifactHost {
+        fn invoke(
+            &mut self,
+            _tenant: &str,
+            instance_id: &str,
+            decision: &AdaptiveDecisionEnvelopeV1,
+        ) -> crate::types::AelioResult<AdaptiveArtifactTurnV1> {
+            decision.validate()?;
+            self.calls.lock().unwrap().push(instance_id.into());
+            Ok(AdaptiveArtifactTurnV1 {
+                output: AdaptiveArtifactOutputV1 {
+                    text: Some("Hello from unified runtime".into()),
+                    frame: None,
+                },
+                suspended: false,
+            })
+        }
+    }
+
+    #[test]
+    fn exact_bound_procedure_executes_via_artifact_host_inside_turn() {
+        let mut world = World::demo_tenant("tenant-a");
+        let capabilities = world.tenant.states[0].permission_envelope.clone();
+        let sigma = situation_key(
+            "unauthenticated",
+            "greeting",
+            vec![],
+            capabilities.clone(),
+            None,
+            0,
+            None,
+        );
+        let procedure_id = "procedure-greeting-v1";
+        world.registry.register_procedure(ProcedureSpec {
+            id: procedure_id.into(),
+            version: "1".into(),
+            tenant_id: "tenant-a".into(),
+            situation_hash: situation_hash(&sigma),
+            situation_filter: SituationFilter {
+                state: Some("unauthenticated".into()),
+                intent_class: Some("greeting".into()),
+                required_slots: vec![],
+                capability_tags: capabilities,
+            },
+            situation_embedding: vec![],
+            path: AbilityPath::seq(["Express.Template"]),
+            contract: world.registry.abilities["Express.Template"].clone(),
+            tool_deps: vec![],
+            prompt_deps: vec![],
+            evidence: ProcedureEvidence {
+                observations: 20,
+                success_rate: 1.0,
+                mean_cost: 0.0,
+                mean_latency_ms: 1.0,
+            },
+            status: ProcedureStatus::Promoted,
+            provenance: ProcedureProvenance {
+                origin: "test".into(),
+                proposed_by: "test".into(),
+                approved_by: Some("test".into()),
+            },
+            supersedes: None,
+        });
+        world
+            .registry
+            .bind_procedure_artifact(
+                procedure_id,
+                ArtifactPinV1 {
+                    id: "procedure.greeting".into(),
+                    version: 1,
+                    hash: "a".repeat(64),
+                },
+            )
+            .unwrap();
+        let calls = Arc::new(Mutex::new(vec![]));
+        world.set_adaptive_artifact_host(Box::new(RecordingArtifactHost {
+            calls: Arc::clone(&calls),
+        }));
+
+        let result = world.run_turn_on_channel_with_id("user-1", "hi", "web", "turn-exact-1");
+        assert_eq!(result.reply.text, "Hello from unified runtime");
+        assert_eq!(&*calls.lock().unwrap(), &["turn-exact-1"]);
+        assert!(result.steps.iter().any(|step| {
+            step.name == "AdaptiveInvoke" && step.detail.contains("authority=aelio-runtime")
+        }));
     }
 }

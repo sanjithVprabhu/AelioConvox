@@ -53,7 +53,8 @@ aelio.expose(
     output: {
       orderId: { type: 'string', meaning: 'The cancelled order identifier' },
       status: { type: 'string', meaning: 'The resulting order status' },
-      cancelledAt: { type: 'string', meaning: 'The cancellation timestamp' },
+      // `cancelledAt` is intentionally not declared as evidence. The handler may return volatile
+      // operational metadata, but Rust's closed output allowlist admits only stable guarantees.
     },
     outputRole: 'effect_confirmation',
   },

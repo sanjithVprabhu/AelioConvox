@@ -52,6 +52,15 @@ fn map_import_aliases_are_read_only() {
 }
 
 #[test]
+fn park_inside_once_is_rejected_before_any_effect_can_start() {
+    let unsafe_plan = r#"{"nid":"once","op":"Once","idem_key":{"template":[{"lit":"k"}]},
+      "body":{"nid":"park","op":"Park","until":{"kind":"event"}}}"#;
+    let error = compile(unsafe_plan).expect_err("Once cannot retain an ambiguous parked intent");
+    assert_eq!(error.code.code(), "Shape");
+    assert!(error.detail.contains("Park is forbidden inside Once"));
+}
+
+#[test]
 fn production_registry_requires_policy_bounds_imprints_and_tenant_scope() {
     let mut registry = Registry::default();
     let unsafe_effect = Declaration {

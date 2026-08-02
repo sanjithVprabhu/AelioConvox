@@ -223,6 +223,15 @@ pub struct DurableIdempotencyRecord {
     pub failure_message: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SdkDeliveryDispositionAudit {
+    /// Stable non-secret correlation digest; the raw socket correlation is never persisted.
+    pub correlation_hash: String,
+    pub disposition: String,
+    pub recorded_at_ms: i64,
+}
+
 struct DurableToolHost {
     tenant_id: String,
     owner: String,
@@ -438,7 +447,7 @@ impl ToolHost for DurableToolHost {
                 Ok(raw)
             }
             Err(error) => {
-                if error.code == ReasonCode::Timeout {
+                if error.code == ReasonCode::Timeout || is_dispatched_unknown_outcome(&error) {
                     let state = if tool.idempotent {
                         DurableIdempotencyState::UnknownOutcome
                     } else {
@@ -452,10 +461,15 @@ impl ToolHost for DurableToolHost {
                         Utc::now().timestamp_millis(),
                     )?;
                     if !tool.idempotent {
-                        return Err(AelioError::new(
-                            ReasonCode::NeedsEscalation,
-                            "non-idempotent tool timed out after dispatch; outcome is unknown",
-                        ));
+                        return Err(
+                            AelioError::new(
+                                ReasonCode::NeedsEscalation,
+                                "non-idempotent tool lost its result after dispatch; outcome is unknown",
+                            )
+                            .with_decision_trace(
+                                error.decision_trace.as_deref().map(str::to_owned),
+                            ),
+                        );
                     }
                     return Err(error);
                 }
@@ -478,6 +492,19 @@ impl ToolHost for DurableToolHost {
     fn invocation_count_for(&self, tool_id: &str) -> Option<usize> {
         self.inner.invocation_count_for(tool_id)
     }
+
+    fn take_decision_trace(&mut self) -> Option<String> {
+        self.inner.take_decision_trace()
+    }
+}
+
+fn is_dispatched_unknown_outcome(error: &AelioError) -> bool {
+    error.code == ReasonCode::Internal
+        && matches!(
+            error.detail.as_ref(),
+            Some(Value::Map(detail))
+                if detail.get("outcome").and_then(Value::as_str) == Some("unknown_outcome")
+        )
 }
 
 fn idempotency_status(state: &DurableIdempotencyState) -> &'static str {
@@ -493,11 +520,13 @@ fn idempotency_status(state: &DurableIdempotencyState) -> &'static str {
 fn redact_text(text: &str) -> String {
     let email = regex::Regex::new(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
         .expect("static email redaction regex");
-    let phone =
-        regex::Regex::new(r"(?:\+?\d[\s().-]*){10,15}").expect("static phone redaction regex");
+    // Require non-alphanumeric boundaries so digit-heavy hashes, correlation ids and artifact
+    // identities are never mistaken for phone numbers. Preserve the surrounding delimiters.
+    let phone = regex::Regex::new(r"(^|[^A-Za-z0-9])(\+?\d(?:[\s().-]*\d){9,14})($|[^A-Za-z0-9])")
+        .expect("static phone redaction regex");
     let otp = regex::Regex::new(r"\b\d{6}\b").expect("static OTP redaction regex");
     let redacted = email.replace_all(text, "[REDACTED:pii]");
-    let redacted = phone.replace_all(&redacted, "[REDACTED:pii]");
+    let redacted = phone.replace_all(&redacted, "$1[REDACTED:pii]$3");
     otp.replace_all(&redacted, "[REDACTED:secret]").into_owned()
 }
 
@@ -505,6 +534,12 @@ fn explicit_memory_id(user_id: &str, fact: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(format!("{user_id}\u{1f}{fact}").as_bytes());
     format!("explicit.{}", hex::encode(&digest[..12]))
+}
+
+fn deferred_intent_id(user_id: &str, turn_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("{user_id}\u{1f}{turn_id}").as_bytes());
+    format!("open-loop.{}", hex::encode(&digest[..12]))
 }
 
 fn is_sensitive_reference(value: &serde_json::Value) -> bool {
@@ -550,6 +585,127 @@ impl DurableRuntime {
 
     pub fn has_semantic_embedder(&self) -> bool {
         self.embedder.supports_semantic_equivalence()
+    }
+
+    /// Install an external execution boundary without bypassing durable idempotency. Server
+    /// adapters must use this instead of replacing `world.tool_host` directly.
+    pub fn install_tool_host(&mut self, inner: Box<dyn ToolHost>) {
+        let now = Utc::now().timestamp_millis();
+        self.world.tool_host = Box::new(DurableToolHost {
+            tenant_id: self.tenant_id.clone(),
+            owner: format!("runtime:{}:{now}:external-host", std::process::id()),
+            store: self.store.clone(),
+            inner,
+        });
+    }
+
+    /// Persist one terminal reverse-SDK delivery disposition without retaining the raw
+    /// correlation id or result payload. Repeated identical acknowledgements coalesce, while the
+    /// accepted/duplicate/late distinctions remain independently auditable.
+    pub fn record_sdk_delivery_disposition(
+        &mut self,
+        invocation_id: &str,
+        disposition: &str,
+    ) -> AelioResult<PutIfAbsent> {
+        if invocation_id.trim().is_empty()
+            || invocation_id.len() > 256
+            || !matches!(disposition, "accepted" | "duplicate" | "late")
+        {
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                "SDK delivery audit requires a bounded correlation and closed disposition",
+            ));
+        }
+        use sha2::{Digest, Sha256};
+        let correlation_hash = hex::encode(Sha256::digest(invocation_id.as_bytes()));
+        let now = Utc::now().timestamp_millis();
+        self.store.put_if_absent(
+            &self.tenant_id,
+            LogicalTable::SdkDeliveryEvents,
+            &envelope(
+                format!("{correlation_hash}:{disposition}"),
+                "sdk_delivery_result",
+                disposition,
+                "aelio-wire",
+                now,
+                SdkDeliveryDispositionAudit {
+                    correlation_hash,
+                    disposition: disposition.into(),
+                    recorded_at_ms: now,
+                },
+            ),
+            None,
+        )
+    }
+
+    pub fn list_sdk_delivery_dispositions(
+        &self,
+        limit: usize,
+    ) -> AelioResult<Vec<StoredRecord<SdkDeliveryDispositionAudit>>> {
+        if limit == 0 || limit > 1_000 {
+            return Err(AelioError::new(
+                ReasonCode::BudgetExceeded,
+                "SDK delivery audit limit must be within 1..=1000",
+            ));
+        }
+        self.store.list(
+            &self.tenant_id,
+            LogicalTable::SdkDeliveryEvents,
+            None,
+            limit,
+        )
+    }
+
+    /// Bounded operational view of durable tool outcomes. The API layer must hash subject and
+    /// idempotency identities and must never expose `safe_result` or failure free text.
+    pub fn list_tool_outcomes(
+        &self,
+        status: Option<&str>,
+        limit: usize,
+    ) -> AelioResult<Vec<StoredRecord<DurableIdempotencyRecord>>> {
+        if limit == 0 || limit > 1_000 {
+            return Err(AelioError::new(
+                ReasonCode::BudgetExceeded,
+                "tool outcome audit limit must be within 1..=1000",
+            ));
+        }
+        if status.is_some_and(|status| {
+            !matches!(
+                status,
+                "processing" | "unknown_outcome" | "completed" | "failed" | "manual_review"
+            )
+        }) {
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                "tool outcome audit status is not in the closed state vocabulary",
+            ));
+        }
+        self.store
+            .list(&self.tenant_id, LogicalTable::Idempotency, status, limit)
+    }
+
+    pub fn list_open_loops(
+        &self,
+        limit: usize,
+    ) -> AelioResult<Vec<StoredRecord<crate::memory::Memory>>> {
+        if limit == 0 || limit > 1_000 {
+            return Err(AelioError::new(
+                ReasonCode::BudgetExceeded,
+                "open-loop audit limit must be within 1..=1000",
+            ));
+        }
+        Ok(self
+            .store
+            .list::<crate::memory::Memory>(
+                &self.tenant_id,
+                LogicalTable::Memories,
+                Some("active"),
+                1_000,
+            )?
+            .into_iter()
+            .filter(|row| row.envelope.value.kind == crate::memory::MemoryKind::OpenLoop)
+            .take(limit)
+            .collect())
     }
 
     /// Construct production recall and memory writes over one shared embedding space.
@@ -977,6 +1133,31 @@ impl DurableRuntime {
     /// Activate only an explicitly approved candidate. Protected rails and overlapping trigger
     /// surfaces cannot be replaced by learning, even when `allow_replace` is true.
     pub fn activate_candidate_flow(&mut self, key: &str, allow_replace: bool) -> AelioResult<()> {
+        self.activate_candidate_flow_with_artifact(key, allow_replace, None)
+    }
+
+    /// Activate a reviewed learned flow and, in unified mode, atomically publish the exact
+    /// executable artifact that owns its continuation/effect authority. Missing or invalid
+    /// materialization is checked before the candidate leaves `Approved`.
+    pub fn activate_candidate_flow_with_artifact(
+        &mut self,
+        key: &str,
+        allow_replace: bool,
+        artifact: Option<crate::adaptive::ArtifactPinV1>,
+    ) -> AelioResult<()> {
+        if !self.world.legacy_flow_execution_enabled && artifact.is_none() {
+            return Err(AelioError::new(
+                ReasonCode::GateNotMet,
+                "unified flow activation requires an admitted runtime artifact",
+            ));
+        }
+        if let Some(pin) = &artifact {
+            pin.validate()?;
+            self.world
+                .adaptive_artifact_host
+                .verify_executable_pin(&self.tenant_id, pin)?;
+        }
+
         let now = Utc::now().timestamp_millis();
         let mut candidate = loop {
             let row: StoredRecord<crate::runtime::learning::FlowCandidate> = self
@@ -1066,6 +1247,9 @@ impl DurableRuntime {
             tenant.flows[index] = candidate.flow.clone();
         } else {
             tenant.flows.push(candidate.flow.clone());
+        }
+        if let Some(pin) = artifact {
+            tenant.flow_artifacts.insert(candidate.flow.id.clone(), pin);
         }
         self.register_catalog(tenant)?;
         for _ in 0..8 {
@@ -1256,15 +1440,20 @@ impl DurableRuntime {
             self.hydrate_user(&request.user_id)?;
             let pending_term_confirmation = self
                 .world
-                .user_flows
-                .get(&request.user_id)
-                .filter(|flow| flow.flow_id == "__aelio.term_confirmation")
-                .and_then(|flow| {
-                    Some((
-                        flow.slots.get("term")?.as_str()?.to_owned(),
-                        flow.slots.get("attribute")?.as_str()?.to_owned(),
-                    ))
-                });
+                .legacy_flow_execution_enabled
+                .then(|| {
+                    self.world
+                        .user_flows
+                        .get(&request.user_id)
+                        .filter(|flow| flow.flow_id == "__aelio.term_confirmation")
+                        .and_then(|flow| {
+                            Some((
+                                flow.slots.get("term")?.as_str()?.to_owned(),
+                                flow.slots.get("attribute")?.as_str()?.to_owned(),
+                            ))
+                        })
+                })
+                .flatten();
             let state_before = self
                 .world
                 .user_state
@@ -1273,9 +1462,16 @@ impl DurableRuntime {
                 .unwrap_or_else(|| "unauthenticated".into());
             let provider_calls_before = self.world.provider_calls().len();
             let turn_started = std::time::Instant::now();
-            let mut result =
-                self.world
-                    .run_turn_on_channel(&request.user_id, &request.utterance, channel);
+            let runtime_flow_was_active = self
+                .world
+                .adaptive_artifact_host
+                .has_active_subject(&self.tenant_id, &request.user_id)?;
+            let mut result = self.world.run_turn_on_channel_with_id(
+                &request.user_id,
+                &request.utterance,
+                channel,
+                &request.turn_id,
+            );
             if let Some(fact) = crate::memory::explicit_fact(&request.utterance) {
                 let mut policy = crate::policy::PolicyCtx {
                     state: self.world.user_state.get(&request.user_id).cloned(),
@@ -1347,6 +1543,41 @@ impl DurableRuntime {
                             "Repeat the fact exactly or check the tenant memory policy.",
                         );
                     }
+                }
+            }
+            if result
+                .steps
+                .iter()
+                .any(|step| step.name == "FlowGate.Defer")
+            {
+                self.remember_deferred_intent(&request, now)?;
+                result.steps.push(TurnTraceStep {
+                    name: "Memory.OpenLoop".into(),
+                    detail: "persisted deferred user intent; active runtime continuation unchanged"
+                        .into(),
+                });
+            }
+            if runtime_flow_was_active
+                && !self
+                    .world
+                    .adaptive_artifact_host
+                    .has_active_subject(&self.tenant_id, &request.user_id)?
+            {
+                if let Some(deferred) =
+                    self.mark_next_deferred_intent_ready(&request.user_id, now)?
+                {
+                    result.steps.push(TurnTraceStep {
+                        name: "Memory.OpenLoopReady".into(),
+                        detail:
+                            "original runtime flow completed; oldest deferred intent returned to the user"
+                                .into(),
+                    });
+                    result.reply.text = format!(
+                        "{} I also kept your deferred request: {}",
+                        result.reply.text.trim_end(),
+                        deferred.text
+                    );
+                    result.reply.frame = None;
                 }
             }
             if result
@@ -1625,6 +1856,7 @@ impl DurableRuntime {
                         code: error.code,
                         message: redact_text(&error.message),
                         detail: None,
+                        decision_trace: error.decision_trace.clone(),
                     }),
                 },
             );
@@ -1694,7 +1926,176 @@ impl DurableRuntime {
             self.world.registry.register_procedure(spec);
             loaded += 1;
         }
+        self.refresh_procedure_artifact_bindings()?;
+        self.refresh_flow_artifact_bindings()?;
         Ok(loaded)
+    }
+
+    /// Durably bind a legacy learned procedure identity to one exact unified runtime artifact.
+    /// Bindings are immutable and live outside the learned path version so artifact admission can
+    /// be rolled out independently without rewriting historical learning evidence.
+    pub fn bind_procedure_artifact(
+        &mut self,
+        procedure_id: &str,
+        artifact: crate::adaptive::ArtifactPinV1,
+        actor: &str,
+    ) -> AelioResult<()> {
+        if actor.trim().is_empty() || actor.len() > 256 {
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                "artifact binding actor is required and bounded",
+            ));
+        }
+        artifact.validate()?;
+        if !self.world.registry.procedures.contains_key(procedure_id) {
+            return Err(AelioError::new(
+                ReasonCode::NotFound,
+                "cannot bind an artifact to an unknown promoted procedure",
+            ));
+        }
+        let key = procedure_artifact_binding_key(procedure_id);
+        let record = envelope(
+            key.clone(),
+            "procedure_artifact_binding",
+            "active",
+            actor,
+            Utc::now().timestamp_millis(),
+            artifact.clone(),
+        );
+        match self
+            .store
+            .put_if_absent(&self.tenant_id, LogicalTable::Audit, &record, None)?
+        {
+            PutIfAbsent::Inserted { .. } => {}
+            PutIfAbsent::Existing { .. } => {
+                let existing: StoredRecord<crate::adaptive::ArtifactPinV1> = self
+                    .store
+                    .get(&self.tenant_id, LogicalTable::Audit, &key)?
+                    .ok_or_else(|| {
+                        AelioError::new(
+                            ReasonCode::Conflict,
+                            "artifact binding exists but could not be loaded",
+                        )
+                    })?;
+                if existing.envelope.value != artifact {
+                    return Err(AelioError::new(
+                        ReasonCode::Conflict,
+                        "procedure already has a different immutable artifact binding",
+                    ));
+                }
+            }
+        }
+        self.world
+            .registry
+            .bind_procedure_artifact(procedure_id, artifact)
+    }
+
+    fn refresh_procedure_artifact_bindings(&mut self) -> AelioResult<()> {
+        let procedure_ids = self
+            .world
+            .registry
+            .procedures
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for procedure_id in procedure_ids {
+            let key = procedure_artifact_binding_key(&procedure_id);
+            let binding: Option<StoredRecord<crate::adaptive::ArtifactPinV1>> =
+                self.store.get(&self.tenant_id, LogicalTable::Audit, &key)?;
+            if let Some(binding) = binding {
+                if binding.envelope.status != "active" {
+                    return Err(AelioError::new(
+                        ReasonCode::Conflict,
+                        "procedure artifact binding has an invalid durable status",
+                    ));
+                }
+                self.world
+                    .registry
+                    .bind_procedure_artifact(&procedure_id, binding.envelope.value)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn bind_flow_artifact(
+        &mut self,
+        flow_id: &str,
+        artifact: crate::adaptive::ArtifactPinV1,
+        actor: &str,
+    ) -> AelioResult<()> {
+        if actor.trim().is_empty() || actor.len() > 256 {
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                "artifact binding actor is required and bounded",
+            ));
+        }
+        artifact.validate()?;
+        if !self.world.registry.flows.contains_key(flow_id) {
+            return Err(AelioError::new(
+                ReasonCode::NotFound,
+                "cannot bind an artifact to an unknown authored flow",
+            ));
+        }
+        let key = flow_artifact_binding_key(flow_id);
+        let record = envelope(
+            key.clone(),
+            "flow_artifact_binding",
+            "active",
+            actor,
+            Utc::now().timestamp_millis(),
+            artifact.clone(),
+        );
+        match self
+            .store
+            .put_if_absent(&self.tenant_id, LogicalTable::Audit, &record, None)?
+        {
+            PutIfAbsent::Inserted { .. } => {}
+            PutIfAbsent::Existing { .. } => {
+                let existing: StoredRecord<crate::adaptive::ArtifactPinV1> = self
+                    .store
+                    .get(&self.tenant_id, LogicalTable::Audit, &key)?
+                    .ok_or_else(|| {
+                        AelioError::new(
+                            ReasonCode::Conflict,
+                            "flow artifact binding exists but could not be loaded",
+                        )
+                    })?;
+                if existing.envelope.value != artifact {
+                    return Err(AelioError::new(
+                        ReasonCode::Conflict,
+                        "authored flow already has a different immutable artifact binding",
+                    ));
+                }
+            }
+        }
+        self.world.registry.bind_flow_artifact(flow_id, artifact)
+    }
+
+    fn refresh_flow_artifact_bindings(&mut self) -> AelioResult<()> {
+        let flow_ids = self
+            .world
+            .registry
+            .flows
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for flow_id in flow_ids {
+            let key = flow_artifact_binding_key(&flow_id);
+            let binding: Option<StoredRecord<crate::adaptive::ArtifactPinV1>> =
+                self.store.get(&self.tenant_id, LogicalTable::Audit, &key)?;
+            if let Some(binding) = binding {
+                if binding.envelope.status != "active" {
+                    return Err(AelioError::new(
+                        ReasonCode::Conflict,
+                        "flow artifact binding has an invalid durable status",
+                    ));
+                }
+                self.world
+                    .registry
+                    .bind_flow_artifact(&flow_id, binding.envelope.value)?;
+            }
+        }
+        Ok(())
     }
 
     fn maybe_run_shadow_exploration(
@@ -2052,6 +2453,92 @@ impl DurableRuntime {
         Ok(())
     }
 
+    fn remember_deferred_intent(
+        &mut self,
+        request: &DurableTurnRequest,
+        now_ms: i64,
+    ) -> AelioResult<()> {
+        let memory = crate::memory::Memory {
+            id: deferred_intent_id(&request.user_id, &request.turn_id),
+            kind: crate::memory::MemoryKind::OpenLoop,
+            text: redact_text(&request.utterance),
+            provenance: crate::memory::MemoryProvenance {
+                source_kind: "flow_gate_deferred_intent".into(),
+                source_id: request.turn_id.clone(),
+                observed_at_ms: now_ms,
+                actor: request.user_id.clone(),
+            },
+            confidence: 1.0,
+            valid_time: crate::memory::ValidTime {
+                from_ms: now_ms,
+                to_ms: None,
+            },
+            expires_at_ms: None,
+            decay: crate::memory::DecayPolicy {
+                half_life_ms: None,
+                floor: 1.0,
+            },
+            entity_id: None,
+            open_loop_state: Some("deferred".into()),
+            procedure_version: None,
+        };
+        crate::memory::MemoryStore::new(&self.tenant_id, self.store.clone()).remember(
+            &request.user_id,
+            memory,
+            self.embedder.as_ref(),
+            now_ms,
+        )?;
+        Ok(())
+    }
+
+    fn mark_next_deferred_intent_ready(
+        &mut self,
+        user_id: &str,
+        now_ms: i64,
+    ) -> AelioResult<Option<crate::memory::Memory>> {
+        let mut candidates: Vec<StoredRecord<crate::memory::Memory>> = self
+            .store
+            .list::<crate::memory::Memory>(
+                &self.tenant_id,
+                LogicalTable::Memories,
+                Some("active"),
+                1_000,
+            )?
+            .into_iter()
+            .filter(|row| {
+                row.envelope.owner == user_id
+                    && row.envelope.value.kind == crate::memory::MemoryKind::OpenLoop
+                    && row.envelope.value.open_loop_state.as_deref() == Some("deferred")
+            })
+            .collect();
+        candidates.sort_by_key(|row| row.envelope.value.provenance.observed_at_ms);
+        let Some(row) = candidates.into_iter().next() else {
+            return Ok(None);
+        };
+        let mut next = row.envelope;
+        next.value.open_loop_state = Some("ready".into());
+        next.updated_at_ms = now_ms;
+        let memory = next.value.clone();
+        match self.store.compare_swap(
+            &self.tenant_id,
+            LogicalTable::Memories,
+            row.row_id,
+            row.version,
+            &next,
+            None,
+        )? {
+            CompareSwap::Updated { .. } => Ok(Some(memory)),
+            CompareSwap::Conflict { .. } => Err(AelioError::new(
+                ReasonCode::Conflict,
+                "deferred intent changed while returning to it",
+            )),
+            CompareSwap::NotFound => Err(AelioError::new(
+                ReasonCode::NotFound,
+                "deferred intent disappeared while returning to it",
+            )),
+        }
+    }
+
     fn forget_explicit_fact(&mut self, user_id: &str, fact: &str, now_ms: i64) -> AelioResult<()> {
         let key = explicit_memory_id(user_id, fact);
         for _ in 0..8 {
@@ -2235,7 +2722,8 @@ impl DurableRuntime {
                 .user_state
                 .insert(user_id.into(), state.envelope.value);
         }
-        if !self.world.user_flows.contains_key(user_id) {
+        if self.world.legacy_flow_execution_enabled && !self.world.user_flows.contains_key(user_id)
+        {
             let flow: Option<StoredRecord<Option<FlowInstance>>> =
                 self.store
                     .get(&self.tenant_id, LogicalTable::FlowInstances, user_id)?;
@@ -2261,22 +2749,25 @@ impl DurableRuntime {
                 envelope(user_id, "state", "active", "runtime", now, state),
             )?;
         }
-        let flow_status = if result.active_flow.is_some() {
-            "active"
-        } else {
-            "closed"
-        };
-        self.upsert(
-            LogicalTable::FlowInstances,
-            envelope(
-                user_id,
-                "flow_instance",
-                flow_status,
-                "runtime",
-                now,
-                self.redact_flow(result.active_flow.clone()),
-            ),
-        )
+        if self.world.legacy_flow_execution_enabled {
+            let flow_status = if result.active_flow.is_some() {
+                "active"
+            } else {
+                "closed"
+            };
+            self.upsert(
+                LogicalTable::FlowInstances,
+                envelope(
+                    user_id,
+                    "flow_instance",
+                    flow_status,
+                    "runtime",
+                    now,
+                    self.redact_flow(result.active_flow.clone()),
+                ),
+            )?;
+        }
+        Ok(())
     }
 
     fn redact_turn_result(&self, result: &TurnResult) -> TurnResult {
@@ -2395,6 +2886,20 @@ fn promoted_version_is_better(
         .is_gt()
 }
 
+fn procedure_artifact_binding_key(procedure_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(procedure_id.as_bytes());
+    format!("adaptive-binding-{}", hex::encode(&digest[..16]))
+}
+
+fn flow_artifact_binding_key(flow_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(flow_id.as_bytes());
+    format!("flow-binding-{}", hex::encode(&digest[..16]))
+}
+
 fn flow_trigger_overlap(left: &crate::tenant::FlowSpec, right: &crate::tenant::FlowSpec) -> bool {
     left.activation.trigger_surface.iter().any(|left_trigger| {
         let left_trigger = left_trigger.trim().to_ascii_lowercase();
@@ -2423,6 +2928,7 @@ pub fn validate_catalog(tenant: &TenantDecl) -> AelioResult<()> {
         || tenant.personalities.len() > 100
         || tenant.policies.len() > 10_000
         || tenant.flows.len() > 1_000
+        || tenant.flow_artifacts.len() > tenant.flows.len()
         || tenant.attributes.len() > 10_000
     {
         return Err(AelioError::new(
@@ -2449,6 +2955,21 @@ pub fn validate_catalog(tenant: &TenantDecl) -> AelioResult<()> {
             return Err(AelioError::new(
                 ReasonCode::Validation,
                 "every tool requires id, name, version, and at least one capability",
+            ));
+        }
+        if tool.effect.is_some()
+            && tool.effectful
+                != matches!(
+                    tool.effect_class(),
+                    crate::tenant::ToolEffect::Write | crate::tenant::ToolEffect::External
+                )
+        {
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                format!(
+                    "tool {} effectful flag contradicts its exact effect class",
+                    tool.id
+                ),
             ));
         }
         if !tool_ids.insert(tool.id.as_str()) {
@@ -2695,6 +3216,18 @@ pub fn validate_catalog(tenant: &TenantDecl) -> AelioResult<()> {
                 }
             }
         }
+        if let Some(lowering) = &flow.lowering {
+            validate_flow_lowering(flow, lowering)?;
+        }
+    }
+    for (flow_id, artifact) in &tenant.flow_artifacts {
+        if !flow_ids.contains(flow_id.as_str()) {
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                format!("runtime artifact binding references unknown flow {flow_id}"),
+            ));
+        }
+        artifact.validate()?;
     }
     for flow in &tenant.flows {
         if let crate::tenant::FlowEscape::Fallback { flow_id } = &flow.escape {
@@ -2823,6 +3356,140 @@ pub fn validate_catalog(tenant: &TenantDecl) -> AelioResult<()> {
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_flow_lowering(
+    flow: &crate::tenant::FlowSpec,
+    lowering: &crate::tenant::FlowLoweringV1,
+) -> AelioResult<()> {
+    const MAX_PROGRAM_BYTES: usize = 1024 * 1024;
+    if lowering.format != 1
+        || lowering.bindings.len() > 256
+        || lowering.cases.len() < 20
+        || lowering.cases.len() > 128
+        || serde_json::to_vec(&lowering.program)
+            .map(|encoded| encoded.len() > MAX_PROGRAM_BYTES)
+            .unwrap_or(true)
+    {
+        return Err(AelioError::new(
+            ReasonCode::Validation,
+            format!("flow {} has an invalid or unbounded lowering", flow.id),
+        ));
+    }
+    let steps: std::collections::HashMap<_, _> = flow
+        .steps
+        .iter()
+        .map(|step| (step.id.as_str(), step))
+        .collect();
+    let mut bindings = std::collections::HashMap::new();
+    for binding in &lowering.bindings {
+        let Some(step) = steps.get(binding.step_id.as_str()) else {
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                format!(
+                    "flow {} lowering binding {} references an unknown semantic step",
+                    flow.id, binding.name
+                ),
+            ));
+        };
+        if !valid_declared_name(&binding.name)
+            || binding.name.len() > 128
+            || binding.deadline_ms == 0
+            || binding.deadline_ms > 300_000
+            || !step.admissible.contains(&binding.capability)
+            || bindings.insert(binding.name.as_str(), binding).is_some()
+        {
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                format!(
+                    "flow {} lowering binding {} is invalid, duplicate, or not admissible",
+                    flow.id, binding.name
+                ),
+            ));
+        }
+    }
+    let mut calls = Vec::new();
+    collect_lowering_call_ids(&lowering.program, &mut calls)?;
+    let mut used = std::collections::HashSet::new();
+    for call in calls {
+        let Some(name) = call.strip_prefix("$cap:") else {
+            return Err(AelioError::new(
+                ReasonCode::Denied,
+                format!(
+                    "flow {} lowering contains a raw executable target id",
+                    flow.id
+                ),
+            ));
+        };
+        if !bindings.contains_key(name) {
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                format!(
+                    "flow {} lowering references unknown capability binding {name}",
+                    flow.id
+                ),
+            ));
+        }
+        used.insert(name);
+    }
+    if used.len() != bindings.len() {
+        return Err(AelioError::new(
+            ReasonCode::Validation,
+            format!("flow {} lowering has an unused capability binding", flow.id),
+        ));
+    }
+    for case in &lowering.cases {
+        if case.wakes.len() > 64 || case.fixtures.len() > 256 || case.expected.is_null() {
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                format!("flow {} lowering has an invalid gate case", flow.id),
+            ));
+        }
+        for fixture in &case.fixtures {
+            if !bindings.contains_key(fixture.binding.as_str()) {
+                return Err(AelioError::new(
+                    ReasonCode::Validation,
+                    format!(
+                        "flow {} gate fixture references unknown binding {}",
+                        flow.id, fixture.binding
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_lowering_call_ids<'a>(
+    value: &'a serde_json::Value,
+    calls: &mut Vec<&'a str>,
+) -> AelioResult<()> {
+    match value {
+        serde_json::Value::Object(object) => {
+            if object.get("op").and_then(serde_json::Value::as_str) == Some("Call") {
+                let id = object
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| {
+                        AelioError::new(
+                            ReasonCode::Validation,
+                            "lowered Call requires a literal symbolic id",
+                        )
+                    })?;
+                calls.push(id);
+            }
+            for child in object.values() {
+                collect_lowering_call_ids(child, calls)?;
+            }
+        }
+        serde_json::Value::Array(array) => {
+            for child in array {
+                collect_lowering_call_ids(child, calls)?;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -2963,6 +3630,20 @@ mod tests {
     use aelio_db_query::Database;
 
     use super::*;
+
+    #[test]
+    fn redaction_preserves_hashes_but_removes_bounded_phone_numbers() {
+        let hash = "a3a8429724f595ca5ccc614ee46cf9e456d728a8b8f81183930110be9f72476b";
+        assert_eq!(redact_text(hash), hash);
+        assert_eq!(
+            redact_text("phone=+919876543210; ok"),
+            "phone=[REDACTED:pii]; ok"
+        );
+        assert_eq!(
+            redact_text("call 555 123 4567 now"),
+            "call [REDACTED:pii] now"
+        );
+    }
 
     fn runtime(tag: &str) -> DurableRuntime {
         let path = std::env::temp_dir().join(format!(
@@ -3337,6 +4018,65 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(row.envelope.value.state, DurableIdempotencyState::Completed);
+    }
+
+    #[test]
+    fn sdk_delivery_dispositions_are_redacted_and_survive_restart() {
+        let path = unique_path("sdk_delivery_audit_restart");
+        std::fs::create_dir_all(&path).unwrap();
+        let raw_correlation = "sdk-correlation-that-must-not-be-persisted";
+        {
+            let store = AelioStore::new(Database::create(&path).unwrap(), 3).unwrap();
+            let mut runtime = DurableRuntime::new(World::demo_tenant("tenant-1"), store).unwrap();
+            runtime
+                .record_sdk_delivery_disposition(raw_correlation, "accepted")
+                .unwrap();
+            runtime
+                .record_sdk_delivery_disposition(raw_correlation, "duplicate")
+                .unwrap();
+            runtime.store.flush().unwrap();
+        }
+
+        let store = AelioStore::new(Database::open(&path).unwrap(), 3).unwrap();
+        let runtime = DurableRuntime::new(World::demo_tenant("tenant-1"), store).unwrap();
+        let rows = runtime.list_sdk_delivery_dispositions(10).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .all(|row| row.envelope.value.correlation_hash.len() == 64));
+        assert!(rows.iter().all(|row| {
+            !serde_json::to_string(&row.envelope)
+                .unwrap()
+                .contains(raw_correlation)
+        }));
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.envelope.value.disposition.as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from(["accepted", "duplicate"])
+        );
+    }
+
+    #[test]
+    fn authored_flow_artifact_binding_survives_runtime_restart() {
+        let path = unique_path("flow_binding_restart");
+        std::fs::create_dir_all(&path).unwrap();
+        let pin = crate::adaptive::ArtifactPinV1 {
+            id: "login.runtime".into(),
+            version: 1,
+            hash: "a".repeat(64),
+        };
+        {
+            let store = AelioStore::new(Database::create(&path).unwrap(), 3).unwrap();
+            let mut runtime = DurableRuntime::new(World::demo_tenant("tenant-1"), store).unwrap();
+            runtime
+                .bind_flow_artifact("login", pin.clone(), "admin:test")
+                .unwrap();
+            runtime.store.flush().unwrap();
+        }
+        let store = AelioStore::new(Database::open(&path).unwrap(), 3).unwrap();
+        let runtime = DurableRuntime::new(World::demo_tenant("tenant-1"), store).unwrap();
+        assert_eq!(runtime.world.registry.flow_artifact("login"), Some(&pin));
     }
 
     #[test]

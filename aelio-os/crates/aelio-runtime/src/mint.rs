@@ -1,6 +1,6 @@
 //! Mint runtime — draft via root axiom, validate App J, store in Aelio DB, recall via Prism.
 //!
-//! PROVISIONAL (FLAGS F-019): Mint is the prompt factory inside Aelio. Root is human-only.
+//! Mint is the gated prompt factory inside Aelio. Root is human-only (FLAGS F-019 resolution).
 
 use crate::{
     artifact_error, Artifact, ArtifactActor, ArtifactClass, ArtifactEffect, ArtifactInput,

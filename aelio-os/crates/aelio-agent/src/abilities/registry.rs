@@ -65,7 +65,12 @@ pub struct ProcedureProvenance {
 pub struct Registry {
     pub tools: IndexMap<String, ToolSpec>,
     pub flows: IndexMap<String, FlowSpec>,
+    /// Authored flow id -> exact runtime-owned executable artifact.
+    pub flow_artifacts: IndexMap<String, crate::adaptive::ArtifactPinV1>,
     pub procedures: IndexMap<String, ProcedureSpec>,
+    /// Legacy procedure id -> exact unified runtime artifact. Absence means the legacy path may be
+    /// shadowed but cannot be emitted as an authoritative adaptive invocation.
+    pub procedure_artifacts: IndexMap<String, crate::adaptive::ArtifactPinV1>,
     pub abilities: IndexMap<String, AbilityContract>,
     /// capability_tag → tool ids
     pub by_capability: IndexMap<String, Vec<String>>,
@@ -91,6 +96,68 @@ impl Registry {
         // vector remains eligible for Tier-0 exact lookup and is deliberately excluded from
         // Tier-1 until it is re-baked with the runtime's configured embedder.
         self.procedures.insert(proc.id.clone(), proc);
+    }
+
+    pub fn bind_flow_artifact(
+        &mut self,
+        flow_id: &str,
+        artifact: crate::adaptive::ArtifactPinV1,
+    ) -> AelioResult<()> {
+        if !self.flows.contains_key(flow_id) {
+            return Err(AelioError::new(
+                ReasonCode::NotFound,
+                "cannot bind an artifact to an unknown authored flow",
+            ));
+        }
+        artifact.validate()?;
+        if let Some(existing) = self.flow_artifacts.get(flow_id) {
+            if existing == &artifact {
+                return Ok(());
+            }
+            return Err(AelioError::new(
+                ReasonCode::Conflict,
+                "authored flow already has a different immutable artifact binding",
+            ));
+        }
+        self.flow_artifacts.insert(flow_id.into(), artifact);
+        Ok(())
+    }
+
+    pub fn flow_artifact(&self, flow_id: &str) -> Option<&crate::adaptive::ArtifactPinV1> {
+        self.flow_artifacts.get(flow_id)
+    }
+
+    pub fn bind_procedure_artifact(
+        &mut self,
+        procedure_id: &str,
+        artifact: crate::adaptive::ArtifactPinV1,
+    ) -> AelioResult<()> {
+        if !self.procedures.contains_key(procedure_id) {
+            return Err(AelioError::new(
+                ReasonCode::NotFound,
+                "cannot bind an artifact to an unknown procedure",
+            ));
+        }
+        artifact.validate()?;
+        if let Some(existing) = self.procedure_artifacts.get(procedure_id) {
+            if existing == &artifact {
+                return Ok(());
+            }
+            return Err(AelioError::new(
+                ReasonCode::Conflict,
+                "procedure already has a different immutable artifact binding",
+            ));
+        }
+        self.procedure_artifacts
+            .insert(procedure_id.to_owned(), artifact);
+        Ok(())
+    }
+
+    pub fn procedure_artifact(
+        &self,
+        procedure_id: &str,
+    ) -> Option<&crate::adaptive::ArtifactPinV1> {
+        self.procedure_artifacts.get(procedure_id)
     }
 
     pub fn register_ability(&mut self, contract: AbilityContract) {
@@ -214,6 +281,7 @@ mod tests {
             name: "send_otp".into(),
             version: "1".into(),
             capability_tags: vec!["auth.otp.send".into()],
+            effect: None,
             effectful: true,
             idempotent: false,
             dry_run_available: true,

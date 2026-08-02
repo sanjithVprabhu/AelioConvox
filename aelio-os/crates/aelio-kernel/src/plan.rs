@@ -24,7 +24,7 @@ pub fn plan(root: &Node) -> Result<(), ErrV1> {
     let mut nids = HashSet::new();
     check_unique_nids(root, &mut nids)?;
     check_writes(root)?;
-    check_tee_and_park(root, false)?;
+    check_park_positions(root, false, false)?;
     check_tee_dataflow(root)?;
     check_map_imports(root)?;
     check_const_limits(root)?;
@@ -130,8 +130,10 @@ fn check_writes(node: &Node) -> Result<(), ErrV1> {
     Ok(())
 }
 
-/// Park legality (§8.4 matrix). `in_tee_side` is set while walking a `Tee.side` subtree.
-fn check_tee_and_park(node: &Node, in_tee_side: bool) -> Result<(), ErrV1> {
+/// Park legality (§8.4 matrix). A suspended `Once` would leave an effect intent operationally
+/// indistinguishable from an unknown-outcome crash, so v1 rejects it until a distinct durable
+/// parked-once state exists.
+fn check_park_positions(node: &Node, in_tee_side: bool, in_once: bool) -> Result<(), ErrV1> {
     if in_tee_side {
         if let Kind::Park { .. } = node.kind {
             return Err(ErrV1::new(
@@ -140,6 +142,13 @@ fn check_tee_and_park(node: &Node, in_tee_side: bool) -> Result<(), ErrV1> {
                 "Park is forbidden inside Tee.side (§8.4 matrix)",
             ));
         }
+    }
+    if in_once && matches!(node.kind, Kind::Park { .. }) {
+        return Err(ErrV1::new(
+            ReasonCode::Shape,
+            &node.nid,
+            "Park is forbidden inside Once until parked-once has a distinct durable state (§8.4)",
+        ));
     }
     match &node.kind {
         Kind::Tee {
@@ -158,13 +167,14 @@ fn check_tee_and_park(node: &Node, in_tee_side: bool) -> Result<(), ErrV1> {
                     ));
                 }
             }
-            check_tee_and_park(body, in_tee_side)?;
-            check_tee_and_park(side, true)?;
+            check_park_positions(body, in_tee_side, in_once)?;
+            check_park_positions(side, true, in_once)?;
             Ok(())
         }
+        Kind::Once { body, .. } => check_park_positions(body, in_tee_side, true),
         _ => {
             for child in children(node) {
-                check_tee_and_park(child, in_tee_side)?;
+                check_park_positions(child, in_tee_side, in_once)?;
             }
             Ok(())
         }

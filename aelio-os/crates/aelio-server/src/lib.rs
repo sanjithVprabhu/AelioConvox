@@ -2,14 +2,15 @@
 //! execution, continuations, ledgers, and persistence. The TypeScript process is a host adapter.
 
 pub mod agent_host;
+pub mod backup;
 
 use aelio_prompt::MintRequest;
 use aelio_runtime::{
     baseline_conversation_flow, forge_flow, mint_prompt, ArtifactEffect, ArtifactStatus,
     BuildReactionOutput, BuildReactionUsage, BuildSpec, BuildSpecDraft, CanaryObservation,
     CapabilityRequestDraft, FlowPush, ForgeRequest, MockDrafter, MockMintDrafter, PromptGateCase,
-    Runtime, RuntimeError, SandboxCase, SandboxFixtureCall, SandboxLimits, TurnSubmit,
-    BASELINE_CONVERSATION_FLOW_ID, BASELINE_CONVERSATION_FLOW_REV,
+    ReplayInstanceRequest, Runtime, RuntimeError, SandboxCase, SandboxFixtureCall, SandboxLimits,
+    TurnSubmit, BASELINE_CONVERSATION_FLOW_ID, BASELINE_CONVERSATION_FLOW_REV,
 };
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -26,6 +27,7 @@ pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub struct ServerState {
     runtime: Runtime,
     api_tokens: Arc<[String]>,
+    token_tenants: Arc<BTreeMap<String, Option<String>>>,
     allow_insecure: bool,
 }
 
@@ -46,25 +48,60 @@ impl ServerState {
         }
         Ok(Self {
             runtime,
+            token_tenants: Arc::new(
+                api_tokens
+                    .iter()
+                    .cloned()
+                    .map(|token| (token, None))
+                    .collect(),
+            ),
             api_tokens: api_tokens.into(),
             allow_insecure,
         })
     }
 
-    fn authorized(&self, headers: &HeaderMap) -> bool {
-        if self.allow_insecure {
-            return true;
+    /// Build a production control plane whose bearer credentials are each bound to exactly one
+    /// tenant. The tenant field remains in closed request DTOs for routing and audit, but it is no
+    /// longer authority and cannot be used to cross namespaces.
+    pub fn new_tenant_scoped(
+        runtime: Runtime,
+        credentials: Vec<(String, String)>,
+    ) -> Result<Self, String> {
+        if credentials.is_empty() {
+            return Err("at least one tenant credential is required".into());
         }
-        let Some(candidate) = headers
+        if credentials
+            .iter()
+            .any(|(tenant, token)| tenant.trim().is_empty() || token.len() < 16)
+        {
+            return Err(
+                "tenant ids must be non-empty and runtime API tokens at least 16 characters".into(),
+            );
+        }
+        let mut token_tenants = BTreeMap::new();
+        let mut api_tokens = Vec::with_capacity(credentials.len());
+        for (tenant, token) in credentials {
+            if token_tenants.insert(token.clone(), Some(tenant)).is_some() {
+                return Err("a runtime API token cannot be bound to multiple tenants".into());
+            }
+            api_tokens.push(token);
+        }
+        Ok(Self {
+            runtime,
+            api_tokens: api_tokens.into(),
+            token_tenants: Arc::new(token_tenants),
+            allow_insecure: false,
+        })
+    }
+
+    fn token_tenant(&self, headers: &HeaderMap) -> Option<Option<&str>> {
+        let candidate = headers
             .get(header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.strip_prefix("Bearer "))
-        else {
-            return false;
-        };
-        self.api_tokens
-            .iter()
-            .any(|expected| constant_time_equal(candidate.as_bytes(), expected.as_bytes()))
+            .and_then(|value| value.strip_prefix("Bearer "))?;
+        self.token_tenants.iter().find_map(|(token, tenant)| {
+            constant_time_equal(candidate.as_bytes(), token.as_bytes()).then_some(tenant.as_deref())
+        })
     }
 }
 
@@ -79,6 +116,11 @@ pub fn router(state: ServerState) -> Router {
             "/v1/artifacts/promotion-proposals/{id}/apply",
             post(apply_promotion_http),
         )
+        .route(
+            "/v1/system/dependencies/departure",
+            post(dependency_departure_http),
+        )
+        .route("/v1/system/kernel-migration", post(kernel_migration_http))
         .route(
             "/v1/capability-requests",
             get(capability_requests_http).post(record_capability_request_http),
@@ -105,6 +147,7 @@ pub fn router(state: ServerState) -> Router {
             post(install_baseline_conversation),
         )
         .route("/v1/turns", post(submit_turn))
+        .route("/v1/replay", post(replay_instance_http))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(state)
 }
@@ -120,6 +163,7 @@ async fn install_baseline_conversation(
     headers: HeaderMap,
     Json(request): Json<BaselineFlowRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    require_tenant_auth(&state, &headers, &request.tenant)?;
     let principal = authenticated_principal(&state, &headers)?;
     let flow = baseline_conversation_flow(&request.tenant);
     state
@@ -207,6 +251,14 @@ async fn ready(State(state): State<ServerState>) -> Response {
         )
         .into_response();
     }
+    if state.runtime.artifact_repository().is_err() {
+        return ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "not_ready",
+            "required runtime storage is unavailable or has an unrecovered schema",
+        )
+        .into_response();
+    }
     Json(StatusBody {
         status: "ready",
         service: "aelio-server",
@@ -220,7 +272,7 @@ async fn push_flow(
     headers: HeaderMap,
     Json(request): Json<FlowPush>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &request.tenant)?;
     state.runtime.push_flow(request).map_err(ApiError::from)?;
     Ok((StatusCode::CREATED, Json(Ack { accepted: true })))
 }
@@ -239,6 +291,7 @@ async fn gate_flow_http(
     headers: HeaderMap,
     Json(request): Json<GateFlowRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    require_tenant_auth(&state, &headers, &request.flow.tenant)?;
     let principal = authenticated_principal(&state, &headers)?;
     let result = state
         .runtime
@@ -266,7 +319,7 @@ async fn canary_evidence_http(
     headers: HeaderMap,
     Json(request): Json<CanaryEvidenceRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &request.tenant)?;
     let result = state
         .runtime
         .observe_canary(
@@ -285,13 +338,46 @@ struct TenantRequest {
     tenant: String,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DependencyDepartureRequest {
+    tenant: String,
+    dependency_pin: String,
+}
+
+async fn dependency_departure_http(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Json(request): Json<DependencyDepartureRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    require_tenant_auth(&state, &headers, &request.tenant)?;
+    state
+        .runtime
+        .steward_dependency_departure(&request.tenant, &request.dependency_pin)
+        .map(Json)
+        .map_err(ApiError::from)
+}
+
+async fn kernel_migration_http(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Json(request): Json<TenantRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    require_tenant_auth(&state, &headers, &request.tenant)?;
+    state
+        .runtime
+        .steward_kernel_migration(&request.tenant)
+        .map(Json)
+        .map_err(ApiError::from)
+}
+
 async fn apply_promotion_http(
     State(state): State<ServerState>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<TenantRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &request.tenant)?;
     state
         .runtime
         .apply_promotion_proposal(&request.tenant, &id)
@@ -316,7 +402,7 @@ async fn capability_requests_http(
     headers: HeaderMap,
     Query(query): Query<DemandQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &query.tenant)?;
     state
         .runtime
         .list_capability_requests(&query.tenant, query.limit)
@@ -330,7 +416,7 @@ async fn get_capability_request_http(
     Path(id): Path<String>,
     Query(query): Query<BuildTenantQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &query.tenant)?;
     state
         .runtime
         .get_capability_request(&query.tenant, &id)
@@ -357,6 +443,7 @@ async fn record_capability_request_http(
     headers: HeaderMap,
     Json(mut request): Json<RecordCapabilityRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    require_tenant_auth(&state, &headers, &request.tenant)?;
     let principal = authenticated_principal(&state, &headers)?.ok_or_else(|| {
         ApiError::new(
             StatusCode::FORBIDDEN,
@@ -385,7 +472,7 @@ async fn queue_capability_build_http(
     Path(id): Path<String>,
     Json(mut request): Json<QueueCapabilityBuildRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &request.tenant)?;
     request.spec.policy.principal_grants = vec![
         ArtifactEffect::Pure,
         ArtifactEffect::Read,
@@ -412,7 +499,7 @@ async fn submit_build_http(
     headers: HeaderMap,
     Json(mut request): Json<SubmitBuildRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &request.spec.scope.tenant)?;
     // Runtime tokens are deployer credentials in v1. Never trust a caller's self-declared grants;
     // derive the grant ceiling at this authenticated boundary, then seal the canonical spec hash.
     request.spec.policy.principal_grants = vec![
@@ -439,7 +526,7 @@ async fn get_build_http(
     Path(id): Path<String>,
     Query(query): Query<BuildTenantQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &query.tenant)?;
     let job = state
         .runtime
         .get_build(&query.tenant, &id)
@@ -460,6 +547,7 @@ async fn advance_build_http(
     Path(id): Path<String>,
     Json(request): Json<AdvanceBuildRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    require_tenant_auth(&state, &headers, &request.tenant)?;
     let principal = authenticated_principal(&state, &headers)?;
     let action = state
         .runtime
@@ -486,6 +574,7 @@ async fn run_build_http(
     Path(id): Path<String>,
     Json(request): Json<RunBuildRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    require_tenant_auth(&state, &headers, &request.tenant)?;
     let principal = authenticated_principal(&state, &headers)?;
     if !state.runtime.host_adapter_configured() {
         return Err(ApiError::new(
@@ -533,7 +622,7 @@ async fn build_reaction_http(
     Path(id): Path<String>,
     Json(request): Json<BuildReactionRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &request.tenant)?;
     let job = state
         .runtime
         .submit_build_reaction(
@@ -566,7 +655,7 @@ async fn forge_flow_http(
     headers: HeaderMap,
     Json(request): Json<ForgeHttpRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &request.forge.tenant)?;
     let result = match request.drafter.as_str() {
         "mock" => forge_flow(Some(&state.runtime), &request.forge, &MockDrafter)
             .map_err(ApiError::from)?,
@@ -631,7 +720,7 @@ async fn mint_http(
     headers: HeaderMap,
     Json(request): Json<MintHttpRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &request.mint.tenant)?;
     let result = match request.drafter.as_str() {
         "mock" => {
             let shelf = request
@@ -666,6 +755,7 @@ async fn mint_gate_http(
     headers: HeaderMap,
     Json(request): Json<MintGateRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    require_tenant_auth(&state, &headers, &request.tenant)?;
     let principal = authenticated_principal(&state, &headers)?.ok_or_else(|| {
         ApiError::new(
             StatusCode::FORBIDDEN,
@@ -699,7 +789,7 @@ async fn mint_recall_http(
     headers: HeaderMap,
     Json(request): Json<MintRecallRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &request.tenant)?;
     if request.need.trim().is_empty() {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -734,7 +824,7 @@ async fn submit_turn(
     headers: HeaderMap,
     Json(request): Json<TurnSubmit>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_auth(&state, &headers)?;
+    require_tenant_auth(&state, &headers, &request.tenant)?;
     let response = state
         .runtime
         .submit(request)
@@ -743,15 +833,40 @@ async fn submit_turn(
     Ok(Json(response))
 }
 
-fn require_auth(state: &ServerState, headers: &HeaderMap) -> Result<(), ApiError> {
-    if state.authorized(headers) {
-        Ok(())
-    } else {
-        Err(ApiError::new(
+async fn replay_instance_http(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Json(request): Json<ReplayInstanceRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    require_tenant_auth(&state, &headers, &request.tenant)?;
+    state
+        .runtime
+        .replay_instance(request)
+        .map(Json)
+        .map_err(ApiError::from)
+}
+
+fn require_tenant_auth(
+    state: &ServerState,
+    headers: &HeaderMap,
+    tenant: &str,
+) -> Result<(), ApiError> {
+    if state.allow_insecure {
+        return Ok(());
+    }
+    match state.token_tenant(headers) {
+        Some(None) => Ok(()),
+        Some(Some(bound)) if bound == tenant => Ok(()),
+        Some(Some(_)) => Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "tenant_forbidden",
+            "the authenticated credential is not authorized for this tenant",
+        )),
+        None => Err(ApiError::new(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
             "a valid bearer token is required",
-        ))
+        )),
     }
 }
 
@@ -889,6 +1004,19 @@ mod tests {
             b"abcdefghijklmnoq"
         ));
         assert!(!constant_time_equal(b"short", b"longer"));
+    }
+
+    #[test]
+    fn tenant_scoped_runtime_rejects_duplicate_credential_authority() {
+        let directory = tempfile::tempdir().unwrap();
+        let result = ServerState::new_tenant_scoped(
+            runtime(directory.path()),
+            vec![
+                ("tenant-a".into(), "one-token-with-16-bytes".into()),
+                ("tenant-b".into(), "one-token-with-16-bytes".into()),
+            ],
+        );
+        assert!(result.is_err());
     }
 
     fn runtime(path: &std::path::Path) -> Runtime {

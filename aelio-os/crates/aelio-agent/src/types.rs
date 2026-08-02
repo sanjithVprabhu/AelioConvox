@@ -236,6 +236,10 @@ pub struct AelioError {
     pub code: ReasonCode,
     pub message: String,
     pub detail: Option<Value>,
+    /// Metadata-only authoritative artifact trace. This is never populated with arguments or
+    /// outputs and lets failed effects remain auditable in the same per-turn decision narrative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_trace: Option<Box<str>>,
 }
 
 impl AelioError {
@@ -244,11 +248,17 @@ impl AelioError {
             code,
             message: message.into(),
             detail: None,
+            decision_trace: None,
         }
     }
 
     pub fn with_detail(mut self, detail: Value) -> Self {
         self.detail = Some(detail);
+        self
+    }
+
+    pub fn with_decision_trace(mut self, trace: Option<String>) -> Self {
+        self.decision_trace = trace.map(String::into_boxed_str);
         self
     }
 }

@@ -3,7 +3,7 @@ use aelio_runtime::{
     ArtifactInput, ArtifactInterface, ArtifactPins, ArtifactStatus, ArtifactTier, BoundSpec,
     EffectSpec, FlowPush, HarnessBody, HarnessNode, HarnessSeam, HarnessSink, HarnessSource,
     OriginSpec, Provenance, Runtime, RuntimeConfig, RuntimeError, SandboxCase, SandboxLimits,
-    TargetClassSpec, TargetSpec, TurnReply, TurnSubmit, DEFAULT_QUEUE_DEPTH,
+    SubjectArtifactStart, TargetClassSpec, TargetSpec, TurnReply, TurnSubmit, DEFAULT_QUEUE_DEPTH,
 };
 use aelio_sol::SolValue;
 use aelio_store::{EmbeddedStore, Store};
@@ -134,8 +134,187 @@ fn nominal_target_boundaries_are_resolved_and_enforced_inside_the_gate() {
         .is_err());
 }
 
+#[test]
+fn subject_continuation_owns_park_restart_resume_and_reactivation() {
+    let directory = tempfile::tempdir().unwrap();
+    let flow = FlowPush {
+        tenant: "tenant-a".into(),
+        flow_id: "login.runtime".into(),
+        flow_rev: "1".into(),
+        program: serde_json::json!({
+            "nid":"login","op":"Seq","steps":[
+                {"nid":"ask","op":"Const","v":{"text":"Enter the code"}},
+                {"nid":"wait","op":"Park","until":{"kind":"event"},"into":"wake"},
+                {"nid":"done","op":"Const","v":{"text":"Authenticated"}}
+            ]
+        }),
+        targets: vec![],
+        prompts: vec![],
+    };
+    let artifact_hash;
+    {
+        let runtime = Runtime::open(config(directory.path())).unwrap();
+        runtime.push_flow(flow.clone()).unwrap();
+        admit(
+            &runtime,
+            &flow,
+            (0..20)
+                .map(|index| SandboxCase {
+                    input: serde_json::json!({"case":index}),
+                    wakes: vec![],
+                    expect_park: true,
+                    expected: serde_json::json!({"text":"Enter the code"}),
+                    fixtures: vec![],
+                })
+                .collect(),
+        );
+        artifact_hash = runtime
+            .artifact_repository()
+            .unwrap()
+            .get("tenant-a", "login.runtime", 1)
+            .unwrap()
+            .unwrap()
+            .artifact
+            .hash;
+        let reply = runtime
+            .start_subject_artifact(SubjectArtifactStart {
+                subject: "user-1".into(),
+                tenant: "tenant-a".into(),
+                instance_id: "login-activation-1".into(),
+                artifact_id: "login.runtime".into(),
+                artifact_version: 1,
+                artifact_hash: artifact_hash.clone(),
+                input: serde_json::json!({"utterance":"login"}),
+            })
+            .unwrap();
+        assert!(matches!(reply, TurnReply::Parked { .. }));
+        assert!(runtime
+            .active_subject_artifact("tenant-a", "user-1")
+            .unwrap()
+            .is_some());
+        let conflict = runtime
+            .start_subject_artifact(SubjectArtifactStart {
+                subject: "user-1".into(),
+                tenant: "tenant-a".into(),
+                instance_id: "competing-activation".into(),
+                artifact_id: "login.runtime".into(),
+                artifact_version: 1,
+                artifact_hash: artifact_hash.clone(),
+                input: serde_json::json!({"utterance":"another flow"}),
+            })
+            .unwrap_err();
+        assert!(matches!(conflict, RuntimeError::Conflict(_)));
+    }
+
+    let runtime = Runtime::open(config(directory.path())).unwrap();
+    let completed = runtime
+        .resume_subject_artifact(
+            "tenant-a",
+            "user-1",
+            serde_json::json!({"utterance":"123456"}),
+        )
+        .unwrap();
+    assert!(matches!(
+        completed,
+        TurnReply::Completed { ref bag, .. }
+            if bag == &serde_json::json!({"text":"Authenticated"})
+    ));
+    assert!(runtime
+        .active_subject_artifact("tenant-a", "user-1")
+        .unwrap()
+        .is_none());
+
+    let next = runtime
+        .start_subject_artifact(SubjectArtifactStart {
+            subject: "user-1".into(),
+            tenant: "tenant-a".into(),
+            instance_id: "login-activation-2".into(),
+            artifact_id: "login.runtime".into(),
+            artifact_version: 1,
+            artifact_hash,
+            input: serde_json::json!({"utterance":"login again"}),
+        })
+        .unwrap();
+    assert!(matches!(next, TurnReply::Parked { .. }));
+}
+
+#[test]
+fn catalog_flow_ttl_expires_a_parked_subject_rail_and_permits_reactivation() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = Runtime::open(config(directory.path())).unwrap();
+    let flow = FlowPush {
+        tenant: "tenant-a".into(),
+        flow_id: "catalog.ttl".into(),
+        flow_rev: "1".into(),
+        program: serde_json::json!({
+            "nid":"__aelio_catalog_ttl_250","op":"Timeout","ms":250,
+            "body":{"nid":"ttl_flow","op":"Seq","steps":[
+                {"nid":"ask","op":"Const","v":{"text":"Waiting"}},
+                {"nid":"wait","op":"Park","until":{"kind":"event"},"into":"wake"},
+                {"nid":"done","op":"Const","v":{"text":"Done"}}
+            ]}
+        }),
+        targets: vec![],
+        prompts: vec![],
+    };
+    runtime.push_flow(flow.clone()).unwrap();
+    admit(
+        &runtime,
+        &flow,
+        (0..20)
+            .map(|index| SandboxCase {
+                input: serde_json::json!({"case":index}),
+                wakes: vec![],
+                expect_park: true,
+                expected: serde_json::json!({"text":"Waiting"}),
+                fixtures: vec![],
+            })
+            .collect(),
+    );
+    let hash = runtime
+        .artifact_repository()
+        .unwrap()
+        .get("tenant-a", "catalog.ttl", 1)
+        .unwrap()
+        .unwrap()
+        .artifact
+        .hash;
+    let start = |instance_id: &str| SubjectArtifactStart {
+        subject: "ttl-user".into(),
+        tenant: "tenant-a".into(),
+        instance_id: instance_id.into(),
+        artifact_id: "catalog.ttl".into(),
+        artifact_version: 1,
+        artifact_hash: hash.clone(),
+        input: serde_json::json!({"utterance":"begin"}),
+    };
+    assert!(matches!(
+        runtime.start_subject_artifact(start("ttl-1")).unwrap(),
+        TurnReply::Parked { .. }
+    ));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(runtime
+        .active_subject_artifact("tenant-a", "ttl-user")
+        .unwrap()
+        .is_none());
+    assert!(matches!(
+        runtime.start_subject_artifact(start("ttl-2")).unwrap(),
+        TurnReply::Parked { .. }
+    ));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(matches!(
+        runtime.start_subject_artifact(start("ttl-3")).unwrap(),
+        TurnReply::Parked { .. }
+    ));
+    let (active, _) = runtime
+        .active_subject_artifact("tenant-a", "ttl-user")
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.instance_id, "ttl-3");
+}
+
 #[tokio::test]
-async fn immutable_flow_executes_and_completed_instance_is_not_reentered() {
+async fn immutable_flow_replays_only_the_identical_completed_input() {
     let directory = tempfile::tempdir().unwrap();
     let runtime = Runtime::open(config(directory.path())).unwrap();
     let flow = FlowPush {
@@ -195,6 +374,21 @@ async fn immutable_flow_executes_and_completed_instance_is_not_reentered() {
         panic!("const flow must complete");
     };
     assert_eq!(bag["reply"], "hello");
+    let replay = runtime
+        .submit(TurnSubmit {
+            tenant: "tenant-a".into(),
+            instance_id: "instance-1".into(),
+            flow_id: "hello".into(),
+            flow_rev: "1".into(),
+            input: serde_json::json!({"secret_marker":"do-not-log"}),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        replay,
+        TurnReply::Completed { ref bag, .. }
+            if bag == &serde_json::json!({"reply":"hello"})
+    ));
     let trace = runtime
         .invocation_trace("tenant-a", "instance-1", "hello", 1)
         .unwrap();

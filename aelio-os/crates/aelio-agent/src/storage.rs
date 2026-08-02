@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::types::{AelioError, AelioResult, ReasonCode};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// Closed tenant-scoped storage namespaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,6 +42,7 @@ pub enum LogicalTable {
     ProactiveRuns,
     Explorations,
     FlowCandidates,
+    SdkDeliveryEvents,
     Audit,
     Migrations,
 }
@@ -69,6 +70,7 @@ impl LogicalTable {
             Self::ProactiveRuns => "proactive_runs",
             Self::Explorations => "explorations",
             Self::FlowCandidates => "flow_candidates",
+            Self::SdkDeliveryEvents => "sdk_delivery_events",
             Self::Audit => "audit",
             Self::Migrations => "migrations",
         }
@@ -81,7 +83,7 @@ impl LogicalTable {
         )
     }
 
-    const ALL: [Self; 22] = [
+    const ALL: [Self; 23] = [
         Self::Turns,
         Self::StepAttempts,
         Self::Idempotency,
@@ -102,6 +104,7 @@ impl LogicalTable {
         Self::ProactiveRuns,
         Self::Explorations,
         Self::FlowCandidates,
+        Self::SdkDeliveryEvents,
         Self::Audit,
         Self::Migrations,
     ];

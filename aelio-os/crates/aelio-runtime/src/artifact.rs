@@ -18,6 +18,7 @@ pub mod evidence;
 pub mod harness;
 pub mod imprint;
 pub mod job;
+pub mod views;
 pub use build::{
     BuildBudget, BuildCost, BuildExample, BuildFailure, BuildPolicy, BuildResult, BuildScope,
     BuildSpec, BuildSpecDraft,
@@ -46,6 +47,10 @@ pub use job::{
     BuildBudgetAccount, BuildBudgetCharge, BuildBudgetRepository, BuildCandidateMeasurement,
     BuildJob, BuildJobRecord, BuildJobRepository, BuildLineage, BuildReaction, BuildReactionKind,
     BuildReactionStatus, BuildStage, BuildWorkspace, BUILD_BUDGET_TABLE, BUILD_JOB_TABLE,
+};
+pub use views::{
+    ConverterArtifactDraft, DatasetArtifactDraft, DatasetModality, PathwayArtifactDraft,
+    PathwayPrototype, ProcedureArtifactDraft, ProcedureSignatureStep,
 };
 
 pub const ARTIFACT_TABLE: &str = "artifacts";
@@ -491,6 +496,7 @@ impl Artifact {
         Limits::default()
             .check(&json_to_sol(&bounded)?)
             .map_err(|error| ArtifactError::Invalid(error.to_string()))?;
+        views::validate_typed_body(self)?;
         Ok(())
     }
 }

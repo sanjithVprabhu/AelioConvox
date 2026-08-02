@@ -15,6 +15,10 @@ pub struct ToolSpec {
     pub version: String,
     /// How the system FINDS this tool — not judgment, lookup.
     pub capability_tags: Vec<String>,
+    /// Exact kernel effect class. `None` is accepted only for legacy/local declarations and
+    /// conservatively derives External when `effectful` is true, Read otherwise.
+    #[serde(default)]
+    pub effect: Option<ToolEffect>,
     pub effectful: bool,
     pub idempotent: bool,
     pub dry_run_available: bool,
@@ -23,6 +27,25 @@ pub struct ToolSpec {
     /// Declared expected next capabilities (e.g. auth.otp.verify after send).
     pub continuations: Vec<String>,
     pub errors: Vec<ErrorSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolEffect {
+    Pure,
+    Read,
+    Write,
+    External,
+}
+
+impl ToolSpec {
+    pub fn effect_class(&self) -> ToolEffect {
+        self.effect.unwrap_or(if self.effectful {
+            ToolEffect::External
+        } else {
+            ToolEffect::Read
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,6 +211,7 @@ pub struct PolicyAction {
 // ── Flows ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FlowSpec {
     pub id: String,
     pub version: String,
@@ -201,9 +225,58 @@ pub struct FlowSpec {
     pub terminal_states: Vec<String>,
     pub ttl_secs: Option<u64>,
     pub max_attempts: u32,
+    /// Optional closed HOW-layer compiled at catalog admission. Semantic flow declarations remain
+    /// useful without it, but are deliberately non-executable and create materialization demand.
+    /// Calls inside `program` must use `$cap:<binding>` symbols; raw target ids are rejected.
+    #[serde(default)]
+    pub lowering: Option<FlowLoweringV1>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlowLoweringV1 {
+    pub format: u32,
+    pub program: serde_json::Value,
+    pub bindings: Vec<FlowCapabilityBindingV1>,
+    pub cases: Vec<FlowGateCaseV1>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlowCapabilityBindingV1 {
+    /// Local symbol referenced as `$cap:<name>` by Call nodes and fixtures.
+    pub name: String,
+    /// Semantic step whose admissible set authorizes this capability.
+    pub step_id: String,
+    pub capability: String,
+    pub deadline_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlowGateCaseV1 {
+    pub input: serde_json::Value,
+    #[serde(default)]
+    pub wakes: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub expect_park: bool,
+    pub expected: serde_json::Value,
+    #[serde(default)]
+    pub fixtures: Vec<FlowFixtureV1>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlowFixtureV1 {
+    /// A binding name, not a raw target id.
+    pub binding: String,
+    pub output: serde_json::Value,
+    #[serde(default)]
+    pub usage_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FlowActivation {
     pub hard_preconditions: Vec<Predicate>,
     pub trigger_surface: Vec<String>,
@@ -219,6 +292,7 @@ pub enum Preemption {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FlowStep {
     pub id: String,
     pub intent: String,
@@ -237,7 +311,7 @@ pub enum ViolationAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FlowEscape {
     Fallback { flow_id: String },
     FreeRange,
@@ -269,6 +343,7 @@ pub enum Polarity {
 // ── Tenant bundle ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TenantDecl {
     pub tenant_id: String,
     pub mode: crate::types::TenantMode,
@@ -277,6 +352,10 @@ pub struct TenantDecl {
     pub states: Vec<StateSpec>,
     pub policies: Vec<PolicySpec>,
     pub flows: Vec<FlowSpec>,
+    /// Optional exact runtime artifact pins for authored flows. A declared binding makes the
+    /// runtime continuation authoritative; absence retains the migration shadow rail.
+    #[serde(default)]
+    pub flow_artifacts: IndexMap<String, crate::adaptive::ArtifactPinV1>,
     pub attributes: Vec<AttributeSpec>,
 }
 
@@ -290,6 +369,7 @@ impl TenantDecl {
             states: vec![],
             policies: vec![],
             flows: vec![],
+            flow_artifacts: IndexMap::new(),
             attributes: vec![],
         }
     }

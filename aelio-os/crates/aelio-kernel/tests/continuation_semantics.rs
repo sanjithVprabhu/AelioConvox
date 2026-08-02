@@ -1,6 +1,7 @@
 use aelio_kernel::{
     compile,
     driver::{Instance, TurnOutcome},
+    exec::Frame,
     registry::{EffectClass, Registry},
 };
 use aelio_sol::SolValue;
@@ -210,6 +211,10 @@ fn try_handler_may_park_and_finally_waits_for_handler_completion() {
         TurnOutcome::Parked(parked) => parked,
         TurnOutcome::Completed { .. } => panic!("handler should park"),
     };
+    assert!(parked.frames.iter().any(|frame| matches!(
+        frame,
+        Frame::TryHandler { index: 0, prefix } if prefix == "Tool"
+    )));
     assert!(
         parked
             .bag

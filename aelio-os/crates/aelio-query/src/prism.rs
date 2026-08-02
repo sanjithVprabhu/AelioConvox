@@ -8,7 +8,7 @@
 //! - No joins, subqueries, or expressions in `where` (AND of column predicates only).
 //! - Fusion is an explicit match kind (`rrf`); the engine already fuses ranks, not raw scores.
 //!
-//! PROVISIONAL vs mother §10.4 single-op AST: Prism multi-match + fusion is the intended
+//! RATIFIED by mother Amendment #4: Prism multi-match + fusion is the intended
 //! flexible-read language; legacy [`QueryAst`] remains as single-modality sugar (FLAGS F-018).
 
 use aelio_sol::{Limits, Path, SolValue};

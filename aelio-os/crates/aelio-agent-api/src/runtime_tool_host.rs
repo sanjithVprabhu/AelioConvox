@@ -54,24 +54,26 @@ impl ToolHost for RuntimeArtifactToolHost {
             "context": { "channel": channel },
         });
 
-        let reply = self
-            .runtime
-            .invoke_pinned_artifact(TurnSubmit {
-                tenant: self.tenant_id.clone(),
-                instance_id: instance_id.clone(),
-                flow_id: flow_id.clone(),
-                flow_rev: version.to_string(),
-                input,
-            })
-            .map_err(map_runtime_error)?;
-        let trace = self
-            .runtime
-            .invocation_trace(&self.tenant_id, &instance_id, &flow_id, version)
-            .map_err(map_runtime_error)?;
-        self.last_trace = Some(
-            serde_json::to_string(&trace)
-                .map_err(|error| AelioError::new(ReasonCode::Internal, error.to_string()))?,
-        );
+        let reply = self.runtime.invoke_pinned_artifact(TurnSubmit {
+            tenant: self.tenant_id.clone(),
+            instance_id: instance_id.clone(),
+            flow_id: flow_id.clone(),
+            flow_rev: version.to_string(),
+            input,
+        });
+        // Fetch the append-only ledger regardless of invocation outcome. An effect that reached
+        // the kernel must remain visible in the human decision narrative even when the host/tool
+        // returned a typed error.
+        if let Ok(trace) =
+            self.runtime
+                .invocation_trace(&self.tenant_id, &instance_id, &flow_id, version)
+        {
+            self.last_trace = Some(
+                serde_json::to_string(&trace)
+                    .map_err(|error| AelioError::new(ReasonCode::Internal, error.to_string()))?,
+            );
+        }
+        let reply = reply.map_err(map_runtime_error)?;
 
         match reply {
             TurnReply::Completed { bag, .. } => {

@@ -533,6 +533,39 @@ impl DeliveryBook {
             }
         }
     }
+
+    /// Cancel a call that was prepared but provably never crossed the dispatch boundary. This is
+    /// used when the server-side outbound queue rejects the frame; dispatched calls can never be
+    /// removed through this surface.
+    pub fn cancel_prepared(&mut self, corr: &str) -> Result<(), String> {
+        let Some(record) = self.calls.get(corr) else {
+            return Err("unknown delivery corr".into());
+        };
+        if record.state != DeliveryState::Prepared {
+            return Err("only an undispatched prepared call can be cancelled".into());
+        }
+        self.calls.remove(corr);
+        Ok(())
+    }
+
+    /// Remove a terminal correlation tombstone after the caller's bounded retention window. The
+    /// book refuses to prune unresolved work so memory-pressure policy cannot create a duplicate
+    /// effect window.
+    pub fn remove_terminal(&mut self, corr: &str) -> Result<(), String> {
+        let Some(record) = self.calls.get(corr) else {
+            return Ok(());
+        };
+        if !matches!(
+            record.state,
+            DeliveryState::Resolved
+                | DeliveryState::ExpiredRetryable
+                | DeliveryState::ExpiredUnknown
+        ) {
+            return Err("unresolved delivery correlation cannot be pruned".into());
+        }
+        self.calls.remove(corr);
+        Ok(())
+    }
 }
 
 fn int(value: u64) -> Result<SolValue, String> {

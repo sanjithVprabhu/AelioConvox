@@ -617,6 +617,7 @@ fn tier2_procedures(world: &mut World) {
         name: "resolve_customer".into(),
         version: "1".into(),
         capability_tags: vec!["customer.resolve".into()],
+        effect: None,
         effectful: false,
         idempotent: true,
         dry_run_available: true,
@@ -642,6 +643,7 @@ fn tier2_procedures(world: &mut World) {
         // A declared intent label, not an engine keyword. This supplies the goal's output
         // semantics while the promoted procedures supply the reusable implementation.
         capability_tags: vec!["invoices".into()],
+        effect: None,
         effectful: false,
         idempotent: true,
         dry_run_available: true,

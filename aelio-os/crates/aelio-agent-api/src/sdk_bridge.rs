@@ -2,17 +2,22 @@
 
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aelio_agent::abilities::invoke::ToolHost;
 use aelio_agent::runtime::durable::validate_catalog;
 use aelio_agent::tenant::TenantDecl;
 use aelio_agent::{AelioError, AelioResult, ReasonCode, Value};
+use aelio_sol::SolValue;
+use aelio_wire::{DeliveryBook, ExpiryDisposition, ResultDisposition, ServerFrame};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc as tokio_mpsc;
 use uuid::Uuid;
+
+const TERMINAL_CORRELATION_RETENTION_MS: u64 = 5 * 60 * 1_000;
+const MAX_TERMINAL_CORRELATIONS: usize = 4_096;
 
 #[derive(Debug, Clone)]
 pub struct BridgeConfig {
@@ -66,7 +71,10 @@ pub struct InvokeMessage {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResultMessage {
+    #[serde(rename = "type")]
+    pub message_type: String,
     #[serde(default, alias = "id")]
     pub invocation_id: String,
     pub ok: bool,
@@ -101,6 +109,7 @@ struct BridgeState {
     connections: HashMap<String, Connection>,
     catalogs: HashMap<String, ActiveCatalog>,
     pending: HashMap<String, PendingInvocation>,
+    delivery: DeliveryBook,
 }
 
 struct Connection {
@@ -118,7 +127,24 @@ struct ActiveCatalog {
 struct PendingInvocation {
     tenant_id: String,
     connection_id: String,
-    completion: mpsc::SyncSender<AelioResult<Value>>,
+    completion: Option<mpsc::SyncSender<AelioResult<Value>>>,
+    message: InvokeMessage,
+    deadline_at_ms: u64,
+    terminal_at_ms: Option<u64>,
+    events: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+struct SdkDeliveryTrace<'a> {
+    authority: &'static str,
+    correlation: String,
+    steps: Vec<SdkDeliveryTraceStep<'a>>,
+}
+
+#[derive(Serialize)]
+struct SdkDeliveryTraceStep<'a> {
+    seq: usize,
+    kind: &'a str,
 }
 
 impl SdkBridge {
@@ -128,6 +154,7 @@ impl SdkBridge {
                 connections: HashMap::new(),
                 catalogs: HashMap::new(),
                 pending: HashMap::new(),
+                delivery: DeliveryBook::default(),
             })),
             config,
         }
@@ -138,7 +165,12 @@ impl SdkBridge {
         connection_id: impl Into<String>,
     ) -> tokio_mpsc::Receiver<InvokeMessage> {
         let connection_id = connection_id.into();
-        let (outbound, receiver) = tokio_mpsc::channel(self.config.outbound_capacity.max(1));
+        let (outbound, receiver) = tokio_mpsc::channel(
+            self.config
+                .outbound_capacity
+                .max(self.config.max_in_flight_per_tenant)
+                .max(1),
+        );
         self.state().connections.insert(
             connection_id,
             Connection {
@@ -179,11 +211,6 @@ impl SdkBridge {
             .and_then(|active| active.connection_id.clone())
             .filter(|active_id| active_id != connection_id);
         if let Some(replaced_id) = replaced.as_deref() {
-            fail_pending_for_connection(
-                &mut state,
-                replaced_id,
-                "SDK connection was replaced by a reconnect",
-            );
             if let Some(connection) = state.connections.get_mut(replaced_id) {
                 connection.tenant_id = None;
             }
@@ -204,6 +231,37 @@ impl SdkBridge {
         );
         if let Some(connection) = state.connections.get_mut(connection_id) {
             connection.tenant_id = Some(authenticated_tenant.to_owned());
+        }
+
+        // At-least-once transport delivery reuses the original correlation identity. The SDK is
+        // responsible for attaching to an in-flight call or replaying its cached result; the
+        // server never creates a second logical invocation during reconnect.
+        let sender = state
+            .connections
+            .get(connection_id)
+            .map(|connection| connection.outbound.clone())
+            .ok_or_else(|| error(ReasonCode::Unavailable, "SDK connection is closed"))?;
+        let now_ms = unix_time_ms();
+        let unresolved = state
+            .pending
+            .values_mut()
+            .filter(|pending| {
+                pending.tenant_id == authenticated_tenant
+                    && pending.completion.is_some()
+                    && now_ms < pending.deadline_at_ms
+            })
+            .map(|pending| {
+                pending.connection_id = connection_id.to_owned();
+                pending.message.clone()
+            })
+            .collect::<Vec<_>>();
+        for message in unresolved {
+            sender.try_send(message).map_err(|_| {
+                error(
+                    ReasonCode::Unavailable,
+                    "SDK reconnect queue could not accept unresolved invocations",
+                )
+            })?;
         }
 
         Ok(RegisterAck {
@@ -234,32 +292,59 @@ impl SdkBridge {
                 }
             }
         }
-        fail_pending_for_connection(&mut state, connection_id, "SDK connection disconnected");
+        // Unresolved calls remain correlated until their authoritative deadline. A reconnect may
+        // resume their delivery with the same corr; expiry classifies prepared versus dispatched.
     }
 
-    pub fn complete(&self, connection_id: &str, result: ResultMessage) -> AelioResult<()> {
-        if result.invocation_id.trim().is_empty() {
+    /// Mark the exact socket write boundary. Re-delivery after reconnect is idempotent and keeps
+    /// the original correlation id; a foreign or stale connection cannot advance the record.
+    pub fn mark_dispatched(&self, connection_id: &str, invocation_id: &str) -> AelioResult<()> {
+        let mut state = self.state();
+        let pending = state
+            .pending
+            .get(invocation_id)
+            .ok_or_else(|| error(ReasonCode::NotFound, "unknown invocation_id"))?;
+        if pending.connection_id != connection_id {
             return Err(error(
-                ReasonCode::Validation,
-                "result invocation_id is required",
+                ReasonCode::Denied,
+                "invocation was dispatched by a stale SDK connection",
             ));
         }
-        let pending = {
-            let mut state = self.state();
-            let pending = state
-                .pending
-                .remove(&result.invocation_id)
-                .ok_or_else(|| error(ReasonCode::NotFound, "unknown or expired invocation_id"))?;
-            if pending.connection_id != connection_id {
-                state.pending.insert(result.invocation_id, pending);
-                return Err(error(
-                    ReasonCode::Denied,
-                    "invocation result came from a different SDK connection",
-                ));
+        state
+            .delivery
+            .mark_dispatched(invocation_id)
+            .map_err(|message| error(ReasonCode::Conflict, message))?;
+        if let Some(pending) = state.pending.get_mut(invocation_id) {
+            if !pending.events.contains(&"call_dispatch") {
+                pending.events.push("call_dispatch");
             }
-            pending
-        };
-        let completion = if result.ok {
+        }
+        Ok(())
+    }
+
+    pub fn complete(
+        &self,
+        connection_id: &str,
+        result: ResultMessage,
+    ) -> AelioResult<ResultDisposition> {
+        if result.message_type != "result"
+            || result.invocation_id.trim().is_empty()
+            || result.invocation_id.len() > 256
+            || (result.ok && (result.data.is_none() || result.error.is_some()))
+            || (!result.ok && (result.data.is_some() || result.error.is_none()))
+            || result.error.as_ref().is_some_and(|error| {
+                error.code.trim().is_empty()
+                    || error.code.len() > 128
+                    || error.message.trim().is_empty()
+                    || error.message.len() > 2_048
+            })
+        {
+            return Err(error(
+                ReasonCode::Validation,
+                "result must have a bounded correlation and exactly one valid success/error body",
+            ));
+        }
+        let completion_value = if result.ok {
             Ok(result.data.unwrap_or(Value::Null))
         } else {
             let result_error = result.error.unwrap_or(ResultError {
@@ -275,8 +360,63 @@ impl SdkBridge {
             };
             Err(error(code, result_error.message))
         };
-        let _ = pending.completion.try_send(completion);
-        Ok(())
+        let invocation_id = result.invocation_id;
+        let (disposition, completion) = {
+            let mut state = self.state();
+            prune_terminal_correlations(&mut state, unix_time_ms());
+            let pending = state
+                .pending
+                .get(&invocation_id)
+                .ok_or_else(|| error(ReasonCode::NotFound, "unknown or expired invocation_id"))?;
+            let active_connection = state
+                .catalogs
+                .get(&pending.tenant_id)
+                .and_then(|catalog| catalog.connection_id.as_deref());
+            if active_connection != Some(connection_id) {
+                return Err(error(
+                    ReasonCode::Denied,
+                    "invocation result did not come from the tenant's active SDK connection",
+                ));
+            }
+            let now_ms = unix_time_ms();
+            if now_ms >= pending.deadline_at_ms {
+                let _ = state.delivery.expire(&invocation_id, now_ms);
+                if let Some(pending) = state.pending.get_mut(&invocation_id) {
+                    pending.completion = None;
+                    pending.terminal_at_ms.get_or_insert(now_ms);
+                }
+            }
+            let disposition = state.delivery.accept_result(&invocation_id);
+            if let Some(pending) = state.pending.get_mut(&invocation_id) {
+                pending.events.push(match disposition {
+                    ResultDisposition::Accepted => "call_result",
+                    ResultDisposition::Duplicate => "duplicate_result",
+                    ResultDisposition::Late => "late_result",
+                    ResultDisposition::UnknownCorrelation => "unknown_result",
+                });
+            }
+            let completion = match disposition {
+                ResultDisposition::Accepted => {
+                    let pending = state.pending.get_mut(&invocation_id).ok_or_else(|| {
+                        error(ReasonCode::Internal, "delivery correlation lost its owner")
+                    })?;
+                    pending.terminal_at_ms = Some(now_ms);
+                    pending.completion.take()
+                }
+                ResultDisposition::Duplicate | ResultDisposition::Late => None,
+                ResultDisposition::UnknownCorrelation => {
+                    return Err(error(
+                        ReasonCode::Internal,
+                        "delivery book lost a live bridge correlation",
+                    ));
+                }
+            };
+            (disposition, completion)
+        };
+        if let Some(completion) = completion {
+            let _ = completion.try_send(completion_value);
+        }
+        Ok(disposition)
     }
 
     pub fn catalog_status(&self, tenant_id: &str) -> Option<CatalogStatus> {
@@ -292,10 +432,31 @@ impl SdkBridge {
             })
     }
 
+    pub fn delivery_trace(&self, invocation_id: &str) -> AelioResult<String> {
+        let state = self.state();
+        let pending = state
+            .pending
+            .get(invocation_id)
+            .ok_or_else(|| error(ReasonCode::NotFound, "delivery trace was not retained"))?;
+        let correlation = hex::encode(Sha256::digest(invocation_id.as_bytes()));
+        serde_json::to_string(&SdkDeliveryTrace {
+            authority: "aelio-wire",
+            correlation: format!("sha256:{}", &correlation[..16]),
+            steps: pending
+                .events
+                .iter()
+                .enumerate()
+                .map(|(seq, kind)| SdkDeliveryTraceStep { seq, kind })
+                .collect(),
+        })
+        .map_err(|cause| error(ReasonCode::Internal, cause.to_string()))
+    }
+
     pub fn tool_host(&self, tenant_id: impl Into<String>) -> BridgeToolHost {
         BridgeToolHost {
             bridge: self.clone(),
             tenant_id: tenant_id.into(),
+            last_trace: None,
         }
     }
 
@@ -306,35 +467,62 @@ impl SdkBridge {
         tool_version: &str,
         args: &IndexMap<String, Value>,
     ) -> AelioResult<Value> {
+        self.invoke_versioned_traced(tenant_id, tool_id, tool_version, args)
+            .map(|(value, _)| value)
+    }
+
+    fn invoke_versioned_traced(
+        &self,
+        tenant_id: &str,
+        tool_id: &str,
+        tool_version: &str,
+        args: &IndexMap<String, Value>,
+    ) -> AelioResult<(Value, String)> {
         let invocation_id = Uuid::new_v4().to_string();
         let (completion, receiver) = mpsc::sync_channel(1);
+        let timeout_ms = u64::try_from(self.config.invocation_timeout.as_millis())
+            .unwrap_or(u64::MAX)
+            .max(1);
+        let deadline_at_ms = unix_time_ms().saturating_add(timeout_ms);
         let outbound = {
             let mut state = self.state();
-            let active = state
-                .catalogs
-                .get(tenant_id)
-                .ok_or_else(|| error(ReasonCode::NotFound, "tenant catalog is not registered"))?;
-            let tool = active
-                .catalog
-                .tools
-                .iter()
-                .find(|tool| tool.id == tool_id)
-                .ok_or_else(|| error(ReasonCode::NotFound, "tool is not in the tenant catalog"))?;
-            if tool.version != tool_version {
-                return Err(error(
-                    ReasonCode::Conflict,
-                    "requested tool version does not match the active catalog",
-                ));
-            }
-            let connection_id = active
-                .connection_id
-                .clone()
-                .ok_or_else(|| error(ReasonCode::Unavailable, "tenant tool host is offline"))?;
-            let tool_version = tool.version.clone();
+            prune_terminal_correlations(&mut state, unix_time_ms());
+            let (function_name, connection_id, tool_version, effect_class) = {
+                let active = state.catalogs.get(tenant_id).ok_or_else(|| {
+                    error(ReasonCode::NotFound, "tenant catalog is not registered")
+                })?;
+                let tool = active
+                    .catalog
+                    .tools
+                    .iter()
+                    .find(|tool| tool.id == tool_id)
+                    .ok_or_else(|| {
+                        error(ReasonCode::NotFound, "tool is not in the tenant catalog")
+                    })?;
+                if tool.version != tool_version {
+                    return Err(error(
+                        ReasonCode::Conflict,
+                        "requested tool version does not match the active catalog",
+                    ));
+                }
+                (
+                    tool.name.clone(),
+                    active.connection_id.clone().ok_or_else(|| {
+                        error(ReasonCode::Unavailable, "tenant tool host is offline")
+                    })?,
+                    tool.version.clone(),
+                    match tool.effect_class() {
+                        aelio_agent::tenant::ToolEffect::Pure => "pure",
+                        aelio_agent::tenant::ToolEffect::Read => "read",
+                        aelio_agent::tenant::ToolEffect::Write => "write",
+                        aelio_agent::tenant::ToolEffect::External => "external",
+                    },
+                )
+            };
             let in_flight = state
                 .pending
                 .values()
-                .filter(|pending| pending.tenant_id == tenant_id)
+                .filter(|pending| pending.tenant_id == tenant_id && pending.completion.is_some())
                 .count();
             if in_flight >= self.config.max_in_flight_per_tenant {
                 return Err(error(
@@ -347,41 +535,98 @@ impl SdkBridge {
                 .get(&connection_id)
                 .map(|connection| connection.outbound.clone())
                 .ok_or_else(|| error(ReasonCode::Unavailable, "tenant tool host is offline"))?;
+            let message = InvokeMessage {
+                message_type: "invoke",
+                id: invocation_id.clone(),
+                invocation_id: invocation_id.clone(),
+                tenant_id: tenant_id.to_owned(),
+                tool_id: tool_id.to_owned(),
+                tool_version: tool_version.clone(),
+                // `tool_id` is the closed DSL/kernel identifier. `name` is the exact external
+                // function exported by the SDK and may use the host language's conventions.
+                function: function_name,
+                args: args.clone(),
+            };
+            state
+                .delivery
+                .prepare(
+                    ServerFrame::ToolCall {
+                        corr: invocation_id.clone(),
+                        target: format!("{tool_id}@{tool_version}"),
+                        effect_class: effect_class.into(),
+                        args: values_to_sol(args)?,
+                        deadline_ms: timeout_ms,
+                        idem_key: None,
+                        turn_ref: format!("sdk:{invocation_id}"),
+                    },
+                    deadline_at_ms,
+                )
+                .map_err(|message| error(ReasonCode::Conflict, message))?;
             state.pending.insert(
                 invocation_id.clone(),
                 PendingInvocation {
                     tenant_id: tenant_id.to_owned(),
                     connection_id,
-                    completion,
+                    completion: Some(completion),
+                    message: message.clone(),
+                    deadline_at_ms,
+                    terminal_at_ms: None,
+                    events: vec!["call_intent"],
                 },
             );
-            (
-                sender,
-                InvokeMessage {
-                    message_type: "invoke",
-                    id: invocation_id.clone(),
-                    invocation_id: invocation_id.clone(),
-                    tenant_id: tenant_id.to_owned(),
-                    tool_id: tool_id.to_owned(),
-                    tool_version,
-                    function: tool_id.to_owned(),
-                    args: args.clone(),
-                },
-            )
+            (sender, message)
         };
 
         if outbound.0.try_send(outbound.1).is_err() {
-            self.state().pending.remove(&invocation_id);
+            let mut state = self.state();
+            state.pending.remove(&invocation_id);
+            let _ = state.delivery.cancel_prepared(&invocation_id);
             return Err(error(
                 ReasonCode::Unavailable,
                 "SDK outbound queue is unavailable or full",
             ));
         }
         match receiver.recv_timeout(self.config.invocation_timeout) {
-            Ok(result) => result,
+            Ok(result) => {
+                let trace = self.delivery_trace(&invocation_id)?;
+                result
+                    .map(|value| (value, trace.clone()))
+                    .map_err(|error| error.with_decision_trace(Some(trace)))
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.state().pending.remove(&invocation_id);
-                Err(error(ReasonCode::Timeout, "SDK tool invocation timed out"))
+                let disposition = {
+                    let mut state = self.state();
+                    let now_ms = unix_time_ms().max(deadline_at_ms);
+                    let disposition = state
+                        .delivery
+                        .expire(&invocation_id, now_ms)
+                        .map_err(|message| error(ReasonCode::Internal, message))?
+                        .ok_or_else(|| {
+                            error(ReasonCode::Internal, "delivery deadline did not expire")
+                        })?;
+                    if let Some(pending) = state.pending.get_mut(&invocation_id) {
+                        pending.completion = None;
+                        pending.terminal_at_ms = Some(now_ms);
+                    }
+                    disposition
+                };
+                let trace = self.delivery_trace(&invocation_id).ok();
+                match disposition {
+                    ExpiryDisposition::ToolTransient => Err(error(
+                        ReasonCode::Unavailable,
+                        "SDK call expired before a result and is safe to retry",
+                    )
+                    .with_decision_trace(trace)),
+                    ExpiryDisposition::InternalUnknownOutcome => Err(error(
+                        ReasonCode::Internal,
+                        "SDK effect was dispatched but its outcome is unknown",
+                    )
+                    .with_detail(Value::Map(indexmap::indexmap! {
+                        "outcome".into() => Value::str("unknown_outcome"),
+                        "boundary".into() => Value::str("sdk_dispatch"),
+                    }))
+                    .with_decision_trace(trace)),
+                }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(error(
                 ReasonCode::Unavailable,
@@ -400,6 +645,7 @@ impl SdkBridge {
 pub struct BridgeToolHost {
     bridge: SdkBridge,
     tenant_id: String,
+    last_trace: Option<String>,
 }
 
 impl ToolHost for BridgeToolHost {
@@ -416,8 +662,23 @@ impl ToolHost for BridgeToolHost {
                     .map(|tool| tool.version)
             })
             .ok_or_else(|| error(ReasonCode::NotFound, "tool is not in the tenant catalog"))?;
-        self.bridge
-            .invoke_versioned(&self.tenant_id, tool_id, &version, args)
+        match self
+            .bridge
+            .invoke_versioned_traced(&self.tenant_id, tool_id, &version, args)
+        {
+            Ok((value, trace)) => {
+                self.last_trace = Some(trace);
+                Ok(value)
+            }
+            Err(error) => {
+                self.last_trace = error.decision_trace.as_deref().map(str::to_owned);
+                Err(error)
+            }
+        }
+    }
+
+    fn take_decision_trace(&mut self) -> Option<String> {
+        self.last_trace.take()
     }
 }
 
@@ -431,19 +692,55 @@ fn canonical_catalog_hash(catalog: &TenantDecl) -> AelioResult<String> {
     Ok(hex::encode(Sha256::digest(encoded)))
 }
 
-fn fail_pending_for_connection(state: &mut BridgeState, connection_id: &str, message: &str) {
-    let invocation_ids: Vec<_> = state
+fn prune_terminal_correlations(state: &mut BridgeState, now_ms: u64) {
+    let mut terminal = state
         .pending
         .iter()
-        .filter(|(_, pending)| pending.connection_id == connection_id)
-        .map(|(id, _)| id.clone())
-        .collect();
-    for invocation_id in invocation_ids {
-        if let Some(pending) = state.pending.remove(&invocation_id) {
-            let _ = pending
-                .completion
-                .try_send(Err(error(ReasonCode::Unavailable, message)));
+        .filter_map(|(id, pending)| pending.terminal_at_ms.map(|at| (id.clone(), at)))
+        .collect::<Vec<_>>();
+    terminal.sort_by_key(|(_, at)| *at);
+    let excess = terminal.len().saturating_sub(MAX_TERMINAL_CORRELATIONS);
+    for (index, (invocation_id, terminal_at_ms)) in terminal.into_iter().enumerate() {
+        if (index < excess
+            || now_ms >= terminal_at_ms.saturating_add(TERMINAL_CORRELATION_RETENTION_MS))
+            && state.delivery.remove_terminal(&invocation_id).is_ok()
+        {
+            state.pending.remove(&invocation_id);
         }
+    }
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn values_to_sol(values: &IndexMap<String, Value>) -> AelioResult<SolValue> {
+    values
+        .iter()
+        .map(|(name, value)| Ok((name.clone(), value_to_sol(value)?)))
+        .collect::<AelioResult<Vec<_>>>()
+        .map(SolValue::map)
+}
+
+fn value_to_sol(value: &Value) -> AelioResult<SolValue> {
+    match value {
+        Value::Null => Ok(SolValue::Null),
+        Value::Bool(value) => Ok(SolValue::Bool(*value)),
+        Value::Int(value) => Ok(SolValue::Int(*value)),
+        Value::Float(value) => SolValue::float(*value)
+            .map_err(|cause| error(ReasonCode::Validation, cause.to_string())),
+        Value::Str(value) => Ok(SolValue::str(value)),
+        Value::List(values) => values
+            .iter()
+            .map(value_to_sol)
+            .collect::<AelioResult<Vec<_>>>()
+            .map(SolValue::List),
+        Value::Map(values) => values_to_sol(values),
     }
 }
 
@@ -517,6 +814,7 @@ mod tests {
             .complete(
                 "c1",
                 ResultMessage {
+                    message_type: "result".into(),
                     invocation_id: request.invocation_id,
                     ok: true,
                     data: Some(Value::Bool(true)),
@@ -594,7 +892,10 @@ mod tests {
                 .code,
             ReasonCode::RateLimited
         );
-        assert_eq!(first.join().unwrap().unwrap_err().code, ReasonCode::Timeout);
+        assert_eq!(
+            first.join().unwrap().unwrap_err().code,
+            ReasonCode::Unavailable
+        );
         let second = {
             let bridge = bridge.clone();
             std::thread::spawn(move || {
@@ -604,7 +905,7 @@ mod tests {
         outbound.recv().await.unwrap();
         assert_eq!(
             second.join().unwrap().unwrap_err().code,
-            ReasonCode::Timeout
+            ReasonCode::Unavailable
         );
     }
 
@@ -644,6 +945,7 @@ mod tests {
         };
         let request = outbound_a.recv().await.unwrap();
         let foreign = ResultMessage {
+            message_type: "result".into(),
             invocation_id: request.invocation_id.clone(),
             ok: true,
             data: Some(Value::Bool(false)),
@@ -657,6 +959,7 @@ mod tests {
             .complete(
                 "a",
                 ResultMessage {
+                    message_type: "result".into(),
                     invocation_id: request.invocation_id,
                     ok: true,
                     data: Some(Value::Bool(true)),
@@ -693,6 +996,7 @@ mod tests {
             .complete(
                 "new",
                 ResultMessage {
+                    message_type: "result".into(),
                     invocation_id: request.invocation_id,
                     ok: true,
                     data: Some(Value::Bool(true)),
@@ -701,5 +1005,151 @@ mod tests {
             )
             .unwrap();
         assert!(invoking.join().unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn duplicate_result_is_acked_and_discarded_without_second_completion() {
+        let bridge = bridge(Duration::from_secs(1), 2);
+        let mut outbound = bridge.open_connection("c1");
+        bridge
+            .register("c1", "tenant-a", catalog("tenant-a"))
+            .unwrap();
+        let invoking = {
+            let bridge = bridge.clone();
+            std::thread::spawn(move || {
+                bridge.invoke_versioned("tenant-a", "send_otp", "1", &IndexMap::new())
+            })
+        };
+        let request = outbound.recv().await.unwrap();
+        bridge
+            .mark_dispatched("c1", &request.invocation_id)
+            .unwrap();
+        assert_eq!(
+            bridge
+                .complete(
+                    "c1",
+                    ResultMessage {
+                        message_type: "result".into(),
+                        invocation_id: request.invocation_id.clone(),
+                        ok: true,
+                        data: Some(Value::Bool(true)),
+                        error: None,
+                    },
+                )
+                .unwrap(),
+            ResultDisposition::Accepted
+        );
+        assert_eq!(invoking.join().unwrap().unwrap(), Value::Bool(true));
+        assert_eq!(
+            bridge
+                .complete(
+                    "c1",
+                    ResultMessage {
+                        message_type: "result".into(),
+                        invocation_id: request.invocation_id,
+                        ok: true,
+                        data: Some(Value::Bool(false)),
+                        error: None,
+                    },
+                )
+                .unwrap(),
+            ResultDisposition::Duplicate
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatched_external_timeout_is_unknown_and_late_result_cannot_reenter() {
+        let bridge = bridge(Duration::from_millis(30), 1);
+        let mut outbound = bridge.open_connection("c1");
+        bridge
+            .register("c1", "tenant-a", catalog("tenant-a"))
+            .unwrap();
+        let invoking = {
+            let bridge = bridge.clone();
+            std::thread::spawn(move || {
+                bridge.invoke_versioned("tenant-a", "send_otp", "1", &IndexMap::new())
+            })
+        };
+        let request = outbound.recv().await.unwrap();
+        bridge
+            .mark_dispatched("c1", &request.invocation_id)
+            .unwrap();
+        let timeout = invoking.join().unwrap().unwrap_err();
+        assert_eq!(timeout.code, ReasonCode::Internal);
+        let trace: serde_json::Value = serde_json::from_str(
+            timeout
+                .decision_trace
+                .as_deref()
+                .expect("post-dispatch failures retain a metadata-only delivery trace"),
+        )
+        .unwrap();
+        assert_eq!(
+            trace["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|step| step["kind"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["call_intent", "call_dispatch"]
+        );
+        assert_eq!(
+            bridge
+                .complete(
+                    "c1",
+                    ResultMessage {
+                        message_type: "result".into(),
+                        invocation_id: request.invocation_id,
+                        ok: true,
+                        data: Some(Value::Bool(true)),
+                        error: None,
+                    },
+                )
+                .unwrap(),
+            ResultDisposition::Late
+        );
+    }
+
+    #[tokio::test]
+    async fn reconnect_redelivers_same_correlation_and_completes_original_waiter() {
+        let bridge = bridge(Duration::from_secs(1), 2);
+        let mut old = bridge.open_connection("old");
+        bridge
+            .register("old", "tenant-a", catalog("tenant-a"))
+            .unwrap();
+        let invoking = {
+            let bridge = bridge.clone();
+            std::thread::spawn(move || {
+                bridge.invoke_versioned("tenant-a", "send_otp", "1", &IndexMap::new())
+            })
+        };
+        let first = old.recv().await.unwrap();
+        bridge.mark_dispatched("old", &first.invocation_id).unwrap();
+        bridge.disconnect("old");
+
+        let mut new = bridge.open_connection("new");
+        bridge
+            .register("new", "tenant-a", catalog("tenant-a"))
+            .unwrap();
+        let redelivered = new.recv().await.unwrap();
+        assert_eq!(redelivered.invocation_id, first.invocation_id);
+        bridge
+            .mark_dispatched("new", &redelivered.invocation_id)
+            .unwrap();
+        assert_eq!(
+            bridge
+                .complete(
+                    "new",
+                    ResultMessage {
+                        message_type: "result".into(),
+                        invocation_id: redelivered.invocation_id,
+                        ok: true,
+                        data: Some(Value::Bool(true)),
+                        error: None,
+                    },
+                )
+                .unwrap(),
+            ResultDisposition::Accepted
+        );
+        assert_eq!(invoking.join().unwrap().unwrap(), Value::Bool(true));
     }
 }

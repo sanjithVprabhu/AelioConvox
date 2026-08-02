@@ -239,6 +239,7 @@ mod tests {
             terminal_states: vec!["authenticated".into()],
             ttl_secs: Some(300),
             max_attempts: 3,
+            lowering: None,
         }
     }
 

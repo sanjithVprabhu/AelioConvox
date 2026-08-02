@@ -2,7 +2,8 @@
 //!
 //! `prompt → (LLM|mock) closed program JSON → Planner → optional store via [`Runtime::push_flow`].
 //!
-//! PROVISIONAL (FLAGS): LLM may only emit App E control trees over the forge vendor Call catalog.
+//! Forge v0 authoring boundary (FLAGS F-017 resolution): an LLM may only emit App E control trees
+//! over the admitted forge vendor Call catalog; the Planner and artifact gate remain authoritative.
 //! Full §16 gate / pathway prototypes are P1; this unit proves draft → validate → durable flow.
 
 use crate::{
@@ -263,7 +264,8 @@ pub fn parse_forge_draft(content: &str) -> Result<ForgeDraft, RuntimeError> {
     let trimmed = content.trim();
     let mut json: Json = serde_json::from_str(trimmed)
         .map_err(|error| RuntimeError::Invalid(format!("forge draft is not JSON: {error}")))?;
-    // PROVISIONAL: common LLM slip — Seq.nodes → Seq.steps before closed-schema compile.
+    // Authoring-boundary repair: common LLM slip — Seq.nodes → Seq.steps before closed-schema
+    // compile. The repaired result still enters the closed Planner and cannot bypass validation.
     if let Some(program) = json.get_mut("program") {
         normalize_seq_steps(program);
     }

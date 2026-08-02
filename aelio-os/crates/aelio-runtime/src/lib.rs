@@ -5,11 +5,12 @@ pub mod artifact;
 pub mod builder;
 pub mod forge;
 pub mod gate;
+pub mod learning;
 pub mod mint;
 pub mod sandbox;
 pub mod steward;
 
-pub use steward::{DemandBuild, DependencyCascade};
+pub use steward::{DemandBuild, DependencyCascade, KernelMigration};
 
 pub use artifact::{
     Artifact, ArtifactActor, ArtifactClass, ArtifactEffect, ArtifactError, ArtifactEvidence,
@@ -20,15 +21,16 @@ pub use artifact::{
     BuildJob, BuildJobRecord, BuildJobRepository, BuildLineage, BuildPolicy, BuildReaction,
     BuildReactionKind, BuildReactionStatus, BuildResult, BuildScope, BuildSpec, BuildSpecDraft,
     BuildStage, BuildWorkspace, CapabilityReason, CapabilityRequest, CapabilityRequestDraft,
-    CapabilityRequestRepository, CapabilityStatus, DecompositionSeam, EvidencePhase,
-    EvidenceSummary, HarnessBody, HarnessNode, HarnessSeam, HarnessSink, HarnessSource,
-    ImprintDeclaration, ImprintField, ImprintRegistry, ImprintSensitivity, ImprintType,
-    LeaseRecord, LeaseRequest, LeaseStatus, LifecycleEvent, NameLeaseRepository, PromotionProposal,
-    PromotionProposalRepository, PromotionProposalStatus, Provenance, VerificationCacheEntry,
-    VerificationCacheRepository, VerificationVerdict, ARTIFACT_EVIDENCE_TABLE, ARTIFACT_TABLE,
-    BUILD_BUDGET_TABLE, BUILD_JOB_TABLE, CAPABILITY_REQUEST_TABLE, NAME_LEASE_TABLE,
-    PROMOTION_PROPOSAL_TABLE, REPOSITORY_SCHEMA_TABLE, REPOSITORY_SCHEMA_TENANT,
-    VERIFICATION_CACHE_TABLE,
+    CapabilityRequestRepository, CapabilityStatus, ConverterArtifactDraft, DatasetArtifactDraft,
+    DatasetModality, DecompositionSeam, EvidencePhase, EvidenceSummary, HarnessBody, HarnessNode,
+    HarnessSeam, HarnessSink, HarnessSource, ImprintDeclaration, ImprintField, ImprintRegistry,
+    ImprintSensitivity, ImprintType, LeaseRecord, LeaseRequest, LeaseStatus, LifecycleEvent,
+    NameLeaseRepository, PathwayArtifactDraft, PathwayPrototype, ProcedureArtifactDraft,
+    ProcedureSignatureStep, PromotionProposal, PromotionProposalRepository,
+    PromotionProposalStatus, Provenance, VerificationCacheEntry, VerificationCacheRepository,
+    VerificationVerdict, ARTIFACT_EVIDENCE_TABLE, ARTIFACT_TABLE, BUILD_BUDGET_TABLE,
+    BUILD_JOB_TABLE, CAPABILITY_REQUEST_TABLE, NAME_LEASE_TABLE, PROMOTION_PROPOSAL_TABLE,
+    REPOSITORY_SCHEMA_TABLE, REPOSITORY_SCHEMA_TENANT, VERIFICATION_CACHE_TABLE,
 };
 
 pub use builder::{
@@ -41,9 +43,11 @@ pub use forge::{
     FlowDrafter, ForgeDraft, ForgeRequest, ForgeResult, MockDrafter,
 };
 pub use gate::{
-    CanaryObservation, CanaryResult, GateResult, GenericArtifactGate, PromptCaseKind,
-    PromptEvaluator, PromptGateCase, PromptGateCaseReport, PromptGateReport, PromptGateResult,
+    AgreementGateResult, AgreementObservation, CanaryObservation, CanaryResult, GateResult,
+    GenericArtifactGate, PromptCaseKind, PromptEvaluator, PromptGateCase, PromptGateCaseReport,
+    PromptGateReport, PromptGateResult,
 };
+pub use learning::{LearnedProcedureRequest, ProcedureTraceObservation};
 pub use mint::{
     mint_prompt, open_mint_shelf, recall_minted, MintShelf, MockMintDrafter, MINT_TABLE,
 };
@@ -69,6 +73,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 const CONTINUATION_TABLE: &str = "continuations";
 const INSTANCE_TABLE: &str = "flow_instances";
 const HARNESS_CONTINUATION_TABLE: &str = "harness_continuations";
+const SUBJECT_CONTINUATION_TABLE: &str = "subject_artifact_continuations";
 const HARNESS_CONTINUATION_FORMAT: u32 = 1;
 pub const DEFAULT_QUEUE_DEPTH: usize = 20;
 pub const BASELINE_CONVERSATION_FLOW_ID: &str = "aelio.conversation";
@@ -216,6 +221,65 @@ pub struct TurnSubmit {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct ReplayInstanceRequest {
+    pub tenant: String,
+    pub instance_id: String,
+    pub flow_id: String,
+    pub flow_rev: String,
+    pub initial_input: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplayInstanceReport {
+    pub instance_id: String,
+    pub flow_id: String,
+    pub flow_rev: String,
+    pub ledger_entries: usize,
+    pub live_bag_hash: String,
+    pub replay_bag_hash: String,
+    pub matched: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubjectArtifactStart {
+    /// Stable non-secret subject identity (normally the authenticated tenant user id). Only its
+    /// canonical hash is persisted in the runtime continuation index.
+    pub subject: String,
+    pub tenant: String,
+    pub instance_id: String,
+    pub artifact_id: String,
+    pub artifact_version: u32,
+    pub artifact_hash: String,
+    pub input: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubjectContinuationStatus {
+    Starting,
+    Active,
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubjectContinuation {
+    pub subject_hash: String,
+    pub instance_id: String,
+    pub artifact_id: String,
+    pub artifact_version: u32,
+    pub artifact_hash: String,
+    pub status: SubjectContinuationStatus,
+    #[serde(default)]
+    pub started_at_ms: Option<u64>,
+    #[serde(default)]
+    pub expires_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolProxySpec {
     pub tenant: String,
     pub tool_id: String,
@@ -317,6 +381,13 @@ pub(crate) struct ModelCompletionRequest<'a> {
     pub model: &'a str,
     pub max_tokens: u64,
     pub temperature: f64,
+    pub correlation: &'a str,
+}
+
+pub(crate) struct ModelEmbeddingRequest<'a> {
+    pub tenant: &'a str,
+    pub text: &'a str,
+    pub model: &'a str,
     pub correlation: &'a str,
 }
 
@@ -535,6 +606,62 @@ impl Runtime {
             .ok_or_else(|| RuntimeError::Host("model host output lacks text".into()))
     }
 
+    pub(crate) fn embed_model_text(
+        &self,
+        request: ModelEmbeddingRequest<'_>,
+    ) -> Result<Vec<f32>, RuntimeError> {
+        if request.tenant.is_empty()
+            || request.text.is_empty()
+            || request.model.is_empty()
+            || request.correlation.is_empty()
+        {
+            return Err(RuntimeError::Invalid(
+                "embedding request requires text, model pin, and correlation".into(),
+            ));
+        }
+        let host = self.inner.host.as_ref().ok_or_else(|| {
+            RuntimeError::Host("embedding requires the configured TypeScript host adapter".into())
+        })?;
+        let invocation = host
+            .invoke(
+                "aelio.embedding.embed@1",
+                &SolValue::map([
+                    ("text", SolValue::str(request.text)),
+                    ("model", SolValue::str(request.model)),
+                ]),
+                &CallContext {
+                    corr: request.correlation.into(),
+                    tenant: request.tenant.into(),
+                    instance_id: request.correlation.into(),
+                    turn_id: request.correlation.into(),
+                    nid: "embedding.embed".into(),
+                    deadline_ms: Some(60_000),
+                },
+            )
+            .map_err(RuntimeError::from)?;
+        let values = invocation
+            .output
+            .as_map()
+            .and_then(|map| map.get("vector"))
+            .and_then(SolValue::as_list)
+            .ok_or_else(|| RuntimeError::Host("embedding host output lacks vector".into()))?;
+        if values.is_empty() || values.len() > 16_384 {
+            return Err(RuntimeError::Host(
+                "embedding vector dimension must be within 1..=16384".into(),
+            ));
+        }
+        values
+            .iter()
+            .map(|value| match value {
+                SolValue::Float(value) if value.is_finite() => Ok(*value as f32),
+                SolValue::Int(value) => Ok(*value as f32),
+                _ => Err(RuntimeError::Host(
+                    "embedding vector contains a non-finite/non-numeric value".into(),
+                )),
+            })
+            .collect()
+    }
+
     pub fn observe_canary(
         &self,
         tenant: &str,
@@ -700,6 +827,139 @@ impl Runtime {
     pub fn invoke_pinned_artifact(&self, turn: TurnSubmit) -> Result<TurnReply, RuntimeError> {
         validate_identity(&turn.tenant, &turn.instance_id, &turn.flow_id)?;
         execute_artifact_turn(&self.inner, turn, InvocationMode::ChildStartOrRetry, 0)
+    }
+
+    /// Start or idempotently retry the one suspendable artifact rail owned by an authenticated
+    /// subject. The fixed subject index is written before execution, closing the crash window
+    /// between Park persistence and discovery by the next public turn.
+    pub fn start_subject_artifact(
+        &self,
+        start: SubjectArtifactStart,
+    ) -> Result<TurnReply, RuntimeError> {
+        validate_subject_start(&start)?;
+        let record = load_executable_artifact(
+            &self.inner.store,
+            &start.tenant,
+            &start.artifact_id,
+            &start.artifact_version.to_string(),
+        )?;
+        if record.artifact.hash != start.artifact_hash {
+            return Err(RuntimeError::Conflict(
+                "subject artifact hash does not match the admitted record".into(),
+            ));
+        }
+        let tenant = start.tenant.clone();
+        let subject_hash = subject_identity_hash(&tenant, &start.subject);
+        let started_at_ms = unix_time_ms()?;
+        let continuation_ttl_ms = catalog_continuation_ttl_ms(&record.artifact.body)?;
+        let desired = SubjectContinuation {
+            subject_hash,
+            instance_id: start.instance_id.clone(),
+            artifact_id: start.artifact_id.clone(),
+            artifact_version: start.artifact_version,
+            artifact_hash: start.artifact_hash,
+            status: SubjectContinuationStatus::Starting,
+            started_at_ms: continuation_ttl_ms.map(|_| started_at_ms),
+            expires_at_ms: continuation_ttl_ms.map(|ttl| started_at_ms.saturating_add(ttl)),
+        };
+        let (claimed, version) = claim_subject_continuation(&self.inner.store, &tenant, &desired)?;
+        let reply = execute_artifact_turn(
+            &self.inner,
+            TurnSubmit {
+                tenant: tenant.clone(),
+                instance_id: start.instance_id,
+                flow_id: start.artifact_id,
+                flow_rev: start.artifact_version.to_string(),
+                input: start.input,
+            },
+            InvocationMode::ChildStartOrRetry,
+            0,
+        )?;
+        finalize_subject_continuation(&self.inner.store, &tenant, claimed, version, &reply)?;
+        Ok(reply)
+    }
+
+    /// Deliver a wake to the exact runtime-owned continuation currently indexed for a subject.
+    /// The caller cannot replace its artifact pin or instance id.
+    pub fn resume_subject_artifact(
+        &self,
+        tenant: &str,
+        subject: &str,
+        input: serde_json::Value,
+    ) -> Result<TurnReply, RuntimeError> {
+        let (record, version) = self
+            .active_subject_artifact(tenant, subject)?
+            .ok_or_else(|| RuntimeError::NotFound("active subject artifact".into()))?;
+        let reply = execute_artifact_turn(
+            &self.inner,
+            TurnSubmit {
+                tenant: tenant.into(),
+                instance_id: record.instance_id.clone(),
+                flow_id: record.artifact_id.clone(),
+                flow_rev: record.artifact_version.to_string(),
+                input,
+            },
+            InvocationMode::ChildWake,
+            0,
+        )?;
+        finalize_subject_continuation(&self.inner.store, tenant, record, version, &reply)?;
+        Ok(reply)
+    }
+
+    pub fn active_subject_artifact(
+        &self,
+        tenant: &str,
+        subject: &str,
+    ) -> Result<Option<(SubjectContinuation, u64)>, RuntimeError> {
+        if tenant.trim().is_empty() || subject.trim().is_empty() || subject.len() > 256 {
+            return Err(RuntimeError::Invalid(
+                "tenant and bounded subject are required".into(),
+            ));
+        }
+        let key = subject_identity_hash(tenant, subject);
+        for _ in 0..16 {
+            let Some(row) = self
+                .inner
+                .store
+                .get(tenant, SUBJECT_CONTINUATION_TABLE, &key)
+                .map_err(store_error)?
+            else {
+                return Ok(None);
+            };
+            let mut record = decode_subject_continuation(&row.value)?;
+            if record.subject_hash != key {
+                return Err(RuntimeError::Internal(
+                    "subject continuation identity is corrupt".into(),
+                ));
+            }
+            if !matches!(record.status, SubjectContinuationStatus::Completed)
+                && record
+                    .expires_at_ms
+                    .is_some_and(|expires_at| unix_time_ms().is_ok_and(|now| now >= expires_at))
+            {
+                record.status = SubjectContinuationStatus::Completed;
+                let mut writer = self.inner.store.clone();
+                match writer.cas(
+                    tenant,
+                    SUBJECT_CONTINUATION_TABLE,
+                    &key,
+                    row.version,
+                    encode_subject_continuation(&record)?,
+                ) {
+                    Ok(_) => return Ok(None),
+                    Err(aelio_store::StoreError::Conflict) => continue,
+                    Err(error) => return Err(store_error(error)),
+                }
+            }
+            return if matches!(record.status, SubjectContinuationStatus::Completed) {
+                Ok(None)
+            } else {
+                Ok(Some((record, row.version)))
+            };
+        }
+        Err(RuntimeError::Conflict(
+            "subject continuation expiry remained contended".into(),
+        ))
     }
 
     /// Read the tamper-checked, metadata-only ledger narrative for one invocation. Payloads are
@@ -1054,6 +1314,87 @@ fn execute_turn(inner: &RuntimeInner, turn: TurnSubmit) -> Result<TurnReply, Run
     execute_artifact_turn(inner, turn, InvocationMode::Public, 0)
 }
 
+impl Runtime {
+    /// Re-run a completed Flow as a pure function of its durable hash-chained ledger. Call/model/
+    /// read results and resume wakes are injected by the kernel replay backend; the live registry
+    /// is constructed only to revalidate the pinned plan and is never invoked.
+    pub fn replay_instance(
+        &self,
+        request: ReplayInstanceRequest,
+    ) -> Result<ReplayInstanceReport, RuntimeError> {
+        let record = load_executable_artifact(
+            &self.inner.store,
+            &request.tenant,
+            &request.flow_id,
+            &request.flow_rev,
+        )?;
+        if record.artifact.class != ArtifactClass::Flow {
+            return Err(RuntimeError::Invalid(
+                "historical replay currently requires a directly executable Flow artifact".into(),
+            ));
+        }
+        let live = completed_instance_reply(
+            &self.inner.store,
+            &request.tenant,
+            &request.instance_id,
+            &request.flow_id,
+            &request.flow_rev,
+            None,
+        )?
+        .ok_or_else(|| RuntimeError::Conflict("instance is not completed".into()))?;
+        let TurnReply::Completed {
+            bag_hash: live_bag_hash,
+            ..
+        } = live
+        else {
+            return Err(RuntimeError::Conflict("instance is not completed".into()));
+        };
+        let flow = load_flow(
+            &self.inner.store,
+            &request.tenant,
+            &request.flow_id,
+            &request.flow_rev,
+        )?;
+        let program_text = serde_json::to_string(&flow.program)
+            .map_err(|error| RuntimeError::Invalid(error.to_string()))?;
+        let program = compile(&program_text)?;
+        let mut registry = build_registry(
+            &flow,
+            self.inner.host.clone(),
+            Some(self.inner.store.clone()),
+        )?;
+        let instance = Instance::with_store(
+            program.clone(),
+            &mut registry,
+            Box::new(self.inner.store.clone()),
+            InstanceConfig {
+                tenant: request.tenant,
+                instance_id: request.instance_id.clone(),
+                flow_id: request.flow_id.clone(),
+                flow_rev: request.flow_rev.clone(),
+                event_key_secret: self.inner.event_key_secret,
+            },
+        )?;
+        let ledger_entries = instance.ledger().entries().len();
+        let initial = json_to_sol(&request.initial_input)?;
+        let replay_bag_hash = aelio_kernel::replay(&program, instance.ledger(), initial)?;
+        if replay_bag_hash != live_bag_hash {
+            return Err(RuntimeError::Internal(
+                "historical replay final hash diverged from the committed result".into(),
+            ));
+        }
+        Ok(ReplayInstanceReport {
+            instance_id: request.instance_id,
+            flow_id: request.flow_id,
+            flow_rev: request.flow_rev,
+            ledger_entries,
+            live_bag_hash,
+            replay_bag_hash,
+            matched: true,
+        })
+    }
+}
+
 fn execute_artifact_turn(
     inner: &RuntimeInner,
     turn: TurnSubmit,
@@ -1065,6 +1406,11 @@ fn execute_artifact_turn(
             "nested Harness execution exceeds depth 32".into(),
         ));
     }
+    let public_input_hash = if mode == InvocationMode::Public {
+        Some(aelio_sol::value_hash(&json_to_sol(&turn.input)?))
+    } else {
+        None
+    };
     if mode != InvocationMode::Public {
         if let Some(reply) = completed_instance_reply(
             &inner.store,
@@ -1072,20 +1418,78 @@ fn execute_artifact_turn(
             &turn.instance_id,
             &turn.flow_id,
             &turn.flow_rev,
+            None,
         )? {
             return Ok(reply);
         }
+    } else if let Some(reply) = completed_instance_reply(
+        &inner.store,
+        &turn.tenant,
+        &turn.instance_id,
+        &turn.flow_id,
+        &turn.flow_rev,
+        public_input_hash.as_deref(),
+    )? {
+        return Ok(reply);
     }
     let record =
         load_executable_artifact(&inner.store, &turn.tenant, &turn.flow_id, &turn.flow_rev)?;
     match record.artifact.class {
         ArtifactClass::Flow => execute_flow_turn(inner, turn, mode),
         ArtifactClass::Harness => execute_harness_turn(inner, turn, mode, record, depth),
+        ArtifactClass::Procedure => execute_procedure_turn(inner, turn, mode, record, depth),
         class => Err(RuntimeError::Invalid(format!(
             "artifact `{}@{}` has non-executable class {class:?}",
             turn.flow_id, turn.flow_rev
         ))),
     }
+}
+
+fn execute_procedure_turn(
+    inner: &RuntimeInner,
+    turn: TurnSubmit,
+    mode: InvocationMode,
+    record: ArtifactRecord,
+    depth: usize,
+) -> Result<TurnReply, RuntimeError> {
+    let tenant = turn.tenant.clone();
+    let procedure: ProcedureArtifactDraft = serde_json::from_value(record.artifact.body.clone())
+        .map_err(|error| RuntimeError::Internal(format!("corrupt Procedure body: {error}")))?;
+    validate_artifact_input_values(&inner.store, &turn.tenant, &record.artifact, &turn.input)?;
+    let (implementation_id, implementation_version) = parse_live_pin(&procedure.implementation)?;
+    let implementation = load_executable_artifact(
+        &inner.store,
+        &turn.tenant,
+        implementation_id,
+        &implementation_version.to_string(),
+    )?;
+    if !matches!(
+        implementation.artifact.class,
+        ArtifactClass::Flow | ArtifactClass::Harness
+    ) {
+        return Err(RuntimeError::Invalid(
+            "Procedure implementation must pin a Flow or Harness".into(),
+        ));
+    }
+    let reply = execute_artifact_turn(
+        inner,
+        TurnSubmit {
+            tenant: turn.tenant,
+            instance_id: turn.instance_id,
+            flow_id: implementation_id.into(),
+            flow_rev: implementation_version.to_string(),
+            input: turn.input,
+        },
+        mode,
+        depth.saturating_add(1),
+    )?;
+    if let TurnReply::Completed { bag, .. } = &reply {
+        ImprintRegistry::open(inner.store.clone())
+            .map_err(artifact_error)?
+            .validate_value(&tenant, &record.artifact.interface.output, bag)
+            .map_err(artifact_error)?;
+    }
+    Ok(reply)
 }
 
 fn execute_flow_turn(
@@ -1119,6 +1523,7 @@ fn execute_flow_turn(
         config,
     )?;
     let input = json_to_sol(&turn.input)?;
+    let input_hash = aelio_sol::value_hash(&input);
     let continuation = inner
         .store
         .get(&turn.tenant, CONTINUATION_TABLE, &turn.instance_id)
@@ -1161,6 +1566,7 @@ fn execute_flow_turn(
                 instance_row.version,
                 &bag,
                 &bag_hash,
+                &input_hash,
             )?;
             Ok(TurnReply::Completed {
                 bag: sol_to_json(&bag)?,
@@ -1183,6 +1589,7 @@ fn execute_harness_turn(
     record: ArtifactRecord,
     depth: usize,
 ) -> Result<TurnReply, RuntimeError> {
+    let input_hash = aelio_sol::value_hash(&json_to_sol(&turn.input)?);
     let version = turn.flow_rev.parse::<u32>().map_err(|_| {
         RuntimeError::Invalid("flow_rev must be a positive base-10 artifact version".into())
     })?;
@@ -1240,6 +1647,7 @@ fn execute_harness_turn(
                 instance_row.version,
                 &bag,
                 &bag_hash,
+                &input_hash,
             )?;
             return Ok(TurnReply::Completed {
                 bag: output,
@@ -1665,6 +2073,202 @@ fn parse_live_pin(pin: &str) -> Result<(&str, u32), RuntimeError> {
     Ok((id, version))
 }
 
+fn validate_subject_start(start: &SubjectArtifactStart) -> Result<(), RuntimeError> {
+    validate_identity(&start.tenant, &start.instance_id, &start.artifact_id)?;
+    if start.subject.trim().is_empty()
+        || start.subject.len() > 256
+        || start.artifact_version == 0
+        || start.artifact_hash.len() != 64
+        || !start
+            .artifact_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(RuntimeError::Invalid(
+            "subject artifact start has an invalid bounded identity or pin".into(),
+        ));
+    }
+    let encoded = serde_json::to_vec(&start.input)
+        .map_err(|error| RuntimeError::Invalid(error.to_string()))?;
+    if encoded.len() > 1024 * 1024 {
+        return Err(RuntimeError::Invalid(
+            "subject artifact input exceeds 1 MiB".into(),
+        ));
+    }
+    json_to_sol(&start.input)?;
+    Ok(())
+}
+
+fn subject_identity_hash(tenant: &str, subject: &str) -> String {
+    aelio_sol::value_hash(&SolValue::map([
+        ("tenant", SolValue::str(tenant)),
+        ("subject", SolValue::str(subject)),
+    ]))
+}
+
+fn unix_time_ms() -> Result<u64, RuntimeError> {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| RuntimeError::Internal("system clock is before Unix epoch".into()))?;
+    u64::try_from(elapsed.as_millis())
+        .map_err(|_| RuntimeError::Internal("system clock milliseconds overflow".into()))
+}
+
+fn catalog_continuation_ttl_ms(body: &serde_json::Value) -> Result<Option<u64>, RuntimeError> {
+    let Some(program) = body.get("program") else {
+        return Ok(None);
+    };
+    let Some(nid) = program.get("nid").and_then(serde_json::Value::as_str) else {
+        return Ok(None);
+    };
+    let Some(encoded) = nid.strip_prefix("__aelio_catalog_ttl_") else {
+        return Ok(None);
+    };
+    if program.get("op").and_then(serde_json::Value::as_str) != Some("Timeout") {
+        return Err(RuntimeError::Invalid(
+            "catalog TTL marker must identify a Timeout root".into(),
+        ));
+    }
+    let ttl = encoded.parse::<u64>().map_err(|_| {
+        RuntimeError::Invalid("catalog continuation TTL marker is malformed".into())
+    })?;
+    if ttl == 0 || program.get("ms").and_then(serde_json::Value::as_u64) != Some(ttl) {
+        return Err(RuntimeError::Invalid(
+            "catalog continuation TTL marker does not match its bound".into(),
+        ));
+    }
+    Ok(Some(ttl))
+}
+
+fn encode_subject_continuation(record: &SubjectContinuation) -> Result<SolValue, RuntimeError> {
+    let value =
+        serde_json::to_value(record).map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    json_to_sol(&value)
+}
+
+fn decode_subject_continuation(value: &SolValue) -> Result<SubjectContinuation, RuntimeError> {
+    serde_json::from_value(sol_to_json(value)?)
+        .map_err(|error| RuntimeError::Internal(format!("corrupt subject continuation: {error}")))
+}
+
+fn claim_subject_continuation(
+    store: &EmbeddedStore,
+    tenant: &str,
+    desired: &SubjectContinuation,
+) -> Result<(SubjectContinuation, u64), RuntimeError> {
+    let key = &desired.subject_hash;
+    for _ in 0..16 {
+        let row = store
+            .get(tenant, SUBJECT_CONTINUATION_TABLE, key)
+            .map_err(store_error)?;
+        if let Some(row) = row {
+            let current = decode_subject_continuation(&row.value)?;
+            if current.subject_hash != desired.subject_hash {
+                return Err(RuntimeError::Internal(
+                    "subject continuation hash collision".into(),
+                ));
+            }
+            if !matches!(current.status, SubjectContinuationStatus::Completed)
+                && current
+                    .expires_at_ms
+                    .is_some_and(|expires_at| unix_time_ms().is_ok_and(|now| now >= expires_at))
+            {
+                let mut expired = current.clone();
+                expired.status = SubjectContinuationStatus::Completed;
+                let mut writer = store.clone();
+                match writer.cas(
+                    tenant,
+                    SUBJECT_CONTINUATION_TABLE,
+                    key,
+                    row.version,
+                    encode_subject_continuation(&expired)?,
+                ) {
+                    Ok(_) | Err(aelio_store::StoreError::Conflict) => continue,
+                    Err(error) => return Err(store_error(error)),
+                }
+            }
+            if !matches!(current.status, SubjectContinuationStatus::Completed) {
+                if current.instance_id == desired.instance_id
+                    && current.artifact_id == desired.artifact_id
+                    && current.artifact_version == desired.artifact_version
+                    && current.artifact_hash == desired.artifact_hash
+                {
+                    return Ok((current, row.version));
+                }
+                return Err(RuntimeError::Conflict(
+                    "subject already has an active artifact continuation".into(),
+                ));
+            }
+            let mut writer = store.clone();
+            match writer.cas(
+                tenant,
+                SUBJECT_CONTINUATION_TABLE,
+                key,
+                row.version,
+                encode_subject_continuation(desired)?,
+            ) {
+                Ok(version) => return Ok((desired.clone(), version)),
+                Err(aelio_store::StoreError::Conflict) => continue,
+                Err(error) => return Err(store_error(error)),
+            }
+        } else {
+            let mut writer = store.clone();
+            match writer
+                .put_if_absent(
+                    tenant,
+                    SUBJECT_CONTINUATION_TABLE,
+                    key,
+                    encode_subject_continuation(desired)?,
+                )
+                .map_err(store_error)?
+            {
+                PutIfAbsent::Inserted { version } => return Ok((desired.clone(), version)),
+                PutIfAbsent::Existing(_) => continue,
+            }
+        }
+    }
+    Err(RuntimeError::Conflict(
+        "subject continuation claim remained contended".into(),
+    ))
+}
+
+fn finalize_subject_continuation(
+    store: &EmbeddedStore,
+    tenant: &str,
+    mut record: SubjectContinuation,
+    expected_version: u64,
+    reply: &TurnReply,
+) -> Result<(), RuntimeError> {
+    record.status = match reply {
+        TurnReply::Completed { .. } => SubjectContinuationStatus::Completed,
+        TurnReply::Parked { .. } => SubjectContinuationStatus::Active,
+    };
+    let mut writer = store.clone();
+    match writer.cas(
+        tenant,
+        SUBJECT_CONTINUATION_TABLE,
+        &record.subject_hash,
+        expected_version,
+        encode_subject_continuation(&record)?,
+    ) {
+        Ok(_) => Ok(()),
+        Err(aelio_store::StoreError::Conflict) => {
+            let current = store
+                .get(tenant, SUBJECT_CONTINUATION_TABLE, &record.subject_hash)
+                .map_err(store_error)?
+                .ok_or_else(|| RuntimeError::Internal("subject continuation disappeared".into()))?;
+            if decode_subject_continuation(&current.value)? == record {
+                Ok(())
+            } else {
+                Err(RuntimeError::Conflict(
+                    "subject continuation changed while artifact executed".into(),
+                ))
+            }
+        }
+        Err(error) => Err(store_error(error)),
+    }
+}
+
 fn claim_instance(
     store: &EmbeddedStore,
     tenant: &str,
@@ -1722,6 +2326,7 @@ fn complete_instance(
     expected_version: u64,
     bag: &SolValue,
     bag_hash: &str,
+    input_hash: &str,
 ) -> Result<(), RuntimeError> {
     let mut writer = store.clone();
     writer
@@ -1730,7 +2335,7 @@ fn complete_instance(
             INSTANCE_TABLE,
             instance_id,
             expected_version,
-            completed_instance_record(flow_id, flow_rev, bag, bag_hash),
+            completed_instance_record(flow_id, flow_rev, bag, bag_hash, input_hash),
         )
         .map(|_| ())
         .map_err(|error| match error {
@@ -1754,6 +2359,7 @@ fn completed_instance_record(
     flow_rev: &str,
     bag: &SolValue,
     bag_hash: &str,
+    input_hash: &str,
 ) -> SolValue {
     SolValue::map([
         ("flow_id", SolValue::str(flow_id)),
@@ -1761,6 +2367,7 @@ fn completed_instance_record(
         ("status", SolValue::str("completed")),
         ("bag", bag.clone()),
         ("bag_hash", SolValue::str(bag_hash)),
+        ("input_hash", SolValue::str(input_hash)),
     ])
 }
 
@@ -1770,6 +2377,7 @@ fn completed_instance_reply(
     instance_id: &str,
     artifact_id: &str,
     artifact_rev: &str,
+    expected_input_hash: Option<&str>,
 ) -> Result<Option<TurnReply>, RuntimeError> {
     let Some(row) = store
         .get(tenant, INSTANCE_TABLE, instance_id)
@@ -1786,6 +2394,14 @@ fn completed_instance_reply(
     }
     if record_text(&row.value, "status")? != "completed" {
         return Ok(None);
+    }
+    if let Some(expected_input_hash) = expected_input_hash {
+        let stored_input_hash = record_text(&row.value, "input_hash")?;
+        if stored_input_hash != expected_input_hash {
+            return Err(RuntimeError::Conflict(format!(
+                "instance `{instance_id}` has already completed for a different input"
+            )));
+        }
     }
     let map = row
         .value
@@ -1835,13 +2451,17 @@ fn load_executable_artifact(
     let version = artifact_rev.parse::<u32>().map_err(|_| {
         RuntimeError::Invalid("flow_rev must be a positive base-10 artifact version".into())
     })?;
-    let record = ArtifactRepository::open(store.clone())
-        .map_err(artifact_error)?
+    let repository = ArtifactRepository::open(store.clone()).map_err(artifact_error)?;
+    let record = match repository
         .get(tenant, artifact_id, version)
         .map_err(artifact_error)?
-        .ok_or_else(|| {
-            RuntimeError::NotFound(format!("artifact `{artifact_id}@{artifact_rev}`"))
-        })?;
+    {
+        Some(record) => Some(record),
+        None => repository
+            .get(crate::mint::VENDOR_ARTIFACT_TENANT, artifact_id, version)
+            .map_err(artifact_error)?,
+    }
+    .ok_or_else(|| RuntimeError::NotFound(format!("artifact `{artifact_id}@{artifact_rev}`")))?;
     if !matches!(
         record.status,
         ArtifactStatus::Canary | ArtifactStatus::Promoted
@@ -1849,6 +2469,13 @@ fn load_executable_artifact(
         return Err(RuntimeError::Conflict(format!(
             "artifact `{artifact_id}@{artifact_rev}` is {:?}; only canary/promoted artifacts may execute",
             record.status
+        )));
+    }
+    if record.artifact.kernel_version != env!("CARGO_PKG_VERSION") {
+        return Err(RuntimeError::Conflict(format!(
+            "artifact `{artifact_id}@{artifact_rev}` pins kernel `{}` but this runtime is `{}`; explicit migration is required",
+            record.artifact.kernel_version,
+            env!("CARGO_PKG_VERSION")
         )));
     }
     Ok(record)
@@ -1881,10 +2508,16 @@ fn load_flow(
         RuntimeError::Invalid("flow_rev must be a positive base-10 artifact version".into())
     })?;
     let repository = ArtifactRepository::open(store.clone()).map_err(artifact_error)?;
-    let record = repository
+    let record = match repository
         .get(tenant, flow_id, version)
         .map_err(artifact_error)?
-        .ok_or_else(|| RuntimeError::NotFound(format!("flow `{flow_id}@{flow_rev}`")))?;
+    {
+        Some(record) => Some(record),
+        None => repository
+            .get(crate::mint::VENDOR_ARTIFACT_TENANT, flow_id, version)
+            .map_err(artifact_error)?,
+    }
+    .ok_or_else(|| RuntimeError::NotFound(format!("flow `{flow_id}@{flow_rev}`")))?;
     if record.artifact.class != ArtifactClass::Flow {
         return Err(RuntimeError::Invalid(format!(
             "artifact `{flow_id}@{flow_rev}` is not a flow"

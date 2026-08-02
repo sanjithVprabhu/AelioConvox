@@ -23,6 +23,14 @@ fn hi_cold_path_is_model_free_and_learnable() {
     assert!(r.steps.iter().any(|s| s.name == "FlowGate"));
     assert!(r.steps.iter().any(|s| s.name == "SplitClauses"));
     assert!(r.steps.iter().any(|s| s.name == "ClassifyDepth"));
+    assert!(r.steps.iter().any(|step| {
+        step.name == "AdaptiveDecision.Shadow" && step.detail.contains("decision_hash=")
+    }));
+    assert!(r.steps.iter().any(|step| {
+        step.name == "AdaptiveParity"
+            && step.detail.contains("match=false")
+            && step.detail.contains("legacy_path_not_admitted")
+    }));
     // pre-gate skipped LLM split
     let split = r.steps.iter().find(|s| s.name == "SplitClauses").unwrap();
     assert!(split.detail.contains("mode=pure"));
@@ -231,6 +239,7 @@ fn arbitrary_capability_path_executes_generically() {
         name: "custom_ping".into(),
         version: "1".into(),
         capability_tags: vec!["custom.arbitrary.ping".into()],
+        effect: None,
         effectful: false,
         idempotent: true,
         dry_run_available: true,
@@ -317,6 +326,7 @@ fn composed_tools_pass_only_declared_sanitized_evidence_to_the_next_step() {
         name: "resolve_customer".into(),
         version: "1".into(),
         capability_tags: vec!["customer.resolve".into()],
+        effect: None,
         effectful: false,
         idempotent: true,
         dry_run_available: true,
@@ -340,6 +350,7 @@ fn composed_tools_pass_only_declared_sanitized_evidence_to_the_next_step() {
         name: "list_invoices".into(),
         version: "1".into(),
         capability_tags: vec!["invoice.list".into()],
+        effect: None,
         effectful: false,
         idempotent: true,
         dry_run_available: true,
@@ -511,6 +522,7 @@ fn tier_zero_deep_path_uses_generic_executor() {
         name: "read_snapshot".into(),
         version: "1".into(),
         capability_tags: vec!["telemetry.snapshot.read".into()],
+        effect: None,
         effectful: false,
         idempotent: true,
         dry_run_available: true,

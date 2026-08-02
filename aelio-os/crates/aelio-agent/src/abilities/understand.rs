@@ -150,21 +150,7 @@ pub fn classify_depth(utterance: &str) -> DepthClass {
     let lower = t.to_lowercase();
 
     // Shallow greetings / thanks / capability questions
-    let shallow_exact = [
-        "hi",
-        "hello",
-        "hey",
-        "thanks",
-        "thank you",
-        "ok",
-        "okay",
-        "bye",
-        "good morning",
-        "good evening",
-        "yo",
-        "sup",
-    ];
-    if shallow_exact.iter().any(|s| lower == *s) {
+    if is_exact_greeting(utterance) {
         return DepthClass {
             depth: Depth::Shallow,
             margin: 0.71,
@@ -220,6 +206,23 @@ pub fn classify_depth(utterance: &str) -> DepthClass {
         margin: 0.45, // thin → escalate in production
         substrate: "semantic".into(),
     }
+}
+
+pub fn is_exact_greeting(utterance: &str) -> bool {
+    matches!(
+        utterance.trim().to_ascii_lowercase().as_str(),
+        "hi" | "hello"
+            | "hey"
+            | "thanks"
+            | "thank you"
+            | "ok"
+            | "okay"
+            | "bye"
+            | "good morning"
+            | "good evening"
+            | "yo"
+            | "sup"
+    )
 }
 
 pub fn classify_depth_prompt_spec() -> PromptSpec {

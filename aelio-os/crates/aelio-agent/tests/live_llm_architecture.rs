@@ -1,3 +1,5 @@
+#![cfg(feature = "direct-provider-tests")]
+
 //! Opt-in live validation for the Rust Aelio architecture.
 //!
 //! Run with:
@@ -104,6 +106,7 @@ fn custom_tool(id: &str) -> ToolSpec {
         name: id.into(),
         version: "1".into(),
         capability_tags: vec![format!("live.{id}")],
+        effect: None,
         effectful: false,
         idempotent: true,
         dry_run_available: true,

@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use aelio_db_query::{
     execute_prism, lower_prism, ColumnKind, Database, HashEmbedder, PrismEmbedder, Value,
 };
-use aelio_query::{parse_prism, recall, CollectionSchema, PrismColKind, PrismColumn, RecallModality};
+use aelio_query::{
+    parse_prism, recall, CollectionSchema, PrismColKind, PrismColumn, RecallModality,
+};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 struct TmpDir(PathBuf);
@@ -38,8 +40,18 @@ fn prompts_table() -> Vec<(&'static str, ColumnKind)> {
 
 fn prism_schema() -> CollectionSchema {
     let mut columns = BTreeMap::new();
-    columns.insert("id".into(), PrismColumn { kind: PrismColKind::Utf8 });
-    columns.insert("body".into(), PrismColumn { kind: PrismColKind::Text });
+    columns.insert(
+        "id".into(),
+        PrismColumn {
+            kind: PrismColKind::Utf8,
+        },
+    );
+    columns.insert(
+        "body".into(),
+        PrismColumn {
+            kind: PrismColKind::Text,
+        },
+    );
     columns.insert(
         "embedding".into(),
         PrismColumn {
@@ -49,9 +61,24 @@ fn prism_schema() -> CollectionSchema {
             },
         },
     );
-    columns.insert("category".into(), PrismColumn { kind: PrismColKind::Utf8 });
-    columns.insert("active".into(), PrismColumn { kind: PrismColKind::Bool });
-    columns.insert("version".into(), PrismColumn { kind: PrismColKind::Int });
+    columns.insert(
+        "category".into(),
+        PrismColumn {
+            kind: PrismColKind::Utf8,
+        },
+    );
+    columns.insert(
+        "active".into(),
+        PrismColumn {
+            kind: PrismColKind::Bool,
+        },
+    );
+    columns.insert(
+        "version".into(),
+        PrismColumn {
+            kind: PrismColKind::Int,
+        },
+    );
     CollectionSchema {
         name: "prompts".into(),
         columns,
@@ -66,7 +93,9 @@ fn prism_text_recall_projects_select_only() {
     let mut db = Database::create(&dir.0).unwrap();
     db.create_table("prompts", &prompts_table()).unwrap();
     let emb = HashEmbedder { dim: 4 };
-    let v1 = emb.embed("hash-4", "how to reply to a customer message").unwrap();
+    let v1 = emb
+        .embed("hash-4", "how to reply to a customer message")
+        .unwrap();
     let v2 = emb.embed("hash-4", "cooking pasta recipes").unwrap();
     db.insert(
         "prompts",
@@ -154,8 +183,5 @@ fn prism_envelope_with_where_and_vector_embed() {
 
     let hits = execute_prism(&db, &q, &models, Some(&emb)).unwrap();
     assert_eq!(hits.len(), 1);
-    assert_eq!(
-        hits[0].fields.get("id"),
-        Some(&Value::Utf8("p1".into()))
-    );
+    assert_eq!(hits[0].fields.get("id"), Some(&Value::Utf8("p1".into())));
 }

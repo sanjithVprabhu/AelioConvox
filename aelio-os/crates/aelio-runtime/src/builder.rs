@@ -10,11 +10,14 @@ use crate::{
     SandboxCase, SandboxFixtureCall, SandboxLimits, SandboxRunner, VerificationCacheEntry,
     VerificationCacheRepository, VerificationVerdict,
 };
+use aelio_db_query::{execute_prism, ColumnKind, Database, Value as DbValue};
 use aelio_prompt::{prompt_artifact_hash, ModelPin, SlotDecl, TemplateRegistry};
+use aelio_query::parse_prism;
 use aelio_sol::{value_hash, SolValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::path::PathBuf;
 use std::time::Instant;
 
 const SELECT_PROMPT: &str = "aelio.template.builder_select@2";
@@ -996,7 +999,6 @@ impl Runtime {
             .iter()
             .map(|input| (input.name.as_str(), input.imprint.as_str()))
             .collect();
-        let query_tokens = tokens(&record.job.spec.draft.description);
         let eligible: Vec<_> = self
             .artifact_repository()?
             .list(tenant, 1_000)
@@ -1024,69 +1026,7 @@ impl Runtime {
                         })
             })
             .collect();
-        let mut scored = eligible
-            .into_iter()
-            .map(|candidate| {
-                let candidate_tokens = tokens(&candidate.artifact.description);
-                let overlap = candidate_tokens.intersection(&query_tokens).count();
-                let similarity = token_cosine(&query_tokens, &candidate_tokens);
-                (candidate, overlap, similarity)
-            })
-            .collect::<Vec<_>>();
-        let mut text_order = scored
-            .iter()
-            .map(|(candidate, overlap, _)| (candidate.artifact.key(), *overlap))
-            .collect::<Vec<_>>();
-        text_order.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
-        let text_ranks = text_order
-            .iter()
-            .enumerate()
-            .map(|(index, (pin, _))| (pin.clone(), u32::try_from(index + 1).unwrap_or(u32::MAX)))
-            .collect::<BTreeMap<_, _>>();
-        let mut vector_order = scored
-            .iter()
-            .map(|(candidate, _, similarity)| (candidate.artifact.key(), *similarity))
-            .collect::<Vec<_>>();
-        vector_order.sort_by(|left, right| {
-            right
-                .1
-                .total_cmp(&left.1)
-                .then_with(|| left.0.cmp(&right.0))
-        });
-        let vector_ranks = vector_order
-            .iter()
-            .enumerate()
-            .map(|(index, (pin, _))| (pin.clone(), u32::try_from(index + 1).unwrap_or(u32::MAX)))
-            .collect::<BTreeMap<_, _>>();
-        let mut measured = scored
-            .drain(..)
-            .map(|(candidate, _, similarity)| {
-                let pin = candidate.artifact.key();
-                let text_rank = text_ranks[&pin];
-                let vector_rank = vector_ranks[&pin];
-                crate::BuildCandidateMeasurement {
-                    pin,
-                    measured_similarity: similarity,
-                    rrf_score: 1.0 / (60.0 + f64::from(text_rank))
-                        + 1.0 / (60.0 + f64::from(vector_rank)),
-                    text_rank,
-                    vector_rank,
-                    interface: candidate.artifact.interface,
-                    description: candidate.artifact.description,
-                }
-            })
-            .collect::<Vec<_>>();
-        measured.sort_by(|left, right| {
-            right
-                .rrf_score
-                .total_cmp(&left.rrf_score)
-                .then_with(|| {
-                    right
-                        .measured_similarity
-                        .total_cmp(&left.measured_similarity)
-                })
-                .then_with(|| left.pin.cmp(&right.pin))
-        });
+        let mut measured = self.prism_rank_build_candidates(tenant, &record.job, eligible)?;
         let limit = if record.job.workspace.widened { 50 } else { 25 };
         measured.truncate(limit);
         let candidates = measured
@@ -1127,6 +1067,180 @@ impl Runtime {
             BuildStage::Select
         };
         commit_progress(jobs, tenant, record, next)
+    }
+
+    fn prism_rank_build_candidates(
+        &self,
+        tenant: &str,
+        job: &BuildJob,
+        mut eligible: Vec<crate::ArtifactRecord>,
+    ) -> Result<Vec<crate::BuildCandidateMeasurement>, RuntimeError> {
+        if eligible.is_empty() {
+            return Ok(Vec::new());
+        }
+        eligible.sort_by_key(|record| record.artifact.key());
+        let scan_cap = if job.workspace.widened { 1_000 } else { 250 };
+        eligible.truncate(scan_cap);
+
+        let embedding_space = if self.inner.host.is_some() {
+            "aelio.embedding.semantic@1"
+        } else {
+            "aelio.embedding.lexical@1"
+        };
+        let embed = |text: &str, suffix: &str| -> Result<Vec<f32>, RuntimeError> {
+            if self.inner.host.is_some() {
+                self.embed_model_text(crate::ModelEmbeddingRequest {
+                    tenant,
+                    text,
+                    model: embedding_space,
+                    correlation: &format!("builder:{}:embed:{suffix}", job.build_id),
+                })
+            } else {
+                Ok(pinned_lexical_embedding(text, 256))
+            }
+        };
+        let query_vector = embed(&job.spec.draft.description, "query")?;
+        let dimension = u16::try_from(query_vector.len()).map_err(|_| {
+            RuntimeError::Invalid("builder embedding dimension exceeds database limit".into())
+        })?;
+        let mut candidate_vectors = BTreeMap::new();
+        for (index, candidate) in eligible.iter().enumerate() {
+            let vector = embed(&candidate.artifact.description, &index.to_string())?;
+            if vector.len() != query_vector.len() {
+                return Err(RuntimeError::Host(format!(
+                    "embedding space `{embedding_space}` changed dimension within one search"
+                )));
+            }
+            candidate_vectors.insert(candidate.artifact.key(), vector);
+        }
+
+        let namespace_hash =
+            blake3::hash(format!("{tenant}:{}:{}", job.build_id, job.revision).as_bytes())
+                .to_hex()
+                .to_string();
+        let namespace = SearchNamespace::create(
+            self.inner
+                .data_dir
+                .join("sandbox")
+                .join("builder-search")
+                .join(&namespace_hash[..32]),
+        )?;
+        let mut database = Database::create(namespace.path())
+            .map_err(|error| RuntimeError::Store(error.to_string()))?;
+        database
+            .create_table(
+                "artifacts",
+                &[
+                    ("pin", ColumnKind::Utf8),
+                    ("description", ColumnKind::Text),
+                    ("embedding", ColumnKind::Vector(dimension)),
+                ],
+            )
+            .map_err(|error| RuntimeError::Store(error.to_string()))?;
+        for candidate in &eligible {
+            let pin = candidate.artifact.key();
+            database
+                .insert(
+                    "artifacts",
+                    &[
+                        ("pin", DbValue::Utf8(pin.clone())),
+                        (
+                            "description",
+                            DbValue::Utf8(candidate.artifact.description.clone()),
+                        ),
+                        (
+                            "embedding",
+                            DbValue::Vector(
+                                candidate_vectors
+                                    .get(&pin)
+                                    .expect("vector created for every candidate")
+                                    .clone(),
+                            ),
+                        ),
+                    ],
+                )
+                .map_err(|error| RuntimeError::Store(error.to_string()))?;
+        }
+        let limit = u64::try_from(eligible.len()).unwrap_or(1_000).max(1);
+        let selected = serde_json::json!(["pin", "description"]);
+        let text_query = parse_prism(&serde_json::json!({
+            "from":"artifacts",
+            "match":{"kind":"text","on":"description","query":job.spec.draft.description},
+            "select":selected,
+            "limit":limit
+        }))
+        .map_err(RuntimeError::Invalid)?;
+        let vector_query = parse_prism(&serde_json::json!({
+            "from":"artifacts",
+            "match":{"kind":"vector","on":"embedding","vector":query_vector},
+            "select":["pin","description"],
+            "limit":limit
+        }))
+        .map_err(RuntimeError::Invalid)?;
+        let fused_query = parse_prism(&serde_json::json!({
+            "from":"artifacts",
+            "match":[
+                {"kind":"text","on":"description","query":job.spec.draft.description},
+                {"kind":"vector","on":"embedding","vector":query_vector},
+                {"kind":"fusion","method":"rrf","rrf_k":60.0}
+            ],
+            "select":["pin","description"],
+            "limit":limit
+        }))
+        .map_err(RuntimeError::Invalid)?;
+        let models = BTreeMap::from([("embedding".into(), embedding_space.into())]);
+        let execute = |query| {
+            execute_prism(&database, query, &models, None)
+                .map_err(|error| RuntimeError::Store(error.to_string()))
+        };
+        let text_hits = execute(&text_query)?;
+        let vector_hits = execute(&vector_query)?;
+        let fused_hits = execute(&fused_query)?;
+        let ranks = |hits: &[aelio_db_query::PrismHit]| {
+            hits.iter()
+                .enumerate()
+                .filter_map(|(index, hit)| match hit.fields.get("pin") {
+                    Some(DbValue::Utf8(pin)) => {
+                        Some((pin.clone(), u32::try_from(index + 1).unwrap_or(u32::MAX)))
+                    }
+                    _ => None,
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let text_ranks = ranks(&text_hits);
+        let vector_ranks = ranks(&vector_hits);
+        let records = eligible
+            .into_iter()
+            .map(|record| (record.artifact.key(), record))
+            .collect::<BTreeMap<_, _>>();
+        let missing_rank = u32::try_from(records.len() + 1).unwrap_or(u32::MAX);
+        let mut measured = Vec::with_capacity(fused_hits.len());
+        for hit in fused_hits {
+            let Some(DbValue::Utf8(pin)) = hit.fields.get("pin") else {
+                return Err(RuntimeError::Store(
+                    "Prism artifact projection lacks pin".into(),
+                ));
+            };
+            let candidate = records
+                .get(pin)
+                .ok_or_else(|| RuntimeError::Store("Prism returned an unknown artifact".into()))?;
+            measured.push(crate::BuildCandidateMeasurement {
+                pin: pin.clone(),
+                embedding_space: embedding_space.into(),
+                measured_similarity: vector_cosine(
+                    &query_vector,
+                    candidate_vectors
+                        .get(pin)
+                        .expect("ranked candidate retains vector"),
+                ),
+                rrf_score: f64::from(hit.score),
+                text_rank: text_ranks.get(pin).copied().unwrap_or(missing_rank),
+                vector_rank: vector_ranks.get(pin).copied().unwrap_or(missing_rank),
+                interface: candidate.artifact.interface.clone(),
+                description: candidate.artifact.description.clone(),
+            });
+        }
+        Ok(measured)
     }
 
     fn prepare_reaction(
@@ -2771,21 +2885,82 @@ fn build_cases(spec: &BuildSpec) -> Result<Vec<SandboxCase>, RuntimeError> {
         .collect()
 }
 
-fn tokens(text: &str) -> BTreeSet<String> {
-    text.to_ascii_lowercase()
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|token| token.len() >= 3)
-        .take(64)
-        .map(str::to_owned)
-        .collect()
-}
-
-fn token_cosine(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64 {
-    if left.is_empty() || right.is_empty() {
+fn vector_cosine(left: &[f32], right: &[f32]) -> f64 {
+    if left.is_empty() || left.len() != right.len() {
         return 0.0;
     }
-    let intersection = left.intersection(right).count() as f64;
-    (intersection / ((left.len() as f64).sqrt() * (right.len() as f64).sqrt())).clamp(0.0, 1.0)
+    let (dot, left_norm, right_norm) = left.iter().zip(right).fold(
+        (0.0_f64, 0.0_f64, 0.0_f64),
+        |(dot, left_norm, right_norm), (left, right)| {
+            let left = f64::from(*left);
+            let right = f64::from(*right);
+            (
+                dot + left * right,
+                left_norm + left * left,
+                right_norm + right * right,
+            )
+        },
+    );
+    if left_norm == 0.0 || right_norm == 0.0 {
+        0.0
+    } else {
+        (dot / (left_norm.sqrt() * right_norm.sqrt())).clamp(-1.0, 1.0)
+    }
+}
+
+/// Offline/test embedding space. Token hashing (rather than byte-position hashing) preserves the
+/// key invariant that unrelated descriptions do not acquire high similarity merely because they
+/// have comparable length. The pin is recorded on every measurement and is never mixed with the
+/// production semantic space.
+fn pinned_lexical_embedding(text: &str, dimension: usize) -> Vec<f32> {
+    let mut vector = vec![0.0_f32; dimension.max(1)];
+    for token in text
+        .to_ascii_lowercase()
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| token.len() >= 2)
+        .take(256)
+    {
+        let digest = blake3::hash(token.as_bytes());
+        let bytes = digest.as_bytes();
+        let index = u16::from_le_bytes([bytes[0], bytes[1]]) as usize % vector.len();
+        let sign = if bytes[2] & 1 == 0 { 1.0 } else { -1.0 };
+        vector[index] += sign;
+    }
+    let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+    if norm > f32::EPSILON {
+        for value in &mut vector {
+            *value /= norm;
+        }
+    }
+    vector
+}
+
+struct SearchNamespace(PathBuf);
+
+impl SearchNamespace {
+    fn create(path: PathBuf) -> Result<Self, RuntimeError> {
+        if path.exists() {
+            std::fs::remove_dir_all(&path).map_err(|error| {
+                RuntimeError::Store(format!(
+                    "cannot clear stale builder search namespace: {error}"
+                ))
+            })?;
+        }
+        std::fs::create_dir_all(&path).map_err(|error| {
+            RuntimeError::Store(format!("cannot create builder search namespace: {error}"))
+        })?;
+        Ok(Self(path))
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for SearchNamespace {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn normalize_need(description: &str, fallback: &str) -> String {

@@ -10,6 +10,7 @@
 //! over a typed ability set and synthesizes terminal speech.**
 
 pub mod abilities;
+pub mod adaptive;
 pub mod blocks;
 pub mod contract;
 pub mod decision_log;
@@ -26,6 +27,11 @@ pub mod storage;
 pub mod tenant;
 pub mod types;
 
+pub use adaptive::{
+    from_tier_lookup, AbstainReasonV1, AdaptiveArtifactHost, AdaptiveArtifactOutputV1,
+    AdaptiveArtifactTurnV1, AdaptiveDecisionEnvelopeV1, AdaptiveDecisionV1, AdaptiveFlowDemandV1,
+    ArtifactCandidateV1, ArtifactPinV1, CandidateReasonV1, CapabilityReasonV1, CapabilityRequestV1,
+};
 pub use contract::{AbilityContract, AbilityPath, FieldSchema, Predicate, TypeSchema};
 pub use runtime::World;
 pub use types::{

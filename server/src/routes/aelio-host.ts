@@ -2,6 +2,7 @@ import { embed } from '@aelio/core/edge';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { secretsMatch } from '../auth.js';
+import { canonicalAgentToolId } from '../aelio-agent-catalog.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 
 const HostRequestSchema = z.object({
@@ -108,7 +109,18 @@ export async function registerAelioHostRoutes(app: FastifyInstance, deps: Runtim
       }
 
       const args = ToolArgsSchema.parse(call.args);
-      const result = await deps.sdkBridge.invokeCorrelated(name, args.args, {
+      const externalNames = deps.sdkBridge
+        .getFunctions()
+        .map((fn) => fn.name)
+        .filter((functionName) => canonicalAgentToolId(functionName) === name);
+      if (externalNames.length !== 1) {
+        throw new Error(
+          externalNames.length === 0
+            ? `No SDK function maps to admitted tool "${name}"`
+            : `Multiple SDK functions map to admitted tool "${name}"`,
+        );
+      }
+      const result = await deps.sdkBridge.invokeCorrelated(externalNames[0]!, args.args, {
         customerId: call.instance_id,
         sessionId: call.instance_id,
         channel: args.context?.channel ?? 'web',
@@ -127,6 +139,19 @@ export async function registerAelioHostRoutes(app: FastifyInstance, deps: Runtim
           error: { code: 'tool_transient', detail: result.error ?? 'SDK invocation failed' },
           usage_tokens: 0,
         };
+      }
+      if (process.env.AELIO_DECISION_LOG === '1') {
+        request.log.info(
+          {
+            corr: call.corr,
+            target: call.target,
+            outputKeys:
+              result.data && typeof result.data === 'object' && !Array.isArray(result.data)
+                ? Object.keys(result.data as Record<string, unknown>).sort()
+                : [],
+          },
+          'Aelio host result shape',
+        );
       }
       return { outcome: 'ok', output: result.data ?? null, usage_tokens: 0 };
     } catch (error) {

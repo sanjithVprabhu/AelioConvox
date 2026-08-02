@@ -128,8 +128,24 @@ fn delivery_reconnects_deduplicate_and_classify_expiry_safely() {
     book.mark_dispatched("ok").unwrap();
     assert_eq!(book.accept_result("ok"), ResultDisposition::Accepted);
     assert_eq!(book.accept_result("ok"), ResultDisposition::Duplicate);
+    book.remove_terminal("ok").unwrap();
+    assert_eq!(
+        book.accept_result("ok"),
+        ResultDisposition::UnknownCorrelation
+    );
     assert_eq!(
         book.accept_result("not-known"),
         ResultDisposition::UnknownCorrelation
     );
+
+    book.prepare(call("cancel", "external"), 300).unwrap();
+    book.cancel_prepared("cancel").unwrap();
+    assert_eq!(
+        book.accept_result("cancel"),
+        ResultDisposition::UnknownCorrelation
+    );
+    book.prepare(call("cannot-cancel", "external"), 300)
+        .unwrap();
+    book.mark_dispatched("cannot-cancel").unwrap();
+    assert!(book.cancel_prepared("cannot-cancel").is_err());
 }

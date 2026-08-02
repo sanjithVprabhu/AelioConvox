@@ -168,6 +168,7 @@ mod tests {
             name: "send_otp".into(),
             version: "1".into(),
             capability_tags: vec!["auth.otp.send".into()],
+            effect: None,
             effectful: true,
             idempotent: false,
             dry_run_available: true,

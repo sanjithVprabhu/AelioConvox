@@ -91,6 +91,26 @@ pub struct CanaryObservation {
     pub ledger_hash: String,
 }
 
+/// Kernel- or reactor-derived agreement for artifact classes whose predicate is a comparison over
+/// ledgered outcomes rather than direct Flow execution (Pathway retrospective match, Procedure
+/// shadow parity, Dataset conformance, and closed Converter validation). This API is intentionally
+/// available only inside the Rust runtime/control plane; it is not a tenant-facing assertion API.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgreementObservation {
+    pub input_hash: String,
+    pub agreed: bool,
+    pub downstream_success: bool,
+    pub guard_violation: bool,
+    pub ledger_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgreementGateResult {
+    pub record: ArtifactRecord,
+    pub evidence: EvidenceSummary,
+}
+
 pub struct GenericArtifactGate {
     store: EmbeddedStore,
 }
@@ -98,6 +118,163 @@ pub struct GenericArtifactGate {
 impl GenericArtifactGate {
     pub fn new(store: EmbeddedStore) -> Self {
         Self { store }
+    }
+
+    /// Apply the generic shadow agreement predicate to a typed, immutable artifact. Duplicate
+    /// input hashes are collapsed by the evidence repository, so replay cannot manufacture the
+    /// 20-distinct-input threshold. Reviewed artifacts still require an identified deployer before
+    /// first consumption; Locked artifacts cannot cross this automatic gate.
+    pub fn gate_agreement(
+        &self,
+        tenant: &str,
+        artifact_id: &str,
+        artifact_version: u32,
+        expected_class: crate::ArtifactClass,
+        observations: &[AgreementObservation],
+        deployer_approval: Option<String>,
+    ) -> Result<AgreementGateResult, RuntimeError> {
+        if observations.is_empty() || observations.len() > 1_000 {
+            return Err(RuntimeError::Invalid(
+                "agreement gate requires 1..=1000 bounded observations".into(),
+            ));
+        }
+        if matches!(
+            expected_class,
+            crate::ArtifactClass::Flow
+                | crate::ArtifactClass::Harness
+                | crate::ArtifactClass::Prompt
+                | crate::ArtifactClass::Imprint
+        ) {
+            return Err(RuntimeError::Invalid(
+                "this artifact class has a dedicated structural/execution gate".into(),
+            ));
+        }
+        let mut artifacts = ArtifactRepository::open(self.store.clone()).map_err(artifact_error)?;
+        let mut record = artifacts
+            .get(tenant, artifact_id, artifact_version)
+            .map_err(artifact_error)?
+            .ok_or_else(|| {
+                RuntimeError::NotFound(format!("artifact {artifact_id}@{artifact_version}"))
+            })?;
+        if record.artifact.class != expected_class {
+            return Err(RuntimeError::Conflict(format!(
+                "agreement gate expected {expected_class:?}, found {:?}",
+                record.artifact.class
+            )));
+        }
+        record.artifact.validate().map_err(artifact_error)?;
+        for pin in &record.artifact.pins.artifacts {
+            let (dependency_id, dependency_version) = parse_pin(pin)?;
+            let dependency = match artifacts
+                .get(tenant, dependency_id, dependency_version)
+                .map_err(artifact_error)?
+            {
+                Some(record) => Some(record),
+                None => artifacts
+                    .get(
+                        crate::mint::VENDOR_ARTIFACT_TENANT,
+                        dependency_id,
+                        dependency_version,
+                    )
+                    .map_err(artifact_error)?,
+            }
+            .ok_or_else(|| RuntimeError::NotFound(format!("artifact dependency `{pin}`")))?;
+            if !matches!(
+                dependency.status,
+                ArtifactStatus::Canary | ArtifactStatus::Promoted
+            ) {
+                return Err(RuntimeError::Conflict(format!(
+                    "artifact dependency `{pin}` is not admitted"
+                )));
+            }
+        }
+        if record.status == ArtifactStatus::Proposed {
+            record = artifacts
+                .transition(
+                    tenant,
+                    artifact_id,
+                    artifact_version,
+                    ArtifactTransition {
+                        expected: ArtifactStatus::Proposed,
+                        trigger: ArtifactTrigger::StructuralPass,
+                        actor: ArtifactActor::System,
+                        evidence_snapshot_hash: Some(record.artifact.hash.clone()),
+                    },
+                )
+                .map_err(artifact_error)?;
+        }
+        if !matches!(
+            record.status,
+            ArtifactStatus::Shadow | ArtifactStatus::Canary | ArtifactStatus::Promoted
+        ) {
+            return Err(RuntimeError::Conflict(format!(
+                "agreement gate requires shadow/canary/promoted status, found {:?}",
+                record.status
+            )));
+        }
+        let mut evidence =
+            ArtifactEvidenceRepository::open(self.store.clone()).map_err(artifact_error)?;
+        for observation in observations {
+            evidence
+                .record(
+                    tenant,
+                    ArtifactEvidence::observed(ArtifactEvidenceDraft {
+                        artifact_id: artifact_id.into(),
+                        artifact_version,
+                        phase: EvidencePhase::Shadow,
+                        input_hash: observation.input_hash.clone(),
+                        agreed: observation.agreed,
+                        downstream_success: observation.downstream_success,
+                        guard_violation: observation.guard_violation,
+                        ledger_hash: observation.ledger_hash.clone(),
+                    })
+                    .map_err(artifact_error)?,
+                )
+                .map_err(artifact_error)?;
+        }
+        let summary = evidence
+            .summary(tenant, artifact_id, artifact_version, EvidencePhase::Shadow)
+            .map_err(artifact_error)?;
+        if record.status == ArtifactStatus::Shadow
+            && summary.distinct_inputs >= 20
+            && summary.validation_rate >= 0.95
+            && summary.guard_violations == 0
+        {
+            let actor = match record.artifact.tier {
+                ArtifactTier::Auto => Some(ArtifactActor::System),
+                ArtifactTier::Reviewed => deployer_approval.map(ArtifactActor::Deployer),
+                ArtifactTier::Locked => None,
+            };
+            if let Some(actor) = actor {
+                let snapshot = serde_json::to_value(&summary)
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+                let snapshot_hash = value_hash(
+                    &aelio_kernel::json_from(&snapshot)
+                        .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                );
+                record = artifacts
+                    .transition(
+                        tenant,
+                        artifact_id,
+                        artifact_version,
+                        ArtifactTransition {
+                            expected: ArtifactStatus::Shadow,
+                            trigger: ArtifactTrigger::ShadowThresholdsMet {
+                                distinct_inputs: summary.distinct_inputs,
+                                validation_rate: summary.validation_rate,
+                                approved: true,
+                            },
+                            actor,
+                            evidence_snapshot_hash: Some(snapshot_hash),
+                        },
+                    )
+                    .map_err(artifact_error)?;
+            }
+        }
+        Ok(AgreementGateResult {
+            record,
+            evidence: summary,
+        })
     }
 
     pub fn gate_flow(
@@ -618,12 +795,16 @@ impl GenericArtifactGate {
             .ok_or_else(|| {
                 RuntimeError::NotFound(format!("artifact {artifact_id}@{artifact_version}"))
             })?;
-        if record.status != ArtifactStatus::Canary {
+        if !matches!(
+            record.status,
+            ArtifactStatus::Canary | ArtifactStatus::Promoted
+        ) {
             return Err(RuntimeError::Conflict(format!(
-                "canary observation requires canary status, found {:?}",
+                "runtime observation requires canary/promoted status, found {:?}",
                 record.status
             )));
         }
+        let observed_status = record.status;
         let mut repository =
             ArtifactEvidenceRepository::open(self.store.clone()).map_err(artifact_error)?;
         repository
@@ -666,7 +847,7 @@ impl GenericArtifactGate {
                 artifact_id,
                 artifact_version,
                 ArtifactTransition {
-                    expected: ArtifactStatus::Canary,
+                    expected: observed_status,
                     trigger,
                     actor: ArtifactActor::System,
                     evidence_snapshot_hash: Some(snapshot_hash),
@@ -682,9 +863,9 @@ impl GenericArtifactGate {
                                 "artifact {artifact_id}@{artifact_version}"
                             ))
                         })?;
-                    if latest.status == ArtifactStatus::Canary {
+                    if latest.status == observed_status {
                         return Err(RuntimeError::Conflict(
-                            "canary lifecycle changed concurrently; retry observation".into(),
+                            "artifact lifecycle changed concurrently; retry observation".into(),
                         ));
                     }
                     latest
@@ -692,22 +873,23 @@ impl GenericArtifactGate {
                 Err(error) => return Err(artifact_error(error)),
             };
         }
-        let promotion_proposal = if should_propose && !should_demote {
-            let snapshot = serde_json::to_value(&summary)
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-            let snapshot_hash = value_hash(
-                &aelio_kernel::json_from(&snapshot)
-                    .map_err(|error| RuntimeError::Internal(error.to_string()))?,
-            );
-            Some(
-                PromotionProposalRepository::open(self.store.clone())
-                    .map_err(artifact_error)?
-                    .propose(tenant, &record.artifact.key(), &snapshot_hash)
-                    .map_err(artifact_error)?,
-            )
-        } else {
-            None
-        };
+        let promotion_proposal =
+            if observed_status == ArtifactStatus::Canary && should_propose && !should_demote {
+                let snapshot = serde_json::to_value(&summary)
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+                let snapshot_hash = value_hash(
+                    &aelio_kernel::json_from(&snapshot)
+                        .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                );
+                Some(
+                    PromotionProposalRepository::open(self.store.clone())
+                        .map_err(artifact_error)?
+                        .propose(tenant, &record.artifact.key(), &snapshot_hash)
+                        .map_err(artifact_error)?,
+                )
+            } else {
+                None
+            };
         Ok(CanaryResult {
             record,
             evidence: summary,

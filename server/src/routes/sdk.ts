@@ -78,6 +78,7 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
     }
 
     const connectionId = randomUUID();
+    let registrationStarted = false;
     sdkBridge.registerPending(connectionId, socket as WebSocket);
 
     app.log.info(
@@ -85,7 +86,7 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
       'SDK websocket connection accepted',
     );
 
-    socket.on('message', (raw: Buffer | ArrayBuffer | Buffer[]) => {
+    socket.on('message', async (raw: Buffer | ArrayBuffer | Buffer[]) => {
       if (raw.toString().length > MAX_WS_FRAME_BYTES) {
         socket.send(
           JSON.stringify({ type: 'error', code: 'frame_too_large', message: 'Message exceeds frame size limit' }),
@@ -121,6 +122,46 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
 
       const message = result.data;
       if (message.type === 'register') {
+        if (registrationStarted) {
+          socket.send(
+            JSON.stringify({
+              type: 'error',
+              code: 'duplicate_register',
+              message: 'This SDK connection already started catalog registration',
+            }),
+          );
+          socket.close(1008, 'Duplicate registration');
+          return;
+        }
+        registrationStarted = true;
+        if (deps.aelioRuntime) {
+          try {
+            await deps.aelioRuntime.pushAgentCatalog(
+              buildAgentCatalog(
+                config.name,
+                message,
+                { memoryEnabled: config.memory.enabled },
+              ),
+            );
+          } catch (error: unknown) {
+            app.log.error(
+              { err: error, connectionId },
+              'SDK registration contained a flow rejected by the Rust runtime',
+            );
+            socket.send(
+              JSON.stringify({
+                type: 'error',
+                code: 'aelio_flow_rejected',
+                message: error instanceof Error ? error.message : 'Rust runtime rejected flow',
+              }),
+            );
+            socket.close(1008, 'Aelio flow rejected');
+            return;
+          }
+        }
+        // Switch the callable host snapshot only after Rust has atomically admitted the exact
+        // tools and compiled flow pins. A rejected upgrade therefore leaves the previous SDK
+        // connection authoritative instead of creating a version-drift window.
         sdkBridge.register({
           id: connectionId,
           socket: socket as WebSocket,
@@ -136,45 +177,6 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           connectedAt: Date.now(),
           lastHeartbeatAt: Date.now(),
         });
-        if (deps.aelioRuntime) {
-          void Promise.all([
-            deps.aelioRuntime.pushAgentCatalog(
-              buildAgentCatalog(
-                config.name,
-                message,
-                { memoryEnabled: config.memory.enabled },
-              ),
-            ),
-            ...(
-            (message.flows ?? [])
-              .filter((flow) => flow.aelio)
-              .map((flow) =>
-                deps.aelioRuntime!.pushFlow({
-                  tenant: config.name,
-                  flow_id: flow.aelio!.flow_id,
-                  flow_rev: flow.aelio!.flow_rev,
-                  program: flow.aelio!.program,
-                  targets: flow.aelio!.targets,
-                  prompts: flow.aelio!.prompts,
-                }),
-              )
-            ),
-          ]).catch((error: unknown) => {
-            app.log.error(
-              { err: error, connectionId },
-              'SDK registration contained a flow rejected by the Rust runtime',
-            );
-            socket.send(
-              JSON.stringify({
-                type: 'error',
-                code: 'aelio_flow_rejected',
-                message: error instanceof Error ? error.message : 'Rust runtime rejected flow',
-              }),
-            );
-            socket.close(1008, 'Aelio flow rejected');
-            sdkBridge.unregister(connectionId);
-          });
-        }
         app.log.info(
           {
             connectionId,

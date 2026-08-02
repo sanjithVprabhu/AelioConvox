@@ -27,7 +27,7 @@ Aelio ships as three cleanly separated pieces that talk to each other over WebSo
 | **Chat SDK** | [`@aelio/chat`](chat) (npm) | Your website | Embeddable chat widget → `/widget/ws`. |
 | **Aelio Server** | Docker `aelio-server` | Your infra | Agentic harness — pull the image, point SDKs at it. |
 
-> 📖 **Docker + SDK quickstart:** [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) · Full manual: [docs/MANUAL.md](docs/MANUAL.md)
+> 📖 **Docker + SDK quickstart:** [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) · Full manual: [docs/MANUAL.md](docs/MANUAL.md) · [Production runbook](docs/operations/AELIO_PRODUCTION_RUNBOOK.md)
 
 ## Repository layout
 

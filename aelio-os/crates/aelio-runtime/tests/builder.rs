@@ -167,12 +167,24 @@ fn root_builder_resumes_pending_oracle_and_rejects_semantically_wrong_compositio
         .advance_build("tenant-a", &job.build_id, None)
         .unwrap();
     let BuildAction::Oracle {
+        job: select_job,
         reaction: select_reaction,
         ..
     } = select
     else {
         panic!("select must be a persisted oracle action");
     };
+    assert_eq!(
+        select_job.workspace.candidate_measurements[0].embedding_space,
+        "aelio.embedding.lexical@1"
+    );
+    assert!(select_job.workspace.candidate_measurements[0].text_rank > 0);
+    assert!(select_job.workspace.candidate_measurements[0].vector_rank > 0);
+    let search_root = directory.path().join("sandbox/builder-search");
+    assert!(
+        !search_root.exists() || search_root.read_dir().unwrap().next().is_none(),
+        "ephemeral Prism search namespace must be destroyed"
+    );
 
     // Reopening the process returns the exact same pending reaction, never a new paid call.
     drop(runtime);
