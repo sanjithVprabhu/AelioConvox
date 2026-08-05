@@ -189,10 +189,14 @@ Acceptance: a contract declaring `out.value` that returns without writing it fai
 
 ### Phase 2 — Freeze the Call ISA
 
+**Status:** **done (2026-08-05)** — frozen table + registration in `aelio-kernel/src/call_isa.rs`.
+Seed library Call ids ⊆ allowed set; every seed admits under `frozen_admission_registry()`. F-026
+covers `tool.invoke@1` host-proxy rules. Pure stdlib (`math.*` / `logic.*` / `collection.*`) remains
+in `stdlib_targets.rs` and is part of the allowed surface via `is_allowed_call_id`.
+
 **Goal:** the T3 surface every harness composes against. **Freeze before Phase 3.**
 
-Current registered targets are demo stubs: `express.say@1`, `understand.classify@1`,
-`memory.search@1`, `context.attach@1`, `compute.hold@1`, `tool.act_stub@1`, `harness.invoke@1`.
+~~Current registered targets are demo stubs…~~ Superseded by `FROZEN_CALL_SPECS` + pure stdlib.
 
 **2.1 — Process / spawn family** (the part your model needs most):
 

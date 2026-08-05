@@ -35,6 +35,25 @@ Legend: `[x]` done + test-proven · `[~]` partial · `[ ]` open
 | M-16 | Identity = Mother §4.3 canonical Sol + BLAKE3 (`aelio_sol::value_hash`), never SHA-256 | `harness_contract::contract_identity` | `identity_stable_and_blake3_hex` (64 hex) | [x] |
 | M-17 | Admission: compile + budget ceiling + Call registration + effect rank | `admit_contract` / `store_library_admitted` | `phase1_every_library_contract_admits_with_seed_registry` | [x] |
 | M-18 | Backward-compatible store load for pre-Phase-1 3-field rows | `from_store_value` defaults | `phase1_legacy_three_field_rows_load_with_defaults` | [x] |
+| M-19 | **Phase 2 Call ISA freeze** — process/tool/llm/memory/conv families | `aelio-kernel/src/call_isa.rs` | 11 `call_isa::*` tests green | [x] |
+| M-20 | `tool.invoke@1` default stub + F-026 host-proxy rules (Once + §12.4) | `call_isa` + `FLAGS.md` | `tool_invoke_stub_echoes` | [x] |
+| M-21 | Prompt artifact pins (BLAKE3) required by every `llm.*` Call | `PromptArtifactPin` / `seed_prompt_pins` | `llm_requires_known_prompt_id` | [x] |
+| M-22 | `harness.invoke_seq@1` deterministic ordered fan-out/join | `call_isa::register_invoke_family` | `invoke_seq_runs_children_in_order` | [x] |
+| M-23 | `harness.describe@1` / `list@1` over seed catalog | catalog from `sol_harness_library` | `describe_and_list_from_catalog` | [x] |
+
+### M-19 detail — frozen Call families
+
+| Family | Ids (representative) |
+|---|---|
+| Process | `harness.invoke@1`, `spawn@1`, `invoke_seq@1`, `return@1`, `exit_up@1`, `fresh@1`, `describe@1`, `list@1` |
+| Tool | `tool.invoke@1` (canonical), `tool.act_stub@1` (legacy seed) |
+| LLM | `llm.classify@1` … `llm.rerank@1` (9 ids; all require `prompt_id`) |
+| Memory | `memory.search/write/forget@1`, `page.*`, `slot.*`, `context.attach@1` |
+| Conv | `express.say@1`, `understand.classify@1`, `compute.hold@1` |
+| Pure stdlib | `math.*`, `logic.*`, `collection.*` via `stdlib_targets` (allowed by `is_allowed_call_id`) |
+
+Exit criterion met: Call table written down with effect + arg schema; seed library admits under
+`frozen_admission_registry`; nested `harness.invoke@1` still green.
 
 ### M-15 detail — Phase 1 fields
 

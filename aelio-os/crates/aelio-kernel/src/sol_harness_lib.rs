@@ -1957,19 +1957,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// Registry that covers every Call id used by the seed library (stubs only).
+/// Registry that covers every Call id used by the seed library.
 ///
-/// Used for Phase 1 admission: compile + registered targets + effect rank. Nested execution still
-/// needs [`registry_with_harness_invoke`] / [`registry_with_proper_stack_flows`].
+/// Phase 2: delegates to the frozen Call ISA ([`crate::call_isa::frozen_admission_registry`]).
+/// Nested execution still works for invoke; proper registered-flow stacks still use
+/// [`registry_with_proper_stack_flows`].
 pub fn seed_admission_registry() -> Registry {
-    let mut r = crate::stdlib_targets::registry_with_p0_stdlib();
-    r.register("harness.invoke@1", EffectClass::Read, |_| {
-        Ok(SolValue::map::<_, &str>([]))
-    });
-    for flow_id in [FLOW_STACK_LEAF_C, FLOW_STACK_MID_B, FLOW_STACK_TOP_A] {
-        r.register(flow_id, EffectClass::Read, |_| Ok(SolValue::map::<_, &str>([])));
-    }
-    r
+    crate::call_isa::frozen_admission_registry()
 }
 
 /// Leaf Call stubs used by seed harnesses (no nested invoke).

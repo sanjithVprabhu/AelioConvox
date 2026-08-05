@@ -261,3 +261,21 @@ above storage.
 ad-hoc SHA-256 over serde_json (checklist G1-2 / plan O2).
 **Status:** decided; Phase 1 contract model implements sealed identity + admission. Phase 2 freezes
 the Call ISA next. No Mother amendment required for Path B itself.
+
+### F-026 — `tool.invoke@1` host proxy vs Mother §12.4 intent/dispatch/result
+**What:** Phase 2 freezes `tool.invoke@1` as the sole tool Call id (replacing ad-hoc `tool.act_stub@1`
+for new work). Mother §12.4 requires effectful Calls to carry ledgered intent→dispatch→result and
+Once-wrap for idempotency. A Sol program body must never open a network socket or SDK channel
+directly — only the runtime-owned proxy may.
+**Options:** (a) kernel registers a deterministic stub that echos `{tool_id,args,corr}` for tests,
+and production hosts **re-register** the same id with a reverse-channel adapter that ledgers
+intent/result and refuses bare re-execution without Once; (b) amend Mother to allow body-local
+tool dispatch (rejected — weakens §12.4); (c) invent a new op class outside Call (rejected — Call
+is the T3 surface).
+**Recommendation → (a).** Implemented in `aelio-kernel/src/call_isa.rs`: default stub is External +
+deadline-compliant + policy-tagged; host swap is the production path. Harness authors must wrap
+`tool.invoke@1` in `Once` when the tool is effectful. `tool.act_stub@1` remains registered for
+seed-library back-compat only.
+**Open:** whether host re-registration needs a dedicated `Registry::replace_host_target` API vs
+building the registry only once at boot with the real adapter. Prefer boot-time injection for now.
+`PROVISIONAL` until agent-host wires the reverse channel.

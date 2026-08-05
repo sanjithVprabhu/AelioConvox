@@ -6,6 +6,7 @@
 //! refusing divergence (§12.3, G2). Depends only on `aelio-sol`.
 
 pub mod bag;
+pub mod call_isa;
 pub mod compute;
 pub mod continuation;
 pub mod cutover;
@@ -87,6 +88,12 @@ pub use tool_workflows::{
 pub use tree_replay::{
     replay_tree, run_pure_sol_recorded, workflow_average_recorded, ChildExecutionRecord,
     TreeExecutionRecord, TreeReplayReport,
+};
+pub use call_isa::{
+    catalog_from_seed_library, frozen_admission_registry, frozen_call_ids, frozen_spec,
+    is_allowed_call_id, register_frozen_call_isa, seed_prompt_pins, CallSpec, CatalogEntry,
+    PromptArtifactPin, FROZEN_CALL_SPECS, HARNESS_CALL_MAX_DEPTH, LLM_FAMILY, MEMORY_FAMILY,
+    PROC_FAMILY, TOOL_FAMILY,
 };
 pub use harness_contract::{
     admit_contract, collect_call_ids, contract_identity, effect_from_str, effect_to_str,
