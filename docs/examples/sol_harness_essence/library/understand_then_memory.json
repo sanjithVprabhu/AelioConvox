@@ -1,0 +1,60 @@
+{
+  "id": "understand_then_memory",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "id": {
+            "lit": "understand_intent"
+          },
+          "utterance": {
+            "pull": "utterance"
+          }
+        },
+        "id": "harness.invoke@1",
+        "into": "classified",
+        "nid": "intent",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "id": {
+            "lit": "memory_attach"
+          },
+          "utterance": {
+            "pull": "utterance"
+          }
+        },
+        "id": "harness.invoke@1",
+        "into": "mem",
+        "nid": "mem",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "pull": "classified.out.text"
+              },
+              {
+                "lit": " / "
+              },
+              {
+                "pull": "mem.out.text"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "wrap",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Combine understand_intent + memory_attach"
+}

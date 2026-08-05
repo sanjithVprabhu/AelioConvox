@@ -1,0 +1,11 @@
+{
+  "nid": "root",
+  "op": "Call",
+  "id": "math.sum@1",
+  "args": {
+    "list": {
+      "pull": "values"
+    }
+  },
+  "into": "sum"
+}

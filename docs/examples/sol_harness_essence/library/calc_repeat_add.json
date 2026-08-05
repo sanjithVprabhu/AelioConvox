@@ -1,0 +1,63 @@
+{
+  "id": "calc_repeat_add",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "seed",
+        "op": "Const",
+        "v": {
+          "n": 0
+        }
+      },
+      {
+        "body": {
+          "args": {
+            "v": {
+              "args": [
+                {
+                  "pull": "n"
+                },
+                {
+                  "lit": 1
+                }
+              ],
+              "fn": "add"
+            }
+          },
+          "id": "compute.hold@1",
+          "into": "n",
+          "nid": "inc",
+          "op": "Call"
+        },
+        "max_iter": 5,
+        "nid": "loop",
+        "op": "Loop",
+        "while": {
+          "args": [
+            {
+              "pull": "n"
+            },
+            {
+              "lit": 3
+            }
+          ],
+          "fn": "lt"
+        }
+      },
+      {
+        "args": {
+          "text": {
+            "lit": "repeat-add done"
+          }
+        },
+        "id": "express.say@1",
+        "into": "msg",
+        "nid": "say",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Deterministic repeat: Loop adds 1 to n three times (control Loop)"
+}

@@ -1,4 +1,4 @@
-//! aelio CLI (§26) — `compile`, `run`, `replay`, `trace`, Flow Forge, Mint.
+//! aelio CLI (§26) — `compile`, `run`, `replay`, `trace`, Flow Forge, Mint, library.
 //!
 //! ```text
 //! aelio compile <plan.json>
@@ -8,9 +8,14 @@
 //! aelio forge --prompt "..." [--tenant demo] [--mock|--openai] [--store DIR] [--out flow.json]
 //! aelio mint  --objective "..." --slot name:str!pii --out field:type [--store DIR] [--id id]
 //! aelio mint-recall --tenant TENANT --need "..." --store DIR
+//! aelio library validate [--path DIR]
+//! aelio library install  --tenant TENANT [--path DIR] [--store DIR]
 //! ```
 
-use aelio_kernel::{compile, replay, Instance, Ledger, Registry, TurnOutcome};
+use aelio_kernel::{
+    compile, install_from_manifest, replay, resolve_library_root, Instance, Ledger, Registry,
+    TurnOutcome,
+};
 use aelio_prompt::{MintRequest, MintSlot};
 use aelio_runtime::{
     forge_flow, mint_prompt, open_mint_shelf, recall_minted, ForgeRequest, MockDrafter,
@@ -33,11 +38,13 @@ fn run() -> Result<(), String> {
     let mut args = env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() {
         return Err(
-            "usage: aelio <compile|run|replay|trace|hash|imprint|forge|mint|mint-recall> …".into(),
+            "usage: aelio <compile|run|replay|trace|hash|imprint|forge|mint|mint-recall|library> …"
+                .into(),
         );
     }
     let cmd = args.remove(0);
     match cmd.as_str() {
+        "library" => run_library(&args)?,
         "compile" => {
             let path = args.first().ok_or("usage: aelio compile <plan.json>")?;
             let text = read(path)?;
@@ -141,6 +148,129 @@ fn run() -> Result<(), String> {
         }
         other => {
             return Err(format!("unknown command `{other}`"));
+        }
+    }
+    Ok(())
+}
+
+fn run_library(args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        return Err(
+            "usage: aelio library <validate|install|list> [--path DIR] [--tenant T] [--store DIR]"
+                .into(),
+        );
+    }
+    let sub = args[0].as_str();
+    let path = flag(args, "--path").map(std::path::PathBuf::from);
+    let root = match path {
+        Some(p) => {
+            if !p.join("manifest.json").exists() {
+                return Err(format!("no manifest.json under {}", p.display()));
+            }
+            p
+        }
+        None => resolve_library_root(None)
+            .ok_or_else(|| "could not find aelio-os/library (pass --path)".to_string())?,
+    };
+
+    match sub {
+        "validate" => {
+            let text = fs::read_to_string(root.join("manifest.json"))
+                .map_err(|e| format!("read manifest: {e}"))?;
+            let man: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| format!("parse manifest: {e}"))?;
+            let harnesses = man
+                .get("harnesses")
+                .and_then(|v| v.as_array())
+                .ok_or("manifest.harnesses missing")?;
+            let mut ok = 0usize;
+            let mut fail = 0usize;
+            for h in harnesses {
+                let id = h.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                let rel = h.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                let prog_path = root.join(rel).join("program.sol.json");
+                let contract_path = root.join(rel).join("contract.json");
+                if !prog_path.exists() && !contract_path.exists() {
+                    println!("FAIL {id}: no program.sol.json or contract.json");
+                    fail += 1;
+                    continue;
+                }
+                let program_text = if contract_path.exists() {
+                    let ctext = fs::read_to_string(&contract_path)
+                        .map_err(|e| format!("read {}: {e}", contract_path.display()))?;
+                    let c: serde_json::Value = serde_json::from_str(&ctext)
+                        .map_err(|e| format!("parse contract {id}: {e}"))?;
+                    serde_json::to_string(c.get("program").unwrap_or(&serde_json::Value::Null))
+                        .unwrap_or_default()
+                } else {
+                    fs::read_to_string(&prog_path)
+                        .map_err(|e| format!("read {}: {e}", prog_path.display()))?
+                };
+                match compile(&program_text) {
+                    Ok(node) => {
+                        println!("ok   {id} nid={}", node.nid);
+                        ok += 1;
+                    }
+                    Err(e) => {
+                        println!("FAIL {id}: {} — {}", e.code.code(), e.detail);
+                        fail += 1;
+                    }
+                }
+            }
+            println!("validate: ok={ok} fail={fail} root={}", root.display());
+            if fail > 0 {
+                return Err(format!("{fail} harness(es) failed validation"));
+            }
+        }
+        "install" => {
+            let tenant = flag(args, "--tenant").unwrap_or("default");
+            let store_dir = flag(args, "--store");
+            let mut store: Box<dyn aelio_store::Store + Send> = if let Some(dir) = store_dir {
+                Box::new(
+                    aelio_store::EmbeddedStore::open(dir)
+                        .map_err(|e| format!("open store `{dir}`: {e:?}"))?,
+                )
+            } else {
+                Box::new(aelio_store::MemoryStore::new())
+            };
+            let report = install_from_manifest(store.as_mut(), tenant, &root)
+                .map_err(|e| format!("install: {e:?}"))?;
+            for e in &report.entries {
+                println!(
+                    "{:?}  {}@{}  {}",
+                    e.outcome, e.id, e.version, e.content_hash
+                );
+            }
+            println!(
+                "install: entries={} tenant={tenant} root={}",
+                report.entries.len(),
+                root.display()
+            );
+            if store_dir.is_none() {
+                println!("note: no --store DIR; installed into ephemeral memory only");
+            }
+        }
+        "list" => {
+            let text = fs::read_to_string(root.join("manifest.json"))
+                .map_err(|e| format!("read manifest: {e}"))?;
+            let man: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| format!("parse manifest: {e}"))?;
+            if let Some(arr) = man.get("harnesses").and_then(|v| v.as_array()) {
+                for h in arr {
+                    println!(
+                        "{}@{}  {}",
+                        h.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
+                        h.get("version").and_then(|v| v.as_str()).unwrap_or("?"),
+                        h.get("path").and_then(|v| v.as_str()).unwrap_or("")
+                    );
+                }
+                println!("list: {} harness(es)", arr.len());
+            }
+        }
+        other => {
+            return Err(format!(
+                "unknown library subcommand `{other}` (validate|install|list)"
+            ));
         }
     }
     Ok(())

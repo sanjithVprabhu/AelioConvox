@@ -1,0 +1,81 @@
+{
+  "id": "help_router",
+  "program": {
+    "else": {
+      "nid": "qr_path",
+      "op": "Seq",
+      "steps": [
+        {
+          "args": {
+            "id": {
+              "lit": "quick_reply"
+            },
+            "utterance": {
+              "pull": "utterance"
+            }
+          },
+          "id": "harness.invoke@1",
+          "into": "child",
+          "nid": "inv_qr",
+          "op": "Call"
+        },
+        {
+          "args": {
+            "text": {
+              "pull": "child.out.text"
+            }
+          },
+          "id": "express.say@1",
+          "into": "out",
+          "nid": "norm_qr",
+          "op": "Call"
+        }
+      ]
+    },
+    "nid": "root",
+    "op": "Branch",
+    "pred": {
+      "args": [
+        {
+          "pull": "utterance"
+        },
+        {
+          "lit": "help"
+        }
+      ],
+      "fn": "contains"
+    },
+    "then": {
+      "nid": "with_mem",
+      "op": "Seq",
+      "steps": [
+        {
+          "args": {
+            "id": {
+              "lit": "memory_attach"
+            },
+            "utterance": {
+              "pull": "utterance"
+            }
+          },
+          "id": "harness.invoke@1",
+          "into": "child",
+          "nid": "inv_mem",
+          "op": "Call"
+        },
+        {
+          "args": {
+            "text": {
+              "pull": "child.out.text"
+            }
+          },
+          "id": "express.say@1",
+          "into": "out",
+          "nid": "norm_mem",
+          "op": "Call"
+        }
+      ]
+    }
+  },
+  "summary": "Branch: help→memory_attach, else→quick_reply"
+}

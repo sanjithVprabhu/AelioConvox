@@ -1,0 +1,38 @@
+{
+  "nid": "root",
+  "op": "Guard",
+  "check": "entry",
+  "invariant": {
+    "fn": "eq",
+    "args": [
+      {
+        "pull": "confirmed"
+      },
+      {
+        "lit": true
+      }
+    ]
+  },
+  "body": {
+    "nid": "act",
+    "op": "Once",
+    "body": {
+      "nid": "send",
+      "op": "Call",
+      "id": "tool.act_stub@1",
+      "args": {},
+      "into": "sent"
+    }
+  },
+  "on_violation": {
+    "nid": "ask",
+    "op": "Call",
+    "id": "express.say@1",
+    "args": {
+      "text": {
+        "lit": "Please confirm to continue."
+      }
+    },
+    "into": "out"
+  }
+}

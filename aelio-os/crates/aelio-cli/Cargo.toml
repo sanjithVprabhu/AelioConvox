@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 aelio-sol = { workspace = true }
 aelio-kernel = { workspace = true }
+aelio-store = { workspace = true }
 aelio-prompt = { workspace = true }
 aelio-runtime = { path = "../aelio-runtime" }
 serde_json = { workspace = true }

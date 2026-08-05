@@ -1,0 +1,36 @@
+{
+  "id": "tool.run_once",
+  "version": "1.0.0",
+  "origin": "vendor",
+  "description": "Idempotent single tool invocation under Once (tool.act_stub@1).",
+  "input_imprint": "aelio.any@1",
+  "output_imprint": "aelio.any@1",
+  "errors": [],
+  "effect": "external",
+  "determinism": "ledgered_nondeterministic",
+  "suspendability": "never",
+  "children_allow": [],
+  "budgets": {
+    "steps": 50,
+    "calls": 8,
+    "wall_ms": 5000,
+    "depth": 4,
+    "fanout": 2
+  },
+  "program": {
+    "nid": "root",
+    "op": "Once",
+    "body": {
+      "nid": "send",
+      "op": "Call",
+      "id": "tool.act_stub@1",
+      "args": {},
+      "into": "sent"
+    }
+  },
+  "tags": [
+    "tools",
+    "p0"
+  ],
+  "required_capabilities": []
+}

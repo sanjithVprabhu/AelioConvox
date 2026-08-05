@@ -1,0 +1,40 @@
+{
+  "id": "parent_waits_on_child",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "id": {
+            "lit": "calc_sum_gate"
+          }
+        },
+        "id": "harness.invoke@1",
+        "into": "child",
+        "nid": "delegate",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "lit": "Parent got child: "
+              },
+              {
+                "pull": "child.msg.text"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "report",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Call another harness, wait for its output, then continue"
+}

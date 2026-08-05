@@ -1,0 +1,83 @@
+{
+  "id": "semantic_ack",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "text": {
+            "pull": "utterance"
+          }
+        },
+        "id": "understand.classify@1",
+        "into": "intent",
+        "nid": "classify",
+        "op": "Call"
+      },
+      {
+        "else": {
+          "nid": "clarify",
+          "op": "Seq",
+          "steps": [
+            {
+              "args": {
+                "text": {
+                  "lit": "Can you say that in one short sentence?"
+                }
+              },
+              "id": "express.say@1",
+              "into": "ask1",
+              "nid": "ask",
+              "op": "Call"
+            },
+            {
+              "into": "reply1",
+              "nid": "wait",
+              "op": "Park",
+              "until": {
+                "kind": "event"
+              }
+            },
+            {
+              "args": {
+                "text": {
+                  "lit": "Thanks — noted."
+                }
+              },
+              "id": "express.say@1",
+              "into": "out",
+              "nid": "ack",
+              "op": "Call"
+            }
+          ]
+        },
+        "nid": "route",
+        "op": "Branch",
+        "pred": {
+          "args": [
+            {
+              "pull": "intent.label"
+            },
+            {
+              "lit": "clear"
+            }
+          ],
+          "fn": "eq"
+        },
+        "then": {
+          "args": {
+            "text": {
+              "lit": "Got it — clear request."
+            }
+          },
+          "id": "express.say@1",
+          "into": "out",
+          "nid": "ack_clear",
+          "op": "Call"
+        }
+      }
+    ]
+  },
+  "summary": "Classify a sentence, branch, ask if unclear, park for user, then acknowledge."
+}

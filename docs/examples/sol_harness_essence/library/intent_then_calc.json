@@ -1,0 +1,105 @@
+{
+  "id": "intent_then_calc",
+  "program": {
+    "else": {
+      "nid": "do_intent",
+      "op": "Seq",
+      "steps": [
+        {
+          "args": {
+            "id": {
+              "lit": "understand_intent"
+            },
+            "utterance": {
+              "pull": "utterance"
+            }
+          },
+          "id": "harness.invoke@1",
+          "into": "child",
+          "nid": "inv_intent",
+          "op": "Call"
+        },
+        {
+          "args": {
+            "text": {
+              "pull": "child.out.text"
+            }
+          },
+          "id": "express.say@1",
+          "into": "out",
+          "nid": "norm_intent",
+          "op": "Call"
+        }
+      ]
+    },
+    "nid": "root",
+    "op": "Branch",
+    "pred": {
+      "args": [
+        {
+          "args": [
+            {
+              "pull": "utterance"
+            },
+            {
+              "lit": "sum"
+            }
+          ],
+          "fn": "contains"
+        },
+        {
+          "args": [
+            {
+              "pull": "utterance"
+            },
+            {
+              "lit": "add"
+            }
+          ],
+          "fn": "contains"
+        },
+        {
+          "args": [
+            {
+              "pull": "utterance"
+            },
+            {
+              "lit": "calc"
+            }
+          ],
+          "fn": "contains"
+        }
+      ],
+      "fn": "or"
+    },
+    "then": {
+      "nid": "do_calc",
+      "op": "Seq",
+      "steps": [
+        {
+          "args": {
+            "id": {
+              "lit": "calc_sum_gate"
+            }
+          },
+          "id": "harness.invoke@1",
+          "into": "child",
+          "nid": "inv_calc",
+          "op": "Call"
+        },
+        {
+          "args": {
+            "text": {
+              "pull": "child.msg.text"
+            }
+          },
+          "id": "express.say@1",
+          "into": "out",
+          "nid": "norm_calc",
+          "op": "Call"
+        }
+      ]
+    }
+  },
+  "summary": "Branch: calc keywords→calc_sum_gate, else→understand_intent"
+}

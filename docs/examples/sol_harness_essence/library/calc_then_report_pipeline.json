@@ -1,0 +1,54 @@
+{
+  "id": "calc_then_report_pipeline",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "id": {
+            "lit": "calc_sum_gate"
+          }
+        },
+        "id": "harness.invoke@1",
+        "into": "sum_child",
+        "nid": "c1",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "id": {
+            "lit": "calc_mul_div"
+          }
+        },
+        "id": "harness.invoke@1",
+        "into": "mul_child",
+        "nid": "c2",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "pull": "sum_child.msg.text"
+              },
+              {
+                "lit": " + "
+              },
+              {
+                "pull": "mul_child.msg.text"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "wrap",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Pipeline: calc_sum_gate then calc_mul_div then report"
+}

@@ -88,6 +88,8 @@ pub struct Instance<'r> {
     instance_id: String,
     pins: ContinuationPins,
     event_key_secret: [u8; 32],
+    /// Phase 2.7: once set, effectful Call dispatch is refused (cancel-safe).
+    cancelled: bool,
 }
 
 impl<'r> Instance<'r> {
@@ -107,7 +109,17 @@ impl<'r> Instance<'r> {
                 flow_rev: "0".into(),
             },
             event_key_secret: [0; 32],
+            cancelled: false,
         }
+    }
+
+    /// Mark the instance cancelled. Subsequent effectful Call dispatch fails closed.
+    pub fn mark_cancelled(&mut self) {
+        self.cancelled = true;
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
     }
 
     /// Construct an instance over an injected durable store. Production callers must use this
@@ -188,6 +200,7 @@ impl<'r> Instance<'r> {
                 flow_rev: config.flow_rev,
             },
             event_key_secret: config.event_key_secret,
+            cancelled: false,
         })
     }
 
@@ -233,6 +246,7 @@ impl<'r> Instance<'r> {
                 tenant: self.tenant.clone(),
                 instance_id: self.instance_id.clone(),
                 nondet_seq: 0,
+                cancelled: self.cancelled,
             };
             let mut exec = Executor::new(initial_bag, &mut backend);
             let outcome = exec.run(&self.program);
@@ -273,6 +287,7 @@ impl<'r> Instance<'r> {
                 tenant: self.tenant.clone(),
                 instance_id: self.instance_id.clone(),
                 nondet_seq: 0,
+                cancelled: self.cancelled,
             };
             let mut exec = Executor::new(parked.bag, &mut backend);
             let outcome = exec.resume(&self.program, parked.frames);
@@ -489,6 +504,8 @@ struct LiveBackend<'a> {
     instance_id: String,
     /// Monotonic per-turn counter mixed into generated nondet values (uuid uniqueness).
     nondet_seq: u64,
+    /// When true, refuse write/external dispatch (Phase 2.7 cancel-safe).
+    cancelled: bool,
 }
 
 impl LiveBackend<'_> {
@@ -537,7 +554,18 @@ impl Backend for LiveBackend<'_> {
             None
         };
         // §12.4: write/external Calls are intent-ledgered before dispatch.
+        // Phase 2.7: cancel-safe — no new effectful dispatch after cancellation intent.
         if effect.is_effectful() {
+            if self.cancelled {
+                return Err(ErrV1::new(
+                    ReasonCode::Policy,
+                    nid,
+                    format!(
+                        "instance `{}` cancelled: no post-cancel dispatch of `{id}`",
+                        self.instance_id
+                    ),
+                ));
+            }
             self.append(
                 Some(nid),
                 "call_intent",

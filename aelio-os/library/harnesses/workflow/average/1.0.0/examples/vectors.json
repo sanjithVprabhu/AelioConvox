@@ -1,0 +1,18 @@
+{
+  "success": {
+    "input": {
+      "values": [
+        2,
+        4,
+        6
+      ]
+    },
+    "expect_average": 4
+  },
+  "empty": {
+    "input": {
+      "values": []
+    },
+    "expect_error_text": "Math.EmptyInput"
+  }
+}

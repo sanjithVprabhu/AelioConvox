@@ -1,0 +1,41 @@
+{
+  "id": "string_contains_gate",
+  "program": {
+    "else": {
+      "args": {
+        "text": {
+          "lit": "Tell me how I can help."
+        }
+      },
+      "id": "express.say@1",
+      "into": "out",
+      "nid": "no",
+      "op": "Call"
+    },
+    "nid": "root",
+    "op": "Branch",
+    "pred": {
+      "args": [
+        {
+          "pull": "utterance"
+        },
+        {
+          "lit": "help"
+        }
+      ],
+      "fn": "contains"
+    },
+    "then": {
+      "args": {
+        "text": {
+          "lit": "I can help with that."
+        }
+      },
+      "id": "express.say@1",
+      "into": "out",
+      "nid": "yes",
+      "op": "Call"
+    }
+  },
+  "summary": "Branch if utterance contains the word help"
+}

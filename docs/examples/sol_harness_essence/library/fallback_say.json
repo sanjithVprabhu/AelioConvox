@@ -1,0 +1,32 @@
+{
+  "id": "fallback_say",
+  "program": {
+    "nid": "root",
+    "op": "Fallback",
+    "steps": [
+      {
+        "args": {
+          "text": {
+            "lit": "primary line"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "primary",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "lit": "backup line"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "backup",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Fallback: try primary express, else backup line (Fallback control)"
+}

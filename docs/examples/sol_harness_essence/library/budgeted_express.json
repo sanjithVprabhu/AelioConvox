@@ -1,0 +1,21 @@
+{
+  "id": "budgeted_express",
+  "program": {
+    "body": {
+      "args": {
+        "text": {
+          "lit": "budgeted hello"
+        }
+      },
+      "id": "express.say@1",
+      "into": "out",
+      "nid": "say",
+      "op": "Call"
+    },
+    "calls": 2,
+    "ms": 5000,
+    "nid": "root",
+    "op": "Budget"
+  },
+  "summary": "Budget-capped express Call (calls=2, ms=5000)"
+}

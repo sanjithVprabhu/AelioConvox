@@ -1,0 +1,60 @@
+{
+  "id": "greet_then_quick_reply",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "id": {
+            "lit": "greet_then_offer_help"
+          },
+          "utterance": {
+            "pull": "utterance"
+          }
+        },
+        "id": "harness.invoke@1",
+        "into": "greeted",
+        "nid": "greet_child",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "id": {
+            "lit": "quick_reply"
+          },
+          "utterance": {
+            "pull": "utterance"
+          }
+        },
+        "id": "harness.invoke@1",
+        "into": "child",
+        "nid": "qr",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "pull": "greeted.out.text"
+              },
+              {
+                "lit": " | "
+              },
+              {
+                "pull": "child.out.text"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "wrap",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Combine greet_then_offer_help + quick_reply"
+}

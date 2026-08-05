@@ -1,0 +1,94 @@
+{
+  "id": "calc_sum_gate",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "seed",
+        "op": "Const",
+        "v": {
+          "a": 7,
+          "b": 5,
+          "c": 3
+        }
+      },
+      {
+        "args": {
+          "v": {
+            "args": [
+              {
+                "pull": "a"
+              },
+              {
+                "pull": "b"
+              }
+            ],
+            "fn": "add"
+          }
+        },
+        "id": "compute.hold@1",
+        "into": "partial",
+        "nid": "add_ab",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "v": {
+            "args": [
+              {
+                "pull": "partial"
+              },
+              {
+                "pull": "c"
+              }
+            ],
+            "fn": "add"
+          }
+        },
+        "id": "compute.hold@1",
+        "into": "sum",
+        "nid": "add_c",
+        "op": "Call"
+      },
+      {
+        "else": {
+          "args": {
+            "text": {
+              "lit": "sum is small"
+            }
+          },
+          "id": "express.say@1",
+          "into": "msg",
+          "nid": "say_small",
+          "op": "Call"
+        },
+        "nid": "gate",
+        "op": "Branch",
+        "pred": {
+          "args": [
+            {
+              "pull": "sum"
+            },
+            {
+              "lit": 10
+            }
+          ],
+          "fn": "gt"
+        },
+        "then": {
+          "args": {
+            "text": {
+              "lit": "sum is large"
+            }
+          },
+          "id": "express.say@1",
+          "into": "msg",
+          "nid": "say_large",
+          "op": "Call"
+        }
+      }
+    ]
+  },
+  "summary": "Add three numbers, branch on whether sum > 10, emit a short status."
+}

@@ -1,0 +1,40 @@
+{
+  "id": "proper_sol_stack_mid_b",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "utterance": {
+            "pull": "utterance"
+          }
+        },
+        "id": "flow.stack_leaf_c@1",
+        "into": "child",
+        "nid": "call_c",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "lit": "mid-B after "
+              },
+              {
+                "pull": "child.out.text"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "after_c",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Proper Sol mid B — Call pinned flow.stack_leaf_c@1, wait, report"
+}

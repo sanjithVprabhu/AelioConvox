@@ -1,0 +1,15 @@
+{
+  "id": "apologize_closed",
+  "program": {
+    "args": {
+      "text": {
+        "lit": "I can't complete that safely. Please rephrase or ask for a human."
+      }
+    },
+    "id": "express.say@1",
+    "into": "out",
+    "nid": "root",
+    "op": "Call"
+  },
+  "summary": "Fail-closed user message when the OS cannot proceed safely"
+}

@@ -105,12 +105,66 @@ pub struct TurnRuntime<'a> {
     pub inline_learning_enabled: bool,
     pub legacy_flow_execution_enabled: bool,
     pub(crate) durable_memory_enabled: bool,
+    /// Session harness stack + context pages (Conductor architecture).
+    pub harness: &'a mut crate::harness::HarnessSession,
+    /// Stored (default) vs Hardcoded benchmark control for starter bodies.
+    pub harness_play_mode: crate::harness::HarnessPlayMode,
 }
 
 impl<'a> TurnRuntime<'a> {
     pub fn run(&mut self, input: &TurnInput) -> TurnResult {
         let mut steps = Vec::new();
         let mut llm_calls = 0u32;
+
+        // ── Harness stack control (before waiting-child resume) ────────────
+        let stack_control = crate::harness::detect_stack_control(&input.utterance);
+        match stack_control {
+            crate::harness::StackControl::Fresh => {
+                self.harness.fresh(true);
+                steps.push(TurnTraceStep {
+                    name: "Harness.Stack".into(),
+                    detail: "fresh: cleared stack and context pages; ceiling=conductor".into(),
+                });
+            }
+            crate::harness::StackControl::ExitUp => {
+                let popped = self.harness.exit_up();
+                steps.push(TurnTraceStep {
+                    name: "Harness.Stack".into(),
+                    detail: match popped {
+                        Some(frame) => format!(
+                            "exit_up: popped {} remaining_depth={}",
+                            frame.harness_id,
+                            self.harness.stack.len()
+                        ),
+                        None => "exit_up: stack already empty".into(),
+                    },
+                });
+            }
+            crate::harness::StackControl::Stay => {
+                if let Some(top) = self.harness.top() {
+                    steps.push(TurnTraceStep {
+                        name: "Harness.Stack".into(),
+                        detail: format!(
+                            "stay: top={} waiting={}",
+                            top.harness_id, top.waiting
+                        ),
+                    });
+                }
+            }
+        }
+        let abandon_waiting_child = matches!(
+            stack_control,
+            crate::harness::StackControl::Fresh | crate::harness::StackControl::ExitUp
+        );
+
+        // Waiting child owns the utterance when Stay (no active runtime subject yet).
+        if !abandon_waiting_child {
+            if let Some(top) = self.harness.waiting_child().cloned() {
+                if top.harness_id == crate::harness::WAIT_FOR_USER_ID {
+                    return self.resume_wait_for_user(input, steps);
+                }
+            }
+        }
 
         let active_runtime_subject = match self
             .adaptive_artifact_host
@@ -128,7 +182,15 @@ impl<'a> TurnRuntime<'a> {
                 );
             }
         };
-        if active_runtime_subject {
+        if active_runtime_subject && abandon_waiting_child {
+            if let Some(top) = self.harness.top_mut() {
+                top.waiting = false;
+            }
+            steps.push(TurnTraceStep {
+                name: "Harness.Stack".into(),
+                detail: "abandoned waiting runtime subject due to exit_up/fresh; not resumed".into(),
+            });
+        } else if active_runtime_subject {
             if self.matching_flow(&input.utterance, input).is_some() {
                 steps.push(TurnTraceStep {
                     name: "FlowGate.Defer".into(),
@@ -411,15 +473,14 @@ impl<'a> TurnRuntime<'a> {
                 .unwrap_or(&input.utterance)
         };
 
-        // Authored flow triggers outrank semantic depth. A trigger such as "log in" may be
-        // lexically shallow, but it is still a control-rail activation and must not fall through
-        // to greeting/banter handling.
+        // Authored *executable* flow triggers outrank semantic depth. Semantic-only catalog flows
+        // (no lowering) are install guidance, not OS apps — skip them and continue triage.
         if let Some(flow) = self.matching_flow(clause, input) {
-            steps.push(TurnTraceStep {
-                name: "FlowMatch".into(),
-                detail: format!("matched {} before semantic triage", flow.id),
-            });
             if let Some(artifact) = self.registry.flow_artifact(&flow.id).cloned() {
+                steps.push(TurnTraceStep {
+                    name: "FlowMatch".into(),
+                    detail: format!("matched installed {} before semantic triage", flow.id),
+                });
                 let margin = crate::blocks::flow::trigger_surface_match(
                     clause,
                     &flow.activation.trigger_surface,
@@ -446,7 +507,33 @@ impl<'a> TurnRuntime<'a> {
                 result.llm_calls = result.llm_calls.saturating_add(llm_calls);
                 return result;
             }
-            if !self.legacy_flow_execution_enabled {
+            if flow.lowering.is_none() {
+                if !self.legacy_flow_execution_enabled {
+                    steps.push(TurnTraceStep {
+                        name: "FlowMatch".into(),
+                        detail: format!(
+                            "skipped semantic-only {} (no lowering; not part of install)",
+                            flow.id
+                        ),
+                    });
+                } else {
+                    // Demo/parity: authored flow steps still run when legacy execution is enabled.
+                    steps.push(TurnTraceStep {
+                        name: "FlowMatch".into(),
+                        detail: format!(
+                            "matched {} before semantic triage (legacy; no lowering)",
+                            flow.id
+                        ),
+                    });
+                    let mut result = self.activate_flow(input, &flow, &mut steps);
+                    result.llm_calls = result.llm_calls.saturating_add(llm_calls);
+                    return result;
+                }
+            } else if !self.legacy_flow_execution_enabled {
+                steps.push(TurnTraceStep {
+                    name: "FlowMatch".into(),
+                    detail: format!("matched {} before semantic triage", flow.id),
+                });
                 let effectful =
                     flow.steps
                         .iter()
@@ -480,10 +567,15 @@ impl<'a> TurnRuntime<'a> {
                     steps,
                     "This flow has not passed runtime materialization and admission yet.",
                 );
+            } else {
+                steps.push(TurnTraceStep {
+                    name: "FlowMatch".into(),
+                    detail: format!("matched {} before semantic triage", flow.id),
+                });
+                let mut result = self.activate_flow(input, &flow, &mut steps);
+                result.llm_calls = result.llm_calls.saturating_add(llm_calls);
+                return result;
             }
-            let mut result = self.activate_flow(input, &flow, &mut steps);
-            result.llm_calls = result.llm_calls.saturating_add(llm_calls);
-            return result;
         }
 
         let caps = state_node
@@ -772,6 +864,16 @@ impl<'a> TurnRuntime<'a> {
                 }
             }
             LookupTier::Tier3 => {
+                // Conductor chooses a starter harness; escalate alone falls through to ProposePath.
+                if let Some(result) =
+                    self.run_conductor_starters(input, clause, &sh, &mut steps, llm_calls)
+                {
+                    return result;
+                }
+                steps.push(TurnTraceStep {
+                    name: "Conductor".into(),
+                    detail: "escalate: cold ProposePath over declared abilities".into(),
+                });
                 // LLM proposes path over declared abilities
                 let before = self.provider_llm_calls();
                 let ability_ids = self.registry.abilities.keys().cloned().collect::<Vec<_>>();
@@ -1041,7 +1143,13 @@ impl<'a> TurnRuntime<'a> {
         }
 
         // Greeting structure is authored and deterministic; only output-oriented banter needs
-        // synthesis intelligence. Do not pay a model to rediscover the built-in safe greeting path.
+        // synthesis intelligence. Prefer Conductor starter harnesses over rediscovering a path.
+        if let Some(mut result) =
+            self.run_conductor_starters(input, &input.utterance, &sh, steps, 0)
+        {
+            result.depth = Depth::Shallow;
+            return result;
+        }
         let path = propose_path_greeting();
         let mut llm_calls = 0;
         steps.push(TurnTraceStep {
@@ -1184,6 +1292,13 @@ impl<'a> TurnRuntime<'a> {
         steps: &mut Vec<TurnTraceStep>,
         llm_calls: &mut u32,
     ) -> TurnResult {
+        // Conductor owns ambiguous boundary turns when a starter harness fits.
+        if let Some(mut result) =
+            self.run_conductor_starters(input, &input.utterance, "boundary", steps, *llm_calls)
+        {
+            result.depth = Depth::Boundary;
+            return result;
+        }
         let recalled = self
             .turn_recall
             .retrieve(
@@ -2639,6 +2754,671 @@ impl<'a> TurnRuntime<'a> {
                 reply
             })
     }
+
+    /// Conductor selects a starter harness. Returns `None` only for Escalate (cold ProposePath).
+    fn run_conductor_starters(
+        &mut self,
+        input: &TurnInput,
+        clause: &str,
+        situation_hash: &str,
+        steps: &mut Vec<TurnTraceStep>,
+        llm_calls: u32,
+    ) -> Option<TurnResult> {
+        use crate::harness::{
+            select_starter_harness, HarnessPlayMode, StarterHarness, CONDUCTOR_ID,
+        };
+
+        if self.harness.is_empty() {
+            self.harness.push(CONDUCTOR_ID, false);
+            steps.push(TurnTraceStep {
+                name: "Conductor".into(),
+                detail: "stack empty: pushed conductor as ceiling".into(),
+            });
+        }
+
+        let choice = select_starter_harness(clause, self.harness);
+        steps.push(TurnTraceStep {
+            name: "Conductor.Select".into(),
+            detail: format!("harness={} — {}", choice.id(), choice.description()),
+        });
+
+        match choice {
+            StarterHarness::Escalate => None,
+            other => {
+                let harness_id = other.id();
+                match self.harness_play_mode {
+                    HarnessPlayMode::Hardcoded => Some(match other {
+                        StarterHarness::QuickReply => self.exec_quick_reply(
+                            input,
+                            clause,
+                            situation_hash,
+                            steps,
+                            llm_calls,
+                        ),
+                        StarterHarness::UnderstandIntent => self.exec_understand_intent(
+                            input,
+                            clause,
+                            situation_hash,
+                            steps,
+                            llm_calls,
+                        ),
+                        StarterHarness::WaitForUser => self.exec_wait_for_user(
+                            input,
+                            clause,
+                            situation_hash,
+                            steps,
+                            llm_calls,
+                        ),
+                        StarterHarness::MemoryAttach => self.exec_memory_attach(
+                            input,
+                            clause,
+                            situation_hash,
+                            steps,
+                            llm_calls,
+                        ),
+                        StarterHarness::Escalate => unreachable!(),
+                    }),
+                    HarnessPlayMode::Stored => {
+                        Some(self.play_stored_starter(harness_id, input, clause, situation_hash, steps, llm_calls))
+                    }
+                }
+            }
+        }
+    }
+
+    fn play_stored_starter(
+        &mut self,
+        harness_id: &str,
+        input: &TurnInput,
+        clause: &str,
+        situation_hash: &str,
+        steps: &mut Vec<TurnTraceStep>,
+        llm_calls: u32,
+    ) -> TurnResult {
+        let Some(program) = self.tenant.harness_programs.get(harness_id).cloned() else {
+            steps.push(TurnTraceStep {
+                name: "Harness.Load".into(),
+                detail: format!("missing program id={harness_id}"),
+            });
+            return rejected_path_turn(
+                std::mem::take(steps),
+                "The selected harness program is not installed in the catalog library.",
+            );
+        };
+        if let Err(error) = program.validate() {
+            steps.push(TurnTraceStep {
+                name: "Harness.Load".into(),
+                detail: format!("invalid program id={harness_id} reason={error}"),
+            });
+            return rejected_path_turn(
+                std::mem::take(steps),
+                "The installed harness program failed validation.",
+            );
+        }
+        steps.push(TurnTraceStep {
+            name: "Harness.Load".into(),
+            detail: format!(
+                "id={} version={} hash={}",
+                program.id,
+                program.version,
+                program.content_hash()
+            ),
+        });
+        self.play_harness_program(&program, input, clause, situation_hash, steps, llm_calls)
+    }
+
+    fn play_harness_program(
+        &mut self,
+        program: &crate::harness::HarnessProgramV1,
+        input: &TurnInput,
+        clause: &str,
+        situation_hash: &str,
+        steps: &mut Vec<TurnTraceStep>,
+        mut llm_calls: u32,
+    ) -> TurnResult {
+        use crate::harness::{
+            AttachSource, EvidenceSource, HarnessStepV1, QuerySource, CONDUCTOR_ID, WAIT_FOR_USER_ID,
+        };
+
+        let waiting = program
+            .steps
+            .iter()
+            .any(|step| matches!(step, HarnessStepV1::AskAndWait { .. }));
+        self.harness.push(&program.id, waiting);
+
+        let mut reply: Option<Utterance> = None;
+        let mut memory_snippet: Option<String> = None;
+        let mut memory_claims: Vec<crate::abilities::judge::EvidenceClaim> = Vec::new();
+        let mut opened_loop = false;
+        let mut suspended = false;
+
+        for step in &program.steps {
+            match step {
+                HarnessStepV1::PromptQuickReply { evidence_from } => {
+                    steps.push(TurnTraceStep {
+                        name: "Harness.Op".into(),
+                        detail: format!("prompt.quick_reply evidence={evidence_from:?}"),
+                    });
+                    let notes = self
+                        .harness
+                        .pages
+                        .get(CONDUCTOR_ID)
+                        .map(|page| page.notes.join("; "))
+                        .unwrap_or_default();
+                    let is_tiny_greeting = ["hi", "hello", "hey", "thanks", "thank you", "ok", "okay"]
+                        .iter()
+                        .any(|w| clause.trim().eq_ignore_ascii_case(w));
+                    let (utterance, calls) = match evidence_from {
+                        EvidenceSource::GreetingTemplateOrPageUser
+                            if is_tiny_greeting && notes.is_empty() =>
+                        {
+                            (
+                                express::greeting_template(self.personality, None, &[], false, false),
+                                0u32,
+                            )
+                        }
+                        EvidenceSource::GreetingTemplateOrPageUser
+                        | EvidenceSource::PageAndUser => {
+                            let evidence = if !memory_claims.is_empty() {
+                                None
+                            } else if notes.is_empty() {
+                                Some(format!(
+                                    "User said: {clause}. Reply briefly in one or two sentences."
+                                ))
+                            } else {
+                                Some(format!(
+                                    "Context notes: {notes}\nUser said: {clause}. Reply briefly in one or two sentences."
+                                ))
+                            };
+                            let before = self.provider_llm_calls();
+                            let utterance = if !memory_claims.is_empty() {
+                                self.synthesize_claims_or_fallback(&memory_claims)
+                            } else {
+                                self.synthesize_or_fallback(evidence.as_deref().unwrap_or(clause))
+                            };
+                            let calls = self.provider_llm_calls().saturating_sub(before) as u32;
+                            (utterance, calls)
+                        }
+                        EvidenceSource::UserOnly => {
+                            let evidence =
+                                format!("User said: {clause}. Reply briefly in one or two sentences.");
+                            let before = self.provider_llm_calls();
+                            let utterance = self.synthesize_or_fallback(&evidence);
+                            let calls = self.provider_llm_calls().saturating_sub(before) as u32;
+                            (utterance, calls)
+                        }
+                    };
+                    llm_calls = llm_calls.saturating_add(calls);
+                    reply = Some(utterance);
+                    self.harness.attach_note(
+                        CONDUCTOR_ID,
+                        format!("quick_reply handled: {}", truncate_for_note(clause, 80)),
+                    );
+                }
+                HarnessStepV1::PromptUnderstandIntent => {
+                    steps.push(TurnTraceStep {
+                        name: "Harness.Op".into(),
+                        detail: "prompt.understand_intent".into(),
+                    });
+                    let catalog = crate::harness::starter_catalog()
+                        .iter()
+                        .map(|(h, desc)| format!("{}: {desc}", h.id()))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let evidence = format!(
+                        "Classify the user's goal and suggest the next best starter harness.\n\
+                         Available:\n{catalog}\n\
+                         User: {clause}\n\
+                         Reply in 1-3 short sentences: what they want, and which harness fits (or one clarifying question)."
+                    );
+                    let before = self.provider_llm_calls();
+                    reply = Some(self.synthesize_or_fallback(&evidence));
+                    llm_calls = llm_calls
+                        .saturating_add(self.provider_llm_calls().saturating_sub(before) as u32);
+                    self.harness.attach_note(
+                        CONDUCTOR_ID,
+                        format!("intent noted: {}", truncate_for_note(clause, 120)),
+                    );
+                }
+                HarnessStepV1::MemorySearch { query_from } => {
+                    steps.push(TurnTraceStep {
+                        name: "Harness.Op".into(),
+                        detail: format!("memory.search query={query_from:?}"),
+                    });
+                    let query = match query_from {
+                        QuerySource::UserUtterance => clause,
+                    };
+                    let recalled = match self.turn_recall.retrieve(
+                        &input.user_id,
+                        query,
+                        Utc::now().timestamp_millis(),
+                        RecallBudget::default(),
+                    ) {
+                        Ok(recalled) => recalled,
+                        Err(_) => Default::default(),
+                    };
+                    memory_claims = recalled.claims.clone();
+                    memory_snippet = Some(if recalled.claims.is_empty() {
+                        format!("no memory hit for: {}", truncate_for_note(query, 80))
+                    } else {
+                        recalled
+                            .claims
+                            .iter()
+                            .take(3)
+                            .map(|claim| crate::ops::pure::value_to_json(&claim.value).to_string())
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    });
+                }
+                HarnessStepV1::ContextAttach { from } => {
+                    steps.push(TurnTraceStep {
+                        name: "Harness.Op".into(),
+                        detail: format!("context.attach from={from:?}"),
+                    });
+                    match from {
+                        AttachSource::LastMemorySnippet => {
+                            let snippet = memory_snippet
+                                .clone()
+                                .unwrap_or_else(|| "no memory snippet".into());
+                            self.harness.attach_note(
+                                CONDUCTOR_ID,
+                                format!("memory: {}", truncate_for_note(&snippet, 200)),
+                            );
+                        }
+                    }
+                }
+                HarnessStepV1::AskAndWait { question_template } => {
+                    steps.push(TurnTraceStep {
+                        name: "Harness.Op".into(),
+                        detail: "ask_and_wait".into(),
+                    });
+                    steps.push(TurnTraceStep {
+                        name: "Harness.wait_for_user".into(),
+                        detail: "parked waiting for next user message".into(),
+                    });
+                    self.harness
+                        .ensure_page(&program.id)
+                        .slots
+                        .insert("pending_prompt".into(), serde_json::json!(clause));
+                    let truncated = truncate_for_note(clause, 60);
+                    let question = if clause.contains('?') {
+                        "Got it — what else should I know before we continue?".to_string()
+                    } else {
+                        question_template.replace("{clause}", &truncated)
+                    };
+                    self.harness
+                        .attach_note(CONDUCTOR_ID, "wait_for_user parked");
+                    reply = Some(express::ask("clarification", Some(&question), 1));
+                    opened_loop = true;
+                    suspended = true;
+                    // Keep waiting frame; do not pop.
+                    return TurnResult {
+                        reply: reply.expect("ask_and_wait sets reply"),
+                        llm_calls,
+                        tier: Some(LookupTier::Tier3),
+                        depth: Depth::Deep,
+                        steps: std::mem::take(steps),
+                        opened_loop,
+                        new_state: None,
+                        active_flow: None,
+                        situation_hash: Some(situation_hash.into()),
+                        proposal_id: None,
+                        suspended,
+                    };
+                }
+                HarnessStepV1::ReturnFinish | HarnessStepV1::ReturnParent => {
+                    steps.push(TurnTraceStep {
+                        name: "Harness.Op".into(),
+                        detail: match step {
+                            HarnessStepV1::ReturnFinish => "return.finish",
+                            _ => "return.parent",
+                        }
+                        .into(),
+                    });
+                    let _ = self.harness.exit_up();
+                    break;
+                }
+            }
+        }
+
+        // Compatibility step names for existing golden / harness tests.
+        if program.id == crate::harness::QUICK_REPLY_ID {
+            steps.push(TurnTraceStep {
+                name: "Harness.quick_reply".into(),
+                detail: "played from stored program".into(),
+            });
+        } else if program.id == crate::harness::UNDERSTAND_INTENT_ID {
+            steps.push(TurnTraceStep {
+                name: "Harness.understand_intent".into(),
+                detail: "played from stored program".into(),
+            });
+        } else if program.id == crate::harness::MEMORY_ATTACH_ID {
+            steps.push(TurnTraceStep {
+                name: "Harness.memory_attach".into(),
+                detail: "played from stored program".into(),
+            });
+        } else if program.id == WAIT_FOR_USER_ID {
+            steps.push(TurnTraceStep {
+                name: "Harness.wait_for_user".into(),
+                detail: "played from stored program".into(),
+            });
+        }
+
+        TurnResult {
+            reply: reply.unwrap_or_else(|| {
+                express::template("harness_empty", "Done.", &IndexMap::new())
+            }),
+            llm_calls,
+            tier: Some(LookupTier::Tier3),
+            depth: Depth::Deep,
+            steps: std::mem::take(steps),
+            opened_loop,
+            new_state: None,
+            active_flow: None,
+            situation_hash: Some(situation_hash.into()),
+            proposal_id: None,
+            suspended,
+        }
+    }
+
+    fn exec_quick_reply(
+        &mut self,
+        input: &TurnInput,
+        clause: &str,
+        situation_hash: &str,
+        steps: &mut Vec<TurnTraceStep>,
+        llm_calls: u32,
+    ) -> TurnResult {
+        use crate::harness::{CONDUCTOR_ID, QUICK_REPLY_ID};
+
+        self.harness.push(QUICK_REPLY_ID, false);
+        let notes = self
+            .harness
+            .pages
+            .get(CONDUCTOR_ID)
+            .map(|page| page.notes.join("; "))
+            .unwrap_or_default();
+        steps.push(TurnTraceStep {
+            name: "Harness.quick_reply".into(),
+            detail: format!("notes_len={}", notes.len()),
+        });
+
+        // Short greetings stay model-free via authored template (Conductor still selected).
+        let is_tiny_greeting = ["hi", "hello", "hey", "thanks", "thank you", "ok", "okay"]
+            .iter()
+            .any(|w| clause.trim().eq_ignore_ascii_case(w));
+
+        let (reply, calls) = if is_tiny_greeting && notes.is_empty() {
+            (
+                express::greeting_template(self.personality, None, &[], false, false),
+                0u32,
+            )
+        } else {
+            let evidence = if notes.is_empty() {
+                format!("User said: {clause}. Reply briefly in one or two sentences.")
+            } else {
+                format!(
+                    "Context notes: {notes}\nUser said: {clause}. Reply briefly in one or two sentences."
+                )
+            };
+            let before = self.provider_llm_calls();
+            let reply = self.synthesize_or_fallback(&evidence);
+            let calls = self.provider_llm_calls().saturating_sub(before) as u32;
+            (reply, calls)
+        };
+        self.harness.attach_note(
+            CONDUCTOR_ID,
+            format!("quick_reply handled: {}", truncate_for_note(clause, 80)),
+        );
+        let _ = self.harness.exit_up(); // pop quick_reply; conductor remains
+        let _ = input;
+        TurnResult {
+            reply,
+            llm_calls: llm_calls.saturating_add(calls),
+            tier: Some(LookupTier::Tier3),
+            depth: Depth::Deep,
+            steps: std::mem::take(steps),
+            opened_loop: false,
+            new_state: None,
+            active_flow: None,
+            situation_hash: Some(situation_hash.into()),
+            proposal_id: None,
+            suspended: false,
+        }
+    }
+
+    fn exec_understand_intent(
+        &mut self,
+        input: &TurnInput,
+        clause: &str,
+        situation_hash: &str,
+        steps: &mut Vec<TurnTraceStep>,
+        llm_calls: u32,
+    ) -> TurnResult {
+        use crate::harness::{CONDUCTOR_ID, UNDERSTAND_INTENT_ID};
+
+        self.harness.push(UNDERSTAND_INTENT_ID, false);
+        let catalog = crate::harness::starter_catalog()
+            .iter()
+            .map(|(h, desc)| format!("{}: {desc}", h.id()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let evidence = format!(
+            "Classify the user's goal and suggest the next best starter harness.\n\
+             Available:\n{catalog}\n\
+             User: {clause}\n\
+             Reply in 1-3 short sentences: what they want, and which harness fits (or one clarifying question)."
+        );
+        steps.push(TurnTraceStep {
+            name: "Harness.understand_intent".into(),
+            detail: "classify + suggest next harness".into(),
+        });
+        let before = self.provider_llm_calls();
+        let reply = self.synthesize_or_fallback(&evidence);
+        let calls = self.provider_llm_calls().saturating_sub(before) as u32;
+        self.harness.attach_note(
+            CONDUCTOR_ID,
+            format!("intent noted: {}", truncate_for_note(clause, 120)),
+        );
+        let _ = self.harness.exit_up();
+        let _ = input;
+        TurnResult {
+            reply,
+            llm_calls: llm_calls.saturating_add(calls),
+            tier: Some(LookupTier::Tier3),
+            depth: Depth::Deep,
+            steps: std::mem::take(steps),
+            opened_loop: false,
+            new_state: None,
+            active_flow: None,
+            situation_hash: Some(situation_hash.into()),
+            proposal_id: None,
+            suspended: false,
+        }
+    }
+
+    fn exec_wait_for_user(
+        &mut self,
+        _input: &TurnInput,
+        clause: &str,
+        situation_hash: &str,
+        steps: &mut Vec<TurnTraceStep>,
+        llm_calls: u32,
+    ) -> TurnResult {
+        use crate::harness::{CONDUCTOR_ID, WAIT_FOR_USER_ID};
+
+        self.harness.push(WAIT_FOR_USER_ID, true);
+        self.harness
+            .ensure_page(WAIT_FOR_USER_ID)
+            .slots
+            .insert("pending_prompt".into(), serde_json::json!(clause));
+        let question = if clause.contains('?') {
+            "Got it — what else should I know before we continue?".to_string()
+        } else {
+            format!(
+                "Before I continue with “{}”, what should I clarify first?",
+                truncate_for_note(clause, 60)
+            )
+        };
+        steps.push(TurnTraceStep {
+            name: "Harness.wait_for_user".into(),
+            detail: "parked waiting for next user message".into(),
+        });
+        self.harness
+            .attach_note(CONDUCTOR_ID, "wait_for_user parked");
+        TurnResult {
+            reply: express::ask("clarification", Some(&question), 1),
+            llm_calls,
+            tier: Some(LookupTier::Tier3),
+            depth: Depth::Deep,
+            steps: std::mem::take(steps),
+            opened_loop: true,
+            new_state: None,
+            active_flow: None,
+            situation_hash: Some(situation_hash.into()),
+            proposal_id: None,
+            suspended: true,
+        }
+    }
+
+    fn resume_wait_for_user(
+        &mut self,
+        input: &TurnInput,
+        mut steps: Vec<TurnTraceStep>,
+    ) -> TurnResult {
+        use crate::harness::{CONDUCTOR_ID, WAIT_FOR_USER_ID};
+
+        let prior = self
+            .harness
+            .pages
+            .get(WAIT_FOR_USER_ID)
+            .and_then(|page| page.slots.get("pending_prompt"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        steps.push(TurnTraceStep {
+            name: "Harness.wait_for_user.resume".into(),
+            detail: format!("prior={} answer={}", truncate_for_note(&prior, 40), truncate_for_note(&input.utterance, 40)),
+        });
+        self.harness.attach_note(
+            CONDUCTOR_ID,
+            format!(
+                "user answered wait: {}",
+                truncate_for_note(&input.utterance, 120)
+            ),
+        );
+        // Clear waiting frame.
+        if let Some(top) = self.harness.top_mut() {
+            if top.harness_id == WAIT_FOR_USER_ID {
+                top.waiting = false;
+            }
+        }
+        let _ = self.harness.exit_up();
+        let evidence = if prior.is_empty() {
+            format!(
+                "User answered a clarifying wait: {}. Acknowledge briefly and say next step.",
+                input.utterance
+            )
+        } else {
+            format!(
+                "Earlier context: {prior}\nUser clarified: {}\nAcknowledge briefly and propose the next step.",
+                input.utterance
+            )
+        };
+        let before = self.provider_llm_calls();
+        let reply = self.synthesize_or_fallback(&evidence);
+        let calls = self.provider_llm_calls().saturating_sub(before) as u32;
+        TurnResult {
+            reply,
+            llm_calls: calls,
+            tier: Some(LookupTier::Tier3),
+            depth: Depth::Deep,
+            steps,
+            opened_loop: false,
+            new_state: None,
+            active_flow: None,
+            situation_hash: None,
+            proposal_id: None,
+            suspended: false,
+        }
+    }
+
+    fn exec_memory_attach(
+        &mut self,
+        input: &TurnInput,
+        clause: &str,
+        situation_hash: &str,
+        steps: &mut Vec<TurnTraceStep>,
+        llm_calls: u32,
+    ) -> TurnResult {
+        use crate::harness::{CONDUCTOR_ID, MEMORY_ATTACH_ID};
+
+        self.harness.push(MEMORY_ATTACH_ID, false);
+        let recalled = match self.turn_recall.retrieve(
+            &input.user_id,
+            clause,
+            chrono::Utc::now().timestamp_millis(),
+            RecallBudget::default(),
+        ) {
+            Ok(recalled) => recalled,
+            Err(_) => Default::default(),
+        };
+        let snippet = if recalled.claims.is_empty() {
+            format!("no memory hit for: {}", truncate_for_note(clause, 80))
+        } else {
+            recalled
+                .claims
+                .iter()
+                .take(3)
+                .map(|claim| crate::ops::pure::value_to_json(&claim.value).to_string())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        self.harness
+            .attach_note(CONDUCTOR_ID, format!("memory: {}", truncate_for_note(&snippet, 200)));
+        steps.push(TurnTraceStep {
+            name: "Harness.memory_attach".into(),
+            detail: format!("claims={}", recalled.claims.len()),
+        });
+        let evidence = if recalled.claims.is_empty() {
+            format!(
+                "No stored memory matched. User asked about: {clause}. Say you don't have that yet."
+            )
+        } else {
+            format!("Attached memory snippets:\n{snippet}\nAnswer the user briefly grounded only in these.")
+        };
+        let before = self.provider_llm_calls();
+        let reply = if recalled.claims.is_empty() {
+            self.synthesize_or_fallback(&evidence)
+        } else {
+            self.synthesize_claims_or_fallback(&recalled.claims)
+        };
+        let calls = self.provider_llm_calls().saturating_sub(before) as u32;
+        let _ = self.harness.exit_up();
+        TurnResult {
+            reply,
+            llm_calls: llm_calls.saturating_add(calls),
+            tier: Some(LookupTier::Tier3),
+            depth: Depth::Deep,
+            steps: std::mem::take(steps),
+            opened_loop: false,
+            new_state: None,
+            active_flow: None,
+            situation_hash: Some(situation_hash.into()),
+            proposal_id: None,
+            suspended: false,
+        }
+    }
+}
+
+fn truncate_for_note(text: &str, max: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max {
+        return trimmed.to_string();
+    }
+    let mut out: String = trimmed.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 fn adaptive_output_utterance(

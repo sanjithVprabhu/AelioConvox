@@ -1,0 +1,40 @@
+{
+  "id": "clarify_slot",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "text": {
+            "lit": "What is the missing value I should use?"
+          }
+        },
+        "id": "express.say@1",
+        "into": "ask1",
+        "nid": "ask",
+        "op": "Call"
+      },
+      {
+        "into": "reply1",
+        "nid": "wait",
+        "op": "Park",
+        "until": {
+          "kind": "event"
+        }
+      },
+      {
+        "args": {
+          "text": {
+            "lit": "Got the slot — thanks."
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "ack",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Ask for one missing field; Park; acknowledge (T1 intent)"
+}

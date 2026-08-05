@@ -1,0 +1,109 @@
+{
+  "id": "workflow.average",
+  "version": "1.0.0",
+  "origin": "vendor",
+  "description": "Average a number list: count, guard nonempty, sum, divide (sequential pure Sol). True SpawnMany join deferred.",
+  "input_imprint": "aelio.math.number_list@1",
+  "output_imprint": "aelio.math.number@1",
+  "errors": [
+    "Math.EmptyInput",
+    "Math.DivideByZero"
+  ],
+  "effect": "pure",
+  "determinism": "deterministic",
+  "suspendability": "never",
+  "children_allow": [
+    "math.sum@^1",
+    "collection.count@^1",
+    "math.divide@^1"
+  ],
+  "budgets": {
+    "steps": 100,
+    "calls": 4,
+    "wall_ms": 1000,
+    "depth": 4,
+    "fanout": 1
+  },
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "count_values",
+        "op": "Call",
+        "id": "collection.count@1",
+        "args": {
+          "list": {
+            "pull": "values"
+          }
+        },
+        "into": "count"
+      },
+      {
+        "nid": "require_nonempty",
+        "op": "Guard",
+        "check": "entry",
+        "invariant": {
+          "fn": "gt",
+          "args": [
+            {
+              "pull": "count"
+            },
+            {
+              "lit": 0
+            }
+          ]
+        },
+        "body": {
+          "nid": "compute_avg",
+          "op": "Seq",
+          "steps": [
+            {
+              "nid": "sum_values",
+              "op": "Call",
+              "id": "math.sum@1",
+              "args": {
+                "list": {
+                  "pull": "values"
+                }
+              },
+              "into": "sum"
+            },
+            {
+              "nid": "divide",
+              "op": "Call",
+              "id": "math.divide@1",
+              "args": {
+                "a": {
+                  "pull": "sum"
+                },
+                "b": {
+                  "pull": "count"
+                }
+              },
+              "into": "average"
+            }
+          ]
+        },
+        "on_violation": {
+          "nid": "empty_error",
+          "op": "Call",
+          "id": "express.say@1",
+          "args": {
+            "text": {
+              "lit": "Math.EmptyInput"
+            }
+          },
+          "into": "error"
+        }
+      }
+    ]
+  },
+  "tags": [
+    "math",
+    "workflow",
+    "p0",
+    "reference"
+  ],
+  "required_capabilities": []
+}

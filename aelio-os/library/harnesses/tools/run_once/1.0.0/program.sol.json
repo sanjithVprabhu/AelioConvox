@@ -1,0 +1,11 @@
+{
+  "nid": "root",
+  "op": "Once",
+  "body": {
+    "nid": "send",
+    "op": "Call",
+    "id": "tool.act_stub@1",
+    "args": {},
+    "into": "sent"
+  }
+}

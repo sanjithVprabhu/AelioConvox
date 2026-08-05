@@ -1,0 +1,51 @@
+{
+  "id": "memory_attach",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "query": {
+            "pull": "utterance"
+          }
+        },
+        "id": "memory.search@1",
+        "into": "hits",
+        "nid": "search",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "snippet": {
+            "pull": "hits.snippet"
+          }
+        },
+        "id": "context.attach@1",
+        "into": "page",
+        "nid": "attach",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "lit": "From memory: "
+              },
+              {
+                "pull": "page.note"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "reply",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Search memory and attach a short snippet to the context page"
+}

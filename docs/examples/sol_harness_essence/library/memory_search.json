@@ -1,0 +1,40 @@
+{
+  "id": "memory_search",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "query": {
+            "pull": "utterance"
+          }
+        },
+        "id": "memory.search@1",
+        "into": "hits",
+        "nid": "search",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "lit": "Memory hit: "
+              },
+              {
+                "pull": "hits.snippet"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "say",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Search memory only and return snippet (T1 memory)"
+}

@@ -1,0 +1,43 @@
+{
+  "id": "stack_mid_b",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "id": {
+            "lit": "stack_leaf_c"
+          },
+          "utterance": {
+            "pull": "utterance"
+          }
+        },
+        "id": "harness.invoke@1",
+        "into": "child",
+        "nid": "call_c",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "lit": "mid-B after "
+              },
+              {
+                "pull": "child.out.text"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "after_c",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Stack mid B — invoke leaf C, wait, then report"
+}

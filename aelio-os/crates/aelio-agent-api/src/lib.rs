@@ -38,6 +38,9 @@ pub struct AppState {
     bridge: SdkBridge,
     requires_sdk_bridge: bool,
     artifact_runtime: Option<aelio_runtime::Runtime>,
+    /// Conductor/Harness OS store (events, process tree, shadow).
+    /// Defaults to MemoryStore; set `AELIO_OS_STORE_PATH` for EmbeddedStore (durable).
+    os_store: Arc<Mutex<Box<dyn aelio_store::Store + Send>>>,
 }
 
 #[derive(Clone)]
@@ -211,6 +214,7 @@ impl AppState {
             bridge,
             requires_sdk_bridge: install_host && artifact_runtime.is_none(),
             artifact_runtime,
+            os_store: Arc::new(Mutex::new(open_os_store())),
         }
     }
 
@@ -223,9 +227,106 @@ impl AppState {
     }
 }
 
+/// Open the Conductor/Harness OS store.
+///
+/// - `AELIO_OS_STORE_PATH` set → durable [`aelio_store::EmbeddedStore`]
+/// - otherwise → in-memory (tests / dev)
+///
+/// Always attempts vendor library install into `tenant` at first use via
+/// [`ensure_vendor_library`].
+fn open_os_store() -> Box<dyn aelio_store::Store + Send> {
+    match std::env::var("AELIO_OS_STORE_PATH") {
+        Ok(path) if !path.trim().is_empty() => {
+            match aelio_store::EmbeddedStore::open(&path) {
+                Ok(store) => {
+                    eprintln!("aelio-agent-api: OS store durable at {path}");
+                    Box::new(store)
+                }
+                Err(err) => {
+                    eprintln!(
+                        "aelio-agent-api: failed to open AELIO_OS_STORE_PATH={path} ({err:?}); falling back to memory"
+                    );
+                    Box::new(aelio_store::MemoryStore::new())
+                }
+            }
+        }
+        _ => Box::new(aelio_store::MemoryStore::new()),
+    }
+}
+
+/// Idempotent install of on-disk vendor library into the OS store for `tenant`.
+fn ensure_vendor_library(store: &mut dyn aelio_store::Store, tenant: &str) {
+    let Some(root) = aelio_kernel::resolve_library_root(None) else {
+        return;
+    };
+    match aelio_kernel::install_from_manifest(store, tenant, &root) {
+        Ok(report) => {
+            let n = report.entries.len();
+            if std::env::var("AELIO_OS_LIBRARY_LOG").is_ok() {
+                eprintln!("aelio-agent-api: vendor library entries={n} tenant={tenant}");
+            }
+        }
+        Err(err) => {
+            eprintln!("aelio-agent-api: vendor library install skipped: {err:?}");
+        }
+    }
+}
+
+fn tool_harness_turn_result(
+    turn_id: &str,
+    harness_id: &str,
+    bag: aelio_sol::SolValue,
+    bag_hash: &str,
+) -> aelio_agent::blocks::turn::TurnResult {
+    let text = aelio_kernel::tool_bag_reply_text(harness_id, &bag);
+    let mut reply = aelio_agent::abilities::express::Utterance::plain(
+        text,
+        aelio_agent::abilities::express::ExpressVia::Template,
+    );
+    reply.template_id = Some(format!("harness.{harness_id}"));
+    let mut result = aelio_agent::blocks::turn::TurnResult {
+        reply,
+        llm_calls: 0,
+        tier: None,
+        depth: aelio_agent::Depth::Deep,
+        steps: vec![
+            aelio_agent::blocks::turn::TurnTraceStep {
+                name: "Conductor.Select".into(),
+                detail: format!("harness={harness_id} — installed tool/memory program"),
+            },
+            aelio_agent::blocks::turn::TurnTraceStep {
+                name: "Harness.Load".into(),
+                detail: format!("id={harness_id} hash={bag_hash}"),
+            },
+            aelio_agent::blocks::turn::TurnTraceStep {
+                name: "Harness.Tool".into(),
+                detail: format!("executed Sol program id={harness_id}"),
+            },
+            aelio_agent::blocks::turn::TurnTraceStep {
+                name: "Conductor.Shadow".into(),
+                detail: format!(
+                    "agent=escalate os={harness_id} agree=true comparable=true propose=false tool_cutover=true"
+                ),
+            },
+        ],
+        opened_loop: false,
+        new_state: None,
+        active_flow: None,
+        situation_hash: None,
+        proposal_id: None,
+        suspended: bag_hash.starts_with("parked:"),
+    };
+    let _ = result
+        .reply
+        .ensure_render_frame(turn_id, &format!("rf-{}", result.steps.len()));
+    result
+}
+
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
         .route("/v1/turns", post(process_turn))
+        // Conductor/Harness OS event admission (plan §10 / Phase 4.2–4.3).
+        .route("/v2/events", post(process_event_v2))
         .route("/v1/users/state", post(set_user_state))
         .route("/v1/catalog", get(active_catalog).post(register_catalog))
         .route("/v1/sdk", get(sdk_socket))
@@ -291,22 +392,14 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     let semantic_embedder = runtime.has_semantic_embedder();
     let catalog_registered =
         !runtime.world.tenant.states.is_empty() && !runtime.world.tenant.personalities.is_empty();
-    let unmaterialized_flows = if state.artifact_runtime.is_some() {
-        runtime
-            .world
-            .tenant
-            .flows
-            .iter()
-            .filter(|flow| runtime.world.registry.flow_artifact(&flow.id).is_none())
-            .count()
-    } else {
-        0
-    };
+    let install = catalog_install_status(&runtime, state.artifact_runtime.is_some());
     let sdk_required = state.requires_sdk_bridge && !runtime.world.tenant.tools.is_empty();
     let sdk = state.bridge.catalog_status(&tenant_id);
     let sdk_registered = sdk.is_some();
     let sdk_available = sdk.is_some_and(|status| status.available);
-    let ready = catalog_registered && unmaterialized_flows == 0 && (!sdk_required || sdk_available);
+    let ready = catalog_registered
+        && install.executable_pending == 0
+        && (!sdk_required || sdk_available);
     Json(serde_json::json!({
         "status": if ready { "ok" } else { "degraded" },
         "ready": ready,
@@ -318,11 +411,47 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         "embedding_space_id": embedding_space_id,
         "authentication_configured": !state.is_open(),
         "catalog_registered": catalog_registered,
-        "unmaterialized_flows": unmaterialized_flows,
+        // Install debt: only flows that declared a lowering must pin to be ready.
+        "unmaterialized_flows": install.executable_pending,
+        "executable_flows": install.executable_flows,
+        "semantic_only_flows": install.semantic_only_flows,
         "sdk_required": sdk_required,
         "sdk_registered": sdk_registered,
         "sdk_available": sdk_available,
     }))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CatalogInstallStatus {
+    executable_flows: usize,
+    executable_pending: usize,
+    semantic_only_flows: usize,
+}
+
+/// OS-install view of the catalog: lowering-declared flows are executable apps that must pin;
+/// semantic-only flows are guidance and do not block readiness.
+fn catalog_install_status(
+    runtime: &DurableRuntime,
+    artifact_runtime_enabled: bool,
+) -> CatalogInstallStatus {
+    let mut executable_flows = 0;
+    let mut executable_pending = 0;
+    let mut semantic_only_flows = 0;
+    for flow in &runtime.world.tenant.flows {
+        if flow.lowering.is_some() {
+            executable_flows += 1;
+            if artifact_runtime_enabled && runtime.world.registry.flow_artifact(&flow.id).is_none() {
+                executable_pending += 1;
+            }
+        } else {
+            semantic_only_flows += 1;
+        }
+    }
+    CatalogInstallStatus {
+        executable_flows,
+        executable_pending,
+        semantic_only_flows,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -339,17 +468,220 @@ fn unknown_channel() -> String {
     "unknown".into()
 }
 
+/// `POST /v2/events` body — either a full NormalizedEventV1 or a turn adapter envelope.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum EventV2Request {
+    Normalized(aelio_kernel::NormalizedEventV1),
+    TurnAdapter {
+        event_id: String,
+        user_id: String,
+        utterance: String,
+        #[serde(default = "unknown_channel")]
+        channel: String,
+        #[serde(default)]
+        source: Option<String>,
+        #[serde(default)]
+        source_message_id: Option<String>,
+        /// When true (default), run deterministic conductor.root after admission.
+        #[serde(default = "default_true")]
+        run_conductor: bool,
+    },
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize)]
+struct EventV2Response {
+    status: String,
+    event_id: String,
+    event_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prior_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conductor_route: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conductor_decision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bag_hash: Option<String>,
+    /// True when this path only ran deterministic Conductor (not the full agent turn spine).
+    conductor_only: bool,
+    /// True when an installed Sol tool/memory/intent harness executed.
+    #[serde(default)]
+    tool_harness: bool,
+}
+
+async fn process_event_v2(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthenticatedTenant>,
+    Json(request): Json<EventV2Request>,
+) -> Result<(StatusCode, Json<EventV2Response>), ApiError> {
+    let tenant_id = auth.tenant_id.clone();
+    let os_store = Arc::clone(&state.os_store);
+    tokio::task::spawn_blocking(move || {
+        let (event, run_conductor) = match request {
+            EventV2Request::Normalized(mut event) => {
+                // Tenant is always derived from auth, never from untrusted model/client override.
+                event.tenant_id = tenant_id.clone();
+                (event, true)
+            }
+            EventV2Request::TurnAdapter {
+                event_id,
+                user_id,
+                utterance,
+                channel,
+                source,
+                source_message_id,
+                run_conductor,
+            } => {
+                let event = aelio_kernel::event_from_user_utterance(
+                    &tenant_id,
+                    &user_id,
+                    &channel,
+                    &utterance,
+                    &event_id,
+                    source.as_deref().unwrap_or("api"),
+                    source_message_id.as_deref(),
+                );
+                (event, run_conductor)
+            }
+        };
+
+        let utterance = event
+            .payload
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let mut store = os_store.blocking_lock();
+        ensure_vendor_library(store.as_mut(), &tenant_id);
+
+        // Greets go through conductor.root (admit_event with run_conductor), not full_reply.
+        // Prefer installed tool/intent harnesses for everything else that resolves.
+        if !aelio_kernel::should_cutover_deterministic(&utterance) {
+        if let Some(intent) = aelio_kernel::resolve_tool_harness_intent(&utterance) {
+            if let Ok(Some((bag, hash, harness_id))) =
+                aelio_kernel::try_run_tool_intent(store.as_mut(), &tenant_id, &intent)
+            {
+                let admitted =
+                    aelio_kernel::admit_event(store.as_mut(), event, false).map_err(|e| {
+                        ApiError(AelioError::new(
+                            ReasonCode::Unavailable,
+                            format!("event admission failed: {e:?}"),
+                        ))
+                    })?;
+                let (status, prior) = match &admitted.status {
+                    aelio_kernel::AdmitStatus::Accepted => ("accepted".to_string(), None),
+                    aelio_kernel::AdmitStatus::Duplicate { prior_event_id } => {
+                        ("duplicate".to_string(), Some(prior_event_id.clone()))
+                    }
+                };
+                let http = if status == "duplicate" {
+                    StatusCode::OK
+                } else {
+                    StatusCode::ACCEPTED
+                };
+                let reply = aelio_kernel::tool_bag_reply_text(harness_id, &bag);
+                return Ok((
+                    http,
+                    Json(EventV2Response {
+                        status,
+                        event_id: admitted.event.event_id,
+                        event_type: admitted.event.event_type,
+                        prior_event_id: prior,
+                        conductor_route: Some(harness_id.into()),
+                        conductor_decision: Some(format!("ToolHarness({harness_id})")),
+                        reply_text: Some(reply),
+                        bag_hash: Some(hash),
+                        conductor_only: true,
+                        tool_harness: true,
+                    }),
+                ));
+            }
+        }
+        } // end !should_cutover_deterministic tool branch
+
+        let admitted = aelio_kernel::admit_event(store.as_mut(), event, run_conductor).map_err(
+            |e| {
+                ApiError(AelioError::new(
+                    ReasonCode::Unavailable,
+                    format!("event admission failed: {e:?}"),
+                ))
+            },
+        )?;
+
+        let (status, prior) = match &admitted.status {
+            aelio_kernel::AdmitStatus::Accepted => ("accepted".to_string(), None),
+            aelio_kernel::AdmitStatus::Duplicate { prior_event_id } => {
+                ("duplicate".to_string(), Some(prior_event_id.clone()))
+            }
+        };
+        let (route, decision, reply, bag_hash) = match admitted.conductor {
+            Some(c) => (
+                Some(c.route),
+                Some(format!("{:?}", c.decision)),
+                c.reply_text,
+                c.bag_hash,
+            ),
+            None => (None, None, None, None),
+        };
+        let http = if status == "duplicate" {
+            StatusCode::OK
+        } else {
+            StatusCode::ACCEPTED
+        };
+        Ok((
+            http,
+            Json(EventV2Response {
+                status,
+                event_id: admitted.event.event_id,
+                event_type: admitted.event.event_type,
+                prior_event_id: prior,
+                conductor_route: route,
+                conductor_decision: decision,
+                reply_text: reply,
+                bag_hash,
+                conductor_only: true,
+                tool_harness: false,
+            }),
+        ))
+    })
+    .await
+    .map_err(|e| {
+        ApiError(AelioError::new(
+            ReasonCode::Internal,
+            format!("event worker join failed: {e}"),
+        ))
+    })?
+}
+
 async fn process_turn(
     State(state): State<AppState>,
     Json(request): Json<TurnApiRequest>,
 ) -> Result<Json<aelio_agent::blocks::turn::TurnResult>, ApiError> {
     let runtime = Arc::clone(&state.runtime);
+    let os_store = Arc::clone(&state.os_store);
     tokio::task::spawn_blocking(move || {
         let mut runtime = runtime.blocking_lock();
         if runtime.world.tenant.states.is_empty() || runtime.world.tenant.personalities.is_empty() {
             return Err(ApiError(AelioError::new(
                 ReasonCode::Unavailable,
                 "tenant catalog is not registered",
+            )));
+        }
+        let install = catalog_install_status(&runtime, state.artifact_runtime.is_some());
+        if install.executable_pending > 0 {
+            return Err(ApiError(AelioError::new(
+                ReasonCode::Unavailable,
+                format!(
+                    "catalog install incomplete: {} executable flow(s) awaiting materialization",
+                    install.executable_pending
+                ),
             )));
         }
         let sdk_required = state.requires_sdk_bridge && !runtime.world.tenant.tools.is_empty();
@@ -364,6 +696,243 @@ async fn process_turn(
                 "tenant SDK tool host is not connected",
             )));
         }
+        // Path B default: Sol/OS owns the turn. The agent dual-IR spine owns it only when this
+        // AppState was explicitly built for legacy parity, or the operator opts in globally.
+        //
+        // Parity is a *per-AppState* property, chosen by the constructor
+        // (`new_for_legacy_parity` / `new_with_scoped_sdk_bridge_for_legacy_parity`) and recorded on
+        // the world. When it is set, the Sol cutovers below are skipped wholesale — a parity fixture
+        // that still lost its turns to a cutover would not be parity at all. Production
+        // constructors never set the flag, so Path B remains the default there.
+        // An installed artifact runtime is also an authority: its flows are admitted, materialized
+        // and *pinned*. Letting a generic kernel tool-harness cutover preempt one would break the
+        // pinning invariant — semantic lookup must never silently displace an admitted artifact.
+        // The cutover exists to replace the cold ProposePath, not an admitted program.
+        let legacy_spine = runtime.world.legacy_flow_execution_enabled
+            || state.artifact_runtime.is_some()
+            || std::env::var("AELIO_AGENT_LEGACY")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+        let tenant_id = runtime.world.tenant.tenant_id.clone();
+        let turn_id = request.turn_id.clone();
+        let user_id = request.user_id.clone();
+        let utterance = request.utterance.clone();
+        let channel = request.channel.clone();
+
+        // Ensure vendor Sol library is present for tool/memory cutovers.
+        {
+            let mut store = os_store.blocking_lock();
+            ensure_vendor_library(store.as_mut(), &tenant_id);
+        }
+
+        // Multi-turn OTP: if user has a pending session and typed a code, complete it.
+        {
+            let mut store = os_store.blocking_lock();
+            if let Ok(Some((ok, msg))) =
+                aelio_kernel::try_complete_otp_session(store.as_mut(), &tenant_id, &user_id, &utterance)
+            {
+                let mut reply = aelio_agent::abilities::express::Utterance::plain(
+                    msg,
+                    aelio_agent::abilities::express::ExpressVia::Template,
+                );
+                reply.template_id = Some("tool.otp_login.resume".into());
+                let mut result = aelio_agent::blocks::turn::TurnResult {
+                    reply,
+                    llm_calls: 0,
+                    tier: None,
+                    depth: aelio_agent::Depth::Deep,
+                    steps: vec![
+                        aelio_agent::blocks::turn::TurnTraceStep {
+                            name: "Harness.Tool".into(),
+                            detail: format!(
+                                "otp_login resume ok={ok} authority=otp_session"
+                            ),
+                        },
+                        aelio_agent::blocks::turn::TurnTraceStep {
+                            name: "Conductor.Select".into(),
+                            detail: "harness=tool.otp_login — resume waiting code".into(),
+                        },
+                    ],
+                    opened_loop: false,
+                    new_state: if ok {
+                        Some("authenticated".into())
+                    } else {
+                        None
+                    },
+                    active_flow: None,
+                    situation_hash: None,
+                    proposal_id: None,
+                    suspended: false,
+                };
+                let _ = result
+                    .reply
+                    .ensure_render_frame(&turn_id, &format!("rf-{}", result.steps.len()));
+                drop(store);
+                drop(runtime);
+                return Ok(Json(result));
+            }
+        }
+
+        // Phase 4.5: deterministic cutover — conductor.root is authority for pure greets/acks.
+        if !legacy_spine && aelio_kernel::should_cutover_deterministic(&utterance) {
+            let cut = aelio_kernel::run_greeting_cutover(&utterance).map_err(|e| {
+                ApiError(AelioError::new(
+                    ReasonCode::Internal,
+                    format!("greeting cutover failed: {}", e.detail),
+                ))
+            })?;
+            // Durable event admission (dedupe by turn_id as source message).
+            {
+                let event = aelio_kernel::event_from_user_utterance(
+                    &tenant_id,
+                    &user_id,
+                    &channel,
+                    &utterance,
+                    &turn_id,
+                    "v1.turns.cutover",
+                    Some(&turn_id),
+                );
+                let mut store = os_store.blocking_lock();
+                let _ = aelio_kernel::admit_event(store.as_mut(), event, false);
+            }
+            let mut reply = aelio_agent::abilities::express::Utterance::plain(
+                cut.reply_text,
+                aelio_agent::abilities::express::ExpressVia::Template,
+            );
+            reply.template_id = Some("conductor.root.quick_reply".into());
+            let mut result = aelio_agent::blocks::turn::TurnResult {
+                reply,
+                llm_calls: 0,
+                tier: None,
+                depth: aelio_agent::Depth::Shallow,
+                steps: vec![
+                    aelio_agent::blocks::turn::TurnTraceStep {
+                        name: "Conductor.Cutover".into(),
+                        detail: format!(
+                            "route={} authority=conductor.root bag_hash={}",
+                            cut.route, cut.bag_hash
+                        ),
+                    },
+                    aelio_agent::blocks::turn::TurnTraceStep {
+                        name: "Conductor.Select".into(),
+                        detail: format!("harness={} — cutover", cut.route),
+                    },
+                    aelio_agent::blocks::turn::TurnTraceStep {
+                        name: "Harness.Load".into(),
+                        detail: format!("id=conductor.root route={}", cut.route),
+                    },
+                    aelio_agent::blocks::turn::TurnTraceStep {
+                        name: "Conductor.Shadow".into(),
+                        detail: format!(
+                            "agent=quick_reply os=quick_reply agree=true comparable=true propose=false cutover=true"
+                        ),
+                    },
+                ],
+                opened_loop: false,
+                new_state: None,
+                active_flow: None,
+                situation_hash: None,
+                proposal_id: None,
+                suspended: false,
+            };
+            let _ = result
+                .reply
+                .ensure_render_frame(&turn_id, &format!("rf-{}", result.steps.len()));
+            // Do not run the agent spine for cutover turns.
+            drop(runtime);
+            return Ok(Json(result));
+        }
+
+        // Phase 5: installed tool/memory harness cutover (avoids cold ProposePath when present).
+        if let Some(intent) =
+            (!legacy_spine).then(|| aelio_kernel::resolve_tool_harness_intent(&utterance)).flatten()
+        {
+            let mut store = os_store.blocking_lock();
+            match aelio_kernel::try_run_tool_intent(store.as_mut(), &tenant_id, &intent) {
+                Ok(Some((bag, hash, harness_id))) => {
+                    // After OTP send, open a multi-turn wait for the code.
+                    if harness_id == "tool.send_otp" {
+                        if let aelio_kernel::ToolHarnessIntent::SendOtp { phone } = &intent {
+                            let _ = aelio_kernel::begin_otp_session_after_send(
+                                store.as_mut(),
+                                &tenant_id,
+                                &user_id,
+                                phone,
+                            );
+                        }
+                    }
+                    let event = aelio_kernel::event_from_user_utterance(
+                        &tenant_id,
+                        &user_id,
+                        &channel,
+                        &utterance,
+                        &turn_id,
+                        "v1.turns.tool_harness",
+                        Some(&turn_id),
+                    );
+                    let _ = aelio_kernel::admit_event(store.as_mut(), event, false);
+                    let mut result = tool_harness_turn_result(&turn_id, harness_id, bag, &hash);
+                    if harness_id == "tool.send_otp" {
+                        result.reply.text = format!(
+                            "{} Enter the 6-digit code (demo: 123456).",
+                            result.reply.text.trim_end_matches('.')
+                        );
+                        result.opened_loop = true;
+                        result.suspended = true;
+                        result.steps.push(aelio_agent::blocks::turn::TurnTraceStep {
+                            name: "Harness.Park".into(),
+                            detail: "otp_session waiting for code".into(),
+                        });
+                    }
+                    drop(store);
+                    drop(runtime);
+                    return Ok(Json(result));
+                }
+                Ok(None) => {
+                    // Not installed — fall through to agent spine / ProposePath.
+                }
+                Err(err) => {
+                    eprintln!(
+                        "aelio-agent-api: tool harness {} failed: {}; falling back to agent",
+                        intent.harness_id(),
+                        err.detail
+                    );
+                }
+            }
+        }
+
+        let legacy = legacy_spine;
+        if !legacy {
+            // Closed fallback when no harness matched (should be rare with full_reply).
+            let mut reply = aelio_agent::abilities::express::Utterance::plain(
+                "I could not load a harness for that. Install the vendor library or rephrase.",
+                aelio_agent::abilities::express::ExpressVia::Apologize,
+            );
+            reply.template_id = Some("os.no_harness".into());
+            let mut result = aelio_agent::blocks::turn::TurnResult {
+                reply,
+                llm_calls: 0,
+                tier: None,
+                depth: aelio_agent::Depth::Shallow,
+                steps: vec![aelio_agent::blocks::turn::TurnTraceStep {
+                    name: "Conductor.FailClosed".into(),
+                    detail: "no installed harness; set AELIO_AGENT_LEGACY=1 for agent spine"
+                        .into(),
+                }],
+                opened_loop: false,
+                new_state: None,
+                active_flow: None,
+                situation_hash: None,
+                proposal_id: None,
+                suspended: false,
+            };
+            let _ = result
+                .reply
+                .ensure_render_frame(&turn_id, &format!("rf-{}", result.steps.len()));
+            drop(runtime);
+            return Ok(Json(result));
+        }
+
         runtime
             .run_turn_on_channel(
                 DurableTurnRequest {
@@ -374,9 +943,31 @@ async fn process_turn(
                 &request.channel,
             )
             .map(|mut result| {
+                // Phase 4.4: shadow OS Conductor — observation only; agent reply remains authority.
+                let steps: Vec<(String, String)> = result
+                    .steps
+                    .iter()
+                    .map(|s| (s.name.clone(), s.detail.clone()))
+                    .collect();
+                let obs = aelio_kernel::observe_shadow(
+                    &turn_id,
+                    &tenant_id,
+                    &user_id,
+                    &utterance,
+                    &steps,
+                    result.suspended,
+                );
+                {
+                    let mut store = os_store.blocking_lock();
+                    let _ = aelio_kernel::store_shadow(store.as_mut(), &obs);
+                }
+                result.steps.push(aelio_agent::blocks::turn::TurnTraceStep {
+                    name: "Conductor.Shadow".into(),
+                    detail: aelio_kernel::shadow_trace_detail(&obs),
+                });
                 let _ = result
                     .reply
-                    .ensure_render_frame(&request.turn_id, &format!("rf-{}", result.steps.len()));
+                    .ensure_render_frame(&turn_id, &format!("rf-{}", result.steps.len()));
                 Json(result)
             })
             .map_err(ApiError)
@@ -410,19 +1001,22 @@ async fn register_catalog(
     let tools = catalog.tools.len();
     let flows = catalog.flows.len();
     runtime.register_catalog(catalog).map_err(ApiError)?;
-    let materialization_pending = runtime
-        .world
-        .tenant
-        .flows
-        .iter()
-        .filter(|flow| runtime.world.registry.flow_artifact(&flow.id).is_none())
-        .count();
+    let install = catalog_install_status(&runtime, state.artifact_runtime.is_some());
+    let sdk_required = state.requires_sdk_bridge && tools > 0;
+    let sdk_available = state
+        .bridge
+        .catalog_status(&tenant_id)
+        .is_some_and(|status| status.available);
+    let ready = install.executable_pending == 0 && (!sdk_required || sdk_available);
     Ok(Json(serde_json::json!({
-        "status": "active",
+        "status": if ready { "active" } else { "installing" },
         "tenant_id": tenant_id,
         "tools": tools,
         "flows": flows,
-        "materialization_pending": materialization_pending,
+        "ready": ready,
+        "materialization_pending": install.executable_pending,
+        "executable_flows": install.executable_flows,
+        "semantic_only_flows": install.semantic_only_flows,
     })))
 }
 

@@ -1,0 +1,67 @@
+{
+  "id": "list_filter_keep",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "seed",
+        "op": "Const",
+        "v": {
+          "items": [
+            {
+              "id": 1,
+              "keep": true
+            },
+            {
+              "id": 2,
+              "keep": false
+            },
+            {
+              "id": 3,
+              "keep": true
+            }
+          ]
+        }
+      },
+      {
+        "into": "kept",
+        "max_items": 8,
+        "nid": "filter",
+        "op": "Filter",
+        "over": "items",
+        "pred": {
+          "pull": "keep"
+        }
+      },
+      {
+        "args": {
+          "v": {
+            "args": [
+              {
+                "pull": "kept"
+              }
+            ],
+            "fn": "count"
+          }
+        },
+        "id": "compute.hold@1",
+        "into": "kept_count",
+        "nid": "cnt",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "lit": "filter done"
+          }
+        },
+        "id": "express.say@1",
+        "into": "msg",
+        "nid": "say",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Filter a list by keep flag, then count kept (Filter + compute count)"
+}

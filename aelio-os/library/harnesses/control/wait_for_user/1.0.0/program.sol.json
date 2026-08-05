@@ -1,0 +1,25 @@
+{
+  "nid": "root",
+  "op": "Seq",
+  "steps": [
+    {
+      "nid": "ask",
+      "op": "Call",
+      "id": "express.say@1",
+      "args": {
+        "text": {
+          "lit": "Before I continue, what should I clarify first?"
+        }
+      },
+      "into": "ask1"
+    },
+    {
+      "nid": "wait",
+      "op": "Park",
+      "until": {
+        "kind": "event"
+      },
+      "into": "reply1"
+    }
+  ]
+}

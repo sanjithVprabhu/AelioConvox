@@ -1,0 +1,25 @@
+{
+  "nid": "root",
+  "op": "Seq",
+  "steps": [
+    {
+      "nid": "reply",
+      "op": "Call",
+      "id": "express.say@1",
+      "args": {
+        "text": {
+          "fn": "concat",
+          "args": [
+            {
+              "lit": "Here is a fuller answer about: "
+            },
+            {
+              "pull": "utterance"
+            }
+          ]
+        }
+      },
+      "into": "out"
+    }
+  ]
+}

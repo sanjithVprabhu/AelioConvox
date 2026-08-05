@@ -1,4 +1,4 @@
-use aelio_agent::abilities::invoke::ToolHost;
+use aelio_agent::abilities::invoke::{CapabilityHost, ToolHost};
 use aelio_agent::tenant::ToolSpec;
 use aelio_agent::{AelioError, AelioResult, ReasonCode, Value};
 use indexmap::IndexMap;
@@ -59,11 +59,7 @@ struct ResponseError {
     detail: String,
 }
 
-impl ToolHost for HttpAgentToolHost {
-    fn call(&mut self, tool_id: &str, args: &IndexMap<String, Value>) -> AelioResult<Value> {
-        self.invoke(tool_id, "1", args, tool_id, "anonymous", "unknown")
-    }
-
+impl CapabilityHost for HttpAgentToolHost {
     fn call_with_context(
         &mut self,
         tool: &ToolSpec,
@@ -80,6 +76,12 @@ impl ToolHost for HttpAgentToolHost {
             user_id,
             channel,
         )
+    }
+}
+
+impl ToolHost for HttpAgentToolHost {
+    fn call(&mut self, tool_id: &str, args: &IndexMap<String, Value>) -> AelioResult<Value> {
+        self.invoke(tool_id, "1", args, tool_id, "anonymous", "unknown")
     }
 }
 

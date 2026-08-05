@@ -1,0 +1,58 @@
+{
+  "id": "greet_then_offer_help",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "text": {
+            "lit": "Hello — I'm here."
+          }
+        },
+        "id": "express.say@1",
+        "into": "greeting",
+        "nid": "greet",
+        "op": "Call"
+      },
+      {
+        "else": {
+          "args": {
+            "text": {
+              "lit": "What do you need today?"
+            }
+          },
+          "id": "express.say@1",
+          "into": "out",
+          "nid": "ask_need",
+          "op": "Call"
+        },
+        "nid": "gate",
+        "op": "Branch",
+        "pred": {
+          "args": [
+            {
+              "pull": "utterance"
+            },
+            {
+              "lit": "help"
+            }
+          ],
+          "fn": "contains"
+        },
+        "then": {
+          "args": {
+            "text": {
+              "lit": "I can help. What should we do first?"
+            }
+          },
+          "id": "express.say@1",
+          "into": "out",
+          "nid": "offer_help",
+          "op": "Call"
+        }
+      }
+    ]
+  },
+  "summary": "Greet, then branch: offer help or ask what they need"
+}

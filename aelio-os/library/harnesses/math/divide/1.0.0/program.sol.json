@@ -1,0 +1,14 @@
+{
+  "nid": "root",
+  "op": "Call",
+  "id": "math.divide@1",
+  "args": {
+    "a": {
+      "pull": "sum"
+    },
+    "b": {
+      "pull": "count"
+    }
+  },
+  "into": "average"
+}

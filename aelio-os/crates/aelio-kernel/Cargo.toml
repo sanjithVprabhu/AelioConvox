@@ -10,6 +10,7 @@ description = "Planner + Executor + ledger + replay + Control/Compute op catalog
 aelio-sol.workspace = true
 aelio-store.workspace = true
 blake3.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
 [dev-dependencies]

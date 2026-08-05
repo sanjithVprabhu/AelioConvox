@@ -1,0 +1,30 @@
+# HarnessContractV1 (YAML front for humans; program is JSON-compatible)
+id: workflow.average
+version: 1.0.0
+origin: vendor
+description: |
+  Average a number list: count, guard nonempty, sum, divide (sequential pure Sol). True SpawnMany join deferred.
+input_imprint: aelio.math.number_list@1
+output_imprint: aelio.math.number@1
+errors:
+  - Math.EmptyInput
+  - Math.DivideByZero
+effect: pure
+determinism: deterministic
+suspendability: never
+children_allow:
+  - math.sum@^1
+  - collection.count@^1
+  - math.divide@^1
+budgets:
+  steps: 100
+  calls: 4
+  wall_ms: 1000
+  depth: 4
+  fanout: 1
+tags:
+  - math
+  - workflow
+  - p0
+  - reference
+program_file: program.sol.json

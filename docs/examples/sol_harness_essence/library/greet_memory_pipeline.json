@@ -1,0 +1,60 @@
+{
+  "id": "greet_memory_pipeline",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "id": {
+            "lit": "greet_then_offer_help"
+          },
+          "utterance": {
+            "pull": "utterance"
+          }
+        },
+        "id": "harness.invoke@1",
+        "into": "greeted",
+        "nid": "g",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "id": {
+            "lit": "memory_attach"
+          },
+          "utterance": {
+            "pull": "utterance"
+          }
+        },
+        "id": "harness.invoke@1",
+        "into": "mem",
+        "nid": "m",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "pull": "greeted.out.text"
+              },
+              {
+                "lit": " :: "
+              },
+              {
+                "pull": "mem.out.text"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "wrap",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Pipeline: greet_then_offer_help then memory_attach"
+}

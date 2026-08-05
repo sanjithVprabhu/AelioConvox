@@ -1,0 +1,15 @@
+{
+  "id": "once_external_stub",
+  "program": {
+    "body": {
+      "args": {},
+      "id": "tool.act_stub@1",
+      "into": "sent",
+      "nid": "send",
+      "op": "Call"
+    },
+    "nid": "root",
+    "op": "Once"
+  },
+  "summary": "Once-wrapped external stub Call (idempotent effect pattern)"
+}

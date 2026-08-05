@@ -1,0 +1,57 @@
+{
+  "id": "detect_fresh_utterance",
+  "program": {
+    "else": {
+      "args": {
+        "text": {
+          "lit": "stack_control=stay"
+        }
+      },
+      "id": "express.say@1",
+      "into": "out",
+      "nid": "stay",
+      "op": "Call"
+    },
+    "nid": "root",
+    "op": "Branch",
+    "pred": {
+      "args": [
+        {
+          "args": [
+            {
+              "pull": "utterance"
+            },
+            {
+              "lit": "start over"
+            }
+          ],
+          "fn": "contains"
+        },
+        {
+          "args": [
+            {
+              "pull": "utterance"
+            },
+            {
+              "lit": "fresh"
+            }
+          ],
+          "fn": "contains"
+        }
+      ],
+      "fn": "or"
+    },
+    "then": {
+      "args": {
+        "text": {
+          "lit": "stack_control=fresh"
+        }
+      },
+      "id": "express.say@1",
+      "into": "out",
+      "nid": "fresh",
+      "op": "Call"
+    }
+  },
+  "summary": "If user says start over / fresh, emit fresh signal text"
+}

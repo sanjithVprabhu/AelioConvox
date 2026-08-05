@@ -1,0 +1,93 @@
+{
+  "id": "calc_mul_div",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "seed",
+        "op": "Const",
+        "v": {
+          "x": 12,
+          "y": 3
+        }
+      },
+      {
+        "args": {
+          "v": {
+            "args": [
+              {
+                "pull": "x"
+              },
+              {
+                "pull": "y"
+              }
+            ],
+            "fn": "mul"
+          }
+        },
+        "id": "compute.hold@1",
+        "into": "product",
+        "nid": "prod",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "v": {
+            "args": [
+              {
+                "pull": "product"
+              },
+              {
+                "lit": 4
+              }
+            ],
+            "fn": "div"
+          }
+        },
+        "id": "compute.hold@1",
+        "into": "quotient",
+        "nid": "quot",
+        "op": "Call"
+      },
+      {
+        "else": {
+          "args": {
+            "text": {
+              "lit": "mul/div unexpected"
+            }
+          },
+          "id": "express.say@1",
+          "into": "msg",
+          "nid": "bad",
+          "op": "Call"
+        },
+        "nid": "gate",
+        "op": "Branch",
+        "pred": {
+          "args": [
+            {
+              "pull": "quotient"
+            },
+            {
+              "lit": 9
+            }
+          ],
+          "fn": "eq"
+        },
+        "then": {
+          "args": {
+            "text": {
+              "lit": "mul/div ok"
+            }
+          },
+          "id": "express.say@1",
+          "into": "msg",
+          "nid": "ok",
+          "op": "Call"
+        }
+      }
+    ]
+  },
+  "summary": "Multiply then divide with Branch on exact quotient"
+}

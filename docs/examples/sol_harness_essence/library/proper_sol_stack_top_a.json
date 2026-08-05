@@ -1,0 +1,40 @@
+{
+  "id": "proper_sol_stack_top_a",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "utterance": {
+            "pull": "utterance"
+          }
+        },
+        "id": "flow.stack_mid_b@1",
+        "into": "child",
+        "nid": "call_b",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "lit": "top-A after "
+              },
+              {
+                "pull": "child.out.text"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "after_b",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Proper Sol top A — Call pinned flow.stack_mid_b@1 (which Calls leaf), wait"
+}

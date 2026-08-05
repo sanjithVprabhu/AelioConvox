@@ -9,6 +9,8 @@ authors.workspace = true
 [dependencies]
 aelio-agent = { path = "../aelio-agent" }
 aelio-runtime = { path = "../aelio-runtime" }
+aelio-kernel.workspace = true
+aelio-store.workspace = true
 aelio-db-query = { path = "../aelio-db-query" }
 aelio-render = { path = "../aelio-render" }
 aelio-sol.workspace = true

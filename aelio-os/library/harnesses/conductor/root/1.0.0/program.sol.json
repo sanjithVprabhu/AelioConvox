@@ -1,0 +1,158 @@
+{
+  "nid": "root",
+  "op": "Seq",
+  "steps": [
+    {
+      "nid": "hold_route",
+      "op": "Call",
+      "id": "compute.hold@1",
+      "args": {
+        "v": {
+          "pull": "route"
+        }
+      },
+      "into": "decision"
+    },
+    {
+      "nid": "route_switch",
+      "op": "Branch",
+      "pred": {
+        "fn": "eq",
+        "args": [
+          {
+            "pull": "decision"
+          },
+          {
+            "lit": "quick_reply"
+          }
+        ]
+      },
+      "then": {
+        "nid": "say_hi",
+        "op": "Call",
+        "id": "express.say@1",
+        "args": {
+          "text": {
+            "lit": "Hey! I can help you."
+          }
+        },
+        "into": "reply"
+      },
+      "else": {
+        "nid": "maybe_understand",
+        "op": "Branch",
+        "pred": {
+          "fn": "eq",
+          "args": [
+            {
+              "pull": "decision"
+            },
+            {
+              "lit": "understand_intent"
+            }
+          ]
+        },
+        "then": {
+          "nid": "ack_intent",
+          "op": "Call",
+          "id": "express.say@1",
+          "args": {
+            "text": {
+              "lit": "Spawning understand_intent"
+            }
+          },
+          "into": "reply"
+        },
+        "else": {
+          "nid": "maybe_average",
+          "op": "Branch",
+          "pred": {
+            "fn": "eq",
+            "args": [
+              {
+                "pull": "decision"
+              },
+              {
+                "lit": "spawn_average"
+              }
+            ]
+          },
+          "then": {
+            "nid": "ack_avg",
+            "op": "Call",
+            "id": "express.say@1",
+            "args": {
+              "text": {
+                "lit": "Spawning workflow.average"
+              }
+            },
+            "into": "reply"
+          },
+          "else": {
+            "nid": "maybe_wait",
+            "op": "Branch",
+            "pred": {
+              "fn": "eq",
+              "args": [
+                {
+                  "pull": "decision"
+                },
+                {
+                  "lit": "spawn_wait"
+                }
+              ]
+            },
+            "then": {
+              "nid": "ack_wait",
+              "op": "Call",
+              "id": "express.say@1",
+              "args": {
+                "text": {
+                  "lit": "Spawning wait_for_user"
+                }
+              },
+              "into": "reply"
+            },
+            "else": {
+              "nid": "maybe_memory",
+              "op": "Branch",
+              "pred": {
+                "fn": "eq",
+                "args": [
+                  {
+                    "pull": "decision"
+                  },
+                  {
+                    "lit": "memory_attach"
+                  }
+                ]
+              },
+              "then": {
+                "nid": "ack_mem",
+                "op": "Call",
+                "id": "express.say@1",
+                "args": {
+                  "text": {
+                    "lit": "Spawning memory_attach"
+                  }
+                },
+                "into": "reply"
+              },
+              "else": {
+                "nid": "escalate",
+                "op": "Call",
+                "id": "express.say@1",
+                "args": {
+                  "text": {
+                    "lit": "Escalate: no deterministic route"
+                  }
+                },
+                "into": "reply"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

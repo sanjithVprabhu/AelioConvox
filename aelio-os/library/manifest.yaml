@@ -1,0 +1,14 @@
+# Aelio vendor standard library manifest (Phase 1 skeleton)
+name: aelio-vendor-stdlib
+version: 0.1.0
+vendor: aelio
+description: |
+  Vendor standard library skeleton for Conductor/Harness OS.
+harnesses:
+  - id: workflow.average
+    version: 1.0.0
+    path: harnesses/workflow/average/1.0.0
+targets:
+  - targets/math/sum@1.json
+  - targets/math/divide@1.json
+  - targets/collection/count@1.json

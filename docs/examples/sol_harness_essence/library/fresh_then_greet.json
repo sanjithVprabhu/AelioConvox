@@ -1,0 +1,63 @@
+{
+  "id": "fresh_then_greet",
+  "program": {
+    "else": {
+      "args": {
+        "id": {
+          "lit": "quick_reply"
+        },
+        "utterance": {
+          "pull": "utterance"
+        }
+      },
+      "id": "harness.invoke@1",
+      "into": "out",
+      "nid": "cont",
+      "op": "Call"
+    },
+    "nid": "root",
+    "op": "Branch",
+    "pred": {
+      "args": [
+        {
+          "args": [
+            {
+              "pull": "utterance"
+            },
+            {
+              "lit": "start over"
+            }
+          ],
+          "fn": "contains"
+        },
+        {
+          "args": [
+            {
+              "pull": "utterance"
+            },
+            {
+              "lit": "fresh"
+            }
+          ],
+          "fn": "contains"
+        }
+      ],
+      "fn": "or"
+    },
+    "then": {
+      "args": {
+        "id": {
+          "lit": "greet_then_offer_help"
+        },
+        "utterance": {
+          "pull": "utterance"
+        }
+      },
+      "id": "harness.invoke@1",
+      "into": "out",
+      "nid": "restart",
+      "op": "Call"
+    }
+  },
+  "summary": "Combine detect_fresh + greet vs quick_reply"
+}

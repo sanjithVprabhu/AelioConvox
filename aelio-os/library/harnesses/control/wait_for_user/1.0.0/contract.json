@@ -1,0 +1,51 @@
+{
+  "id": "wait_for_user",
+  "version": "1.0.0",
+  "origin": "vendor",
+  "description": "Ask one question and Park for user reply.",
+  "input_imprint": "aelio.any@1",
+  "output_imprint": "aelio.any@1",
+  "errors": [],
+  "effect": "read",
+  "determinism": "deterministic",
+  "suspendability": "park_allowed",
+  "children_allow": [],
+  "budgets": {
+    "steps": 50,
+    "calls": 8,
+    "wall_ms": 5000,
+    "depth": 4,
+    "fanout": 2
+  },
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "ask",
+        "op": "Call",
+        "id": "express.say@1",
+        "args": {
+          "text": {
+            "lit": "Before I continue, what should I clarify first?"
+          }
+        },
+        "into": "ask1"
+      },
+      {
+        "nid": "wait",
+        "op": "Park",
+        "until": {
+          "kind": "event"
+        },
+        "into": "reply1"
+      }
+    ]
+  },
+  "tags": [
+    "control",
+    "starter",
+    "p0"
+  ],
+  "required_capabilities": []
+}

@@ -1,0 +1,28 @@
+{
+  "nid": "root",
+  "op": "Seq",
+  "steps": [
+    {
+      "nid": "search",
+      "op": "Call",
+      "id": "memory.search@1",
+      "args": {
+        "query": {
+          "pull": "query"
+        }
+      },
+      "into": "hit"
+    },
+    {
+      "nid": "attach",
+      "op": "Call",
+      "id": "context.attach@1",
+      "args": {
+        "snippet": {
+          "pull": "hit.snippet"
+        }
+      },
+      "into": "note"
+    }
+  ]
+}

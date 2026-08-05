@@ -1,0 +1,40 @@
+{
+  "id": "wait_for_user",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "text": {
+            "lit": "Before I continue, what should I clarify first?"
+          }
+        },
+        "id": "express.say@1",
+        "into": "ask1",
+        "nid": "ask",
+        "op": "Call"
+      },
+      {
+        "into": "reply1",
+        "nid": "wait",
+        "op": "Park",
+        "until": {
+          "kind": "event"
+        }
+      },
+      {
+        "args": {
+          "text": {
+            "lit": "Thanks — continuing."
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "ack",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Ask one clarifying question and wait for the next message"
+}

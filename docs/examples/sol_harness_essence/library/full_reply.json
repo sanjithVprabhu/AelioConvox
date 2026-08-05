@@ -1,0 +1,29 @@
+{
+  "id": "full_reply",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "lit": "Here is a fuller answer about: "
+              },
+              {
+                "pull": "utterance"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "reply",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Longer grounded answer from utterance + optional page note"
+}

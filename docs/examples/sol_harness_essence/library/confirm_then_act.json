@@ -1,0 +1,62 @@
+{
+  "id": "confirm_then_act",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "text": {
+            "lit": "Confirm this action? Reply yes or no."
+          }
+        },
+        "id": "express.say@1",
+        "into": "ask1",
+        "nid": "ask",
+        "op": "Call"
+      },
+      {
+        "into": "reply1",
+        "nid": "wait",
+        "op": "Park",
+        "until": {
+          "kind": "event"
+        }
+      },
+      {
+        "else": {
+          "args": {
+            "text": {
+              "lit": "Cancelled."
+            }
+          },
+          "id": "express.say@1",
+          "into": "out",
+          "nid": "cancel",
+          "op": "Call"
+        },
+        "nid": "gate",
+        "op": "Branch",
+        "pred": {
+          "args": [
+            {
+              "pull": "reply1.text"
+            },
+            {
+              "lit": "yes"
+            }
+          ],
+          "fn": "contains"
+        },
+        "then": {
+          "args": {},
+          "id": "tool.act_stub@1",
+          "into": "acted",
+          "nid": "act",
+          "op": "Call"
+        }
+      }
+    ]
+  },
+  "summary": "Ask for yes/no confirmation, Park, then acknowledge (effect gate pattern)"
+}

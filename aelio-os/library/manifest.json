@@ -1,0 +1,83 @@
+{
+  "name": "aelio-vendor-stdlib",
+  "version": "0.1.0",
+  "vendor": "aelio",
+  "description": "Vendor standard library: Conductor, workflows, math, tools, memory, conversation starters.",
+  "harnesses": [
+    {
+      "id": "conductor.root",
+      "version": "1.0.0",
+      "path": "harnesses/conductor/root/1.0.0"
+    },
+    {
+      "id": "workflow.average",
+      "version": "1.0.0",
+      "path": "harnesses/workflow/average/1.0.0"
+    },
+    {
+      "id": "math.sum",
+      "version": "1.0.0",
+      "path": "harnesses/math/sum/1.0.0"
+    },
+    {
+      "id": "math.divide",
+      "version": "1.0.0",
+      "path": "harnesses/math/divide/1.0.0"
+    },
+    {
+      "id": "collection.count",
+      "version": "1.0.0",
+      "path": "harnesses/collection/count/1.0.0"
+    },
+    {
+      "id": "tool.run_once",
+      "version": "1.0.0",
+      "path": "harnesses/tools/run_once/1.0.0"
+    },
+    {
+      "id": "tool.send_otp",
+      "version": "1.0.0",
+      "path": "harnesses/tools/send_otp/1.0.0"
+    },
+    {
+      "id": "workflow.confirm_then_act",
+      "version": "1.0.0",
+      "path": "harnesses/workflow/confirm_then_act/1.0.0"
+    },
+    {
+      "id": "memory.attach",
+      "version": "1.0.0",
+      "path": "harnesses/memory/attach/1.0.0"
+    },
+    {
+      "id": "quick_reply",
+      "version": "1.0.0",
+      "path": "harnesses/conversation/quick_reply/1.0.0"
+    },
+    {
+      "id": "wait_for_user",
+      "version": "1.0.0",
+      "path": "harnesses/control/wait_for_user/1.0.0"
+    },
+    {
+      "id": "understand_intent",
+      "version": "1.0.0",
+      "path": "harnesses/intent/understand_intent/1.0.0"
+    },
+    {
+      "id": "full_reply",
+      "version": "1.0.0",
+      "path": "harnesses/conversation/full_reply/1.0.0"
+    }
+  ],
+  "targets": [
+    "targets/math/sum@1.json",
+    "targets/math/divide@1.json",
+    "targets/collection/count@1.json"
+  ],
+  "notes": [
+    "Executable truth is canonical Sol in program.sol.json",
+    "Promote path: draft \u2192 sandbox \u2192 admin_promote",
+    "Install is idempotent by (vendor, id, version, content_hash)"
+  ]
+}

@@ -120,6 +120,8 @@ pub fn apply(op: &str, args: &[SolValue]) -> R {
 
         // ── list (§9 — producers carry max_items) ──
         "count" => Ok(Int(list_arg(op, args, 0)?.len() as i64)),
+        // Homogeneous sum of ints or floats. Empty list → 0 (int). Mixed types → Type.
+        "sum" => sum_list(list_arg(op, args, 0)?),
         "list_contains" => {
             let l = list_arg(op, args, 0)?;
             let item = args
@@ -214,6 +216,39 @@ fn list_arg<'a>(op: &str, args: &'a [SolValue], i: usize) -> Result<&'a [SolValu
     match args.get(i) {
         Some(SolValue::List(l)) => Ok(l),
         _ => Err(type_err(format!("{op} requires a list at arg {i} (§9)"))),
+    }
+}
+
+fn sum_list(list: &[SolValue]) -> R {
+    if list.is_empty() {
+        return Ok(SolValue::Int(0));
+    }
+    match &list[0] {
+        SolValue::Int(_) => {
+            let mut acc: i64 = 0;
+            for v in list {
+                match v {
+                    SolValue::Int(n) => {
+                        acc = acc
+                            .checked_add(*n)
+                            .ok_or_else(|| type_err("sum overflow"))?;
+                    }
+                    _ => return Err(type_err("sum requires homogeneous int list (§9)")),
+                }
+            }
+            Ok(SolValue::Int(acc))
+        }
+        SolValue::Float(_) => {
+            let mut acc = 0.0f64;
+            for v in list {
+                match v {
+                    SolValue::Float(n) => acc += n,
+                    _ => return Err(type_err("sum requires homogeneous float list (§9)")),
+                }
+            }
+            SolValue::float(acc).map_err(|_| type_err("sum non-finite result"))
+        }
+        _ => Err(type_err("sum requires a list of ints or floats (§9)")),
     }
 }
 

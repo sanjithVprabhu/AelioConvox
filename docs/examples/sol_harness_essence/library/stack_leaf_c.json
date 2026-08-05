@@ -1,0 +1,15 @@
+{
+  "id": "stack_leaf_c",
+  "program": {
+    "args": {
+      "text": {
+        "lit": "leaf-C done"
+      }
+    },
+    "id": "express.say@1",
+    "into": "out",
+    "nid": "root",
+    "op": "Call"
+  },
+  "summary": "Stack leaf C — concludes and returns a marker"
+}

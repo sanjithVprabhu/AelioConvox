@@ -1,0 +1,43 @@
+{
+  "id": "stack_top_a",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "id": {
+            "lit": "stack_mid_b"
+          },
+          "utterance": {
+            "pull": "utterance"
+          }
+        },
+        "id": "harness.invoke@1",
+        "into": "child",
+        "nid": "call_b",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "lit": "top-A after "
+              },
+              {
+                "pull": "child.out.text"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "after_b",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Stack top A — invoke mid B (which invokes leaf C), wait for whole chain"
+}

@@ -1,0 +1,11 @@
+{
+  "nid": "root",
+  "op": "Call",
+  "id": "collection.count@1",
+  "args": {
+    "list": {
+      "pull": "values"
+    }
+  },
+  "into": "count"
+}

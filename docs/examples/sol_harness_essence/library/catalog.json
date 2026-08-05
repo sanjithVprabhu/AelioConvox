@@ -1,0 +1,186 @@
+{
+  "contracts": [
+    {
+      "file": "quick_reply.json",
+      "id": "quick_reply",
+      "summary": "Answer briefly in one or two sentences from current context"
+    },
+    {
+      "file": "understand_intent.json",
+      "id": "understand_intent",
+      "summary": "Clarify what the user wants; suggest the next harness; may ask one question"
+    },
+    {
+      "file": "wait_for_user.json",
+      "id": "wait_for_user",
+      "summary": "Ask one clarifying question and wait for the next message"
+    },
+    {
+      "file": "memory_attach.json",
+      "id": "memory_attach",
+      "summary": "Search memory and attach a short snippet to the context page"
+    },
+    {
+      "file": "full_reply.json",
+      "id": "full_reply",
+      "summary": "Longer grounded answer from utterance + optional page note"
+    },
+    {
+      "file": "apologize_closed.json",
+      "id": "apologize_closed",
+      "summary": "Fail-closed user message when the OS cannot proceed safely"
+    },
+    {
+      "file": "calc_sum_gate.json",
+      "id": "calc_sum_gate",
+      "summary": "Add three numbers, branch on whether sum > 10, emit a short status."
+    },
+    {
+      "file": "calc_repeat_add.json",
+      "id": "calc_repeat_add",
+      "summary": "Deterministic repeat: Loop adds 1 to n three times (control Loop)"
+    },
+    {
+      "file": "calc_mul_div.json",
+      "id": "calc_mul_div",
+      "summary": "Multiply then divide with Branch on exact quotient"
+    },
+    {
+      "file": "list_filter_keep.json",
+      "id": "list_filter_keep",
+      "summary": "Filter a list by keep flag, then count kept (Filter + compute count)"
+    },
+    {
+      "file": "string_contains_gate.json",
+      "id": "string_contains_gate",
+      "summary": "Branch if utterance contains the word help"
+    },
+    {
+      "file": "semantic_ack.json",
+      "id": "semantic_ack",
+      "summary": "Classify a sentence, branch, ask if unclear, park for user, then acknowledge."
+    },
+    {
+      "file": "confirm_then_act.json",
+      "id": "confirm_then_act",
+      "summary": "Ask for yes/no confirmation, Park, then acknowledge (effect gate pattern)"
+    },
+    {
+      "file": "detect_fresh_utterance.json",
+      "id": "detect_fresh_utterance",
+      "summary": "If user says start over / fresh, emit fresh signal text"
+    },
+    {
+      "file": "greet_then_offer_help.json",
+      "id": "greet_then_offer_help",
+      "summary": "Greet, then branch: offer help or ask what they need"
+    },
+    {
+      "file": "parent_waits_on_child.json",
+      "id": "parent_waits_on_child",
+      "summary": "Call another harness, wait for its output, then continue"
+    },
+    {
+      "file": "memory_then_full_reply.json",
+      "id": "memory_then_full_reply",
+      "summary": "Combine memory_attach + full_reply: search/attach then expand answer"
+    },
+    {
+      "file": "greet_then_quick_reply.json",
+      "id": "greet_then_quick_reply",
+      "summary": "Combine greet_then_offer_help + quick_reply"
+    },
+    {
+      "file": "understand_then_memory.json",
+      "id": "understand_then_memory",
+      "summary": "Combine understand_intent + memory_attach"
+    },
+    {
+      "file": "help_router.json",
+      "id": "help_router",
+      "summary": "Branch: help→memory_attach, else→quick_reply"
+    },
+    {
+      "file": "intent_then_calc.json",
+      "id": "intent_then_calc",
+      "summary": "Branch: calc keywords→calc_sum_gate, else→understand_intent"
+    },
+    {
+      "file": "greet_memory_pipeline.json",
+      "id": "greet_memory_pipeline",
+      "summary": "Pipeline: greet_then_offer_help then memory_attach"
+    },
+    {
+      "file": "fresh_then_greet.json",
+      "id": "fresh_then_greet",
+      "summary": "Combine detect_fresh + greet vs quick_reply"
+    },
+    {
+      "file": "calc_then_report_pipeline.json",
+      "id": "calc_then_report_pipeline",
+      "summary": "Pipeline: calc_sum_gate then calc_mul_div then report"
+    },
+    {
+      "file": "clarify_slot.json",
+      "id": "clarify_slot",
+      "summary": "Ask for one missing field; Park; acknowledge (T1 intent)"
+    },
+    {
+      "file": "memory_search.json",
+      "id": "memory_search",
+      "summary": "Search memory only and return snippet (T1 memory)"
+    },
+    {
+      "file": "stack_leaf_c.json",
+      "id": "stack_leaf_c",
+      "summary": "Stack leaf C — concludes and returns a marker"
+    },
+    {
+      "file": "stack_mid_b.json",
+      "id": "stack_mid_b",
+      "summary": "Stack mid B — invoke leaf C, wait, then report"
+    },
+    {
+      "file": "stack_top_a.json",
+      "id": "stack_top_a",
+      "summary": "Stack top A — invoke mid B (which invokes leaf C), wait for whole chain"
+    },
+    {
+      "file": "proper_sol_stack_leaf_c.json",
+      "id": "proper_sol_stack_leaf_c",
+      "summary": "Proper Sol leaf C (registered-flow target body)"
+    },
+    {
+      "file": "proper_sol_stack_mid_b.json",
+      "id": "proper_sol_stack_mid_b",
+      "summary": "Proper Sol mid B — Call pinned flow.stack_leaf_c@1, wait, report"
+    },
+    {
+      "file": "proper_sol_stack_top_a.json",
+      "id": "proper_sol_stack_top_a",
+      "summary": "Proper Sol top A — Call pinned flow.stack_mid_b@1 (which Calls leaf), wait"
+    },
+    {
+      "file": "fallback_say.json",
+      "id": "fallback_say",
+      "summary": "Fallback: try primary express, else backup line (Fallback control)"
+    },
+    {
+      "file": "guard_required_field.json",
+      "id": "guard_required_field",
+      "summary": "Guard: require bag.ready before saying ok (Guard control)"
+    },
+    {
+      "file": "once_external_stub.json",
+      "id": "once_external_stub",
+      "summary": "Once-wrapped external stub Call (idempotent effect pattern)"
+    },
+    {
+      "file": "budgeted_express.json",
+      "id": "budgeted_express",
+      "summary": "Budget-capped express Call (calls=2, ms=5000)"
+    }
+  ],
+  "count": 36,
+  "table": "sol_harness_contracts"
+}

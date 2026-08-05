@@ -2,18 +2,18 @@
 //! V1 evaluation harness: expected step sequences + LLM-call assertions.
 
 use aelio_agent::blocks::flow::FlowInstance;
+use aelio_agent::contract::{AbilityContract, Predicate};
 use aelio_agent::runtime::World;
 use aelio_agent::types::{Depth, LookupTier};
 use indexmap::IndexMap;
 
-/// A greeting has an authored deterministic path; intelligence is unnecessary.
+/// Greeting is model-free via Conductor → quick_reply template (no cold ProposePath).
 #[test]
 fn hi_cold_path_is_model_free_and_learnable() {
     let mut world = World::demo_tenant("t_demo");
     let r = world.run_turn("u1", "Hi");
 
     assert_eq!(r.depth, Depth::Shallow);
-    assert_eq!(r.tier, Some(LookupTier::Tier2));
     assert_eq!(r.llm_calls, 0);
     assert!(!r.opened_loop, "bare greeting opens no loop");
     assert!(
@@ -23,18 +23,12 @@ fn hi_cold_path_is_model_free_and_learnable() {
     assert!(r.steps.iter().any(|s| s.name == "FlowGate"));
     assert!(r.steps.iter().any(|s| s.name == "SplitClauses"));
     assert!(r.steps.iter().any(|s| s.name == "ClassifyDepth"));
-    assert!(r.steps.iter().any(|step| {
-        step.name == "AdaptiveDecision.Shadow" && step.detail.contains("decision_hash=")
-    }));
-    assert!(r.steps.iter().any(|step| {
-        step.name == "AdaptiveParity"
-            && step.detail.contains("match=false")
-            && step.detail.contains("legacy_path_not_admitted")
-    }));
+    assert!(r.steps.iter().any(|s| s.name == "Conductor.Select"));
+    assert!(r.steps.iter().any(|s| s.name == "Harness.quick_reply"));
+    assert!(!r.steps.iter().any(|s| s.name == "ProposePath"));
     // pre-gate skipped LLM split
     let split = r.steps.iter().find(|s| s.name == "SplitClauses").unwrap();
     assert!(split.detail.contains("mode=pure"));
-    assert!(r.proposal_id.is_some());
     assert!(world.registry.procedures.is_empty());
 }
 
@@ -48,7 +42,7 @@ fn repeated_world_turn_does_not_inline_promote() {
 
     let repeated = world.run_turn("u2", "Hi");
     assert_eq!(repeated.llm_calls, 0);
-    assert_eq!(repeated.tier, Some(LookupTier::Tier2));
+    assert!(repeated.steps.iter().any(|s| s.name == "Conductor.Select"));
     assert!(world.registry.procedures.is_empty());
 }
 
@@ -259,9 +253,9 @@ fn arbitrary_capability_path_executes_generically() {
         errors: vec![],
     });
     world.registry.register_ability(
-        aelio_agent::AbilityContract::effect("custom.arbitrary.ping")
+        AbilityContract::effect("custom.arbitrary.ping")
             .with_tool_deps(vec!["custom_ping".into()])
-            .with_postconditions(vec![aelio_agent::Predicate::Present {
+            .with_postconditions(vec![Predicate::Present {
                 path: "evidence.pong".into(),
             }]),
     );

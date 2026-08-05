@@ -1,0 +1,64 @@
+{
+  "id": "workflow.confirm_then_act",
+  "version": "1.0.0",
+  "origin": "vendor",
+  "description": "Guard on bag.confirmed then Once tool.act_stub; else ask for confirmation.",
+  "input_imprint": "aelio.any@1",
+  "output_imprint": "aelio.any@1",
+  "errors": [],
+  "effect": "external",
+  "determinism": "ledgered_nondeterministic",
+  "suspendability": "never",
+  "children_allow": [],
+  "budgets": {
+    "steps": 50,
+    "calls": 8,
+    "wall_ms": 5000,
+    "depth": 4,
+    "fanout": 2
+  },
+  "program": {
+    "nid": "root",
+    "op": "Guard",
+    "check": "entry",
+    "invariant": {
+      "fn": "eq",
+      "args": [
+        {
+          "pull": "confirmed"
+        },
+        {
+          "lit": true
+        }
+      ]
+    },
+    "body": {
+      "nid": "act",
+      "op": "Once",
+      "body": {
+        "nid": "send",
+        "op": "Call",
+        "id": "tool.act_stub@1",
+        "args": {},
+        "into": "sent"
+      }
+    },
+    "on_violation": {
+      "nid": "ask",
+      "op": "Call",
+      "id": "express.say@1",
+      "args": {
+        "text": {
+          "lit": "Please confirm to continue."
+        }
+      },
+      "into": "out"
+    }
+  },
+  "tags": [
+    "workflow",
+    "tools",
+    "p0"
+  ],
+  "required_capabilities": []
+}

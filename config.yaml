@@ -43,6 +43,8 @@ channels:
       - http://127.0.0.1:4173
       - http://localhost:4180
       - http://127.0.0.1:4180
+      - http://localhost:4174
+      - http://127.0.0.1:4174
     magic_link:
       enabled: true
       ttl_minutes: 15

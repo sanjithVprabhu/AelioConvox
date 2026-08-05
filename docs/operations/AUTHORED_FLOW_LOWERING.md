@@ -29,10 +29,11 @@ adaptive or TypeScript layer to interpret would create a second instruction auth
 lowering format may add the reactor-owned handoff; until then use `escalate`/`free_range` or keep the
 flow semantic-only.
 
-Without `aelio.lowering`, the semantic flow remains visible but non-executable. Rust records one
-deduplicated materialization demand, readiness stays degraded, and a matching turn performs no
-effect. A model may help author a candidate off path; no model writes instructions into a live
-turn.
+Without `aelio.lowering`, the semantic flow remains visible but non-executable. It does **not**
+block catalog readiness (it is guidance, not an installed app). Flows that declare `lowering` must
+pin during admission; until every such flow is pinned (and the SDK host is up when tools exist),
+`/v1/health` reports `ready: false` and turns refuse to operate. A model may help author a candidate
+off path; no model writes instructions into a live turn.
 
 ## SDK declaration
 

@@ -1,0 +1,8 @@
+{
+  "id": "collection.count@1",
+  "class": "compute",
+  "effect": "pure",
+  "input_imprint": "aelio.collection.list@1",
+  "output_imprint": "aelio.math.int@1",
+  "impl": "compute::count"
+}

@@ -1,0 +1,39 @@
+{
+  "id": "guard_required_field",
+  "program": {
+    "body": {
+      "args": {
+        "text": {
+          "lit": "ready field present"
+        }
+      },
+      "id": "express.say@1",
+      "into": "out",
+      "nid": "ok",
+      "op": "Call"
+    },
+    "check": "entry",
+    "invariant": {
+      "args": [
+        {
+          "pull": "ready"
+        }
+      ],
+      "fn": "exists"
+    },
+    "nid": "root",
+    "on_violation": {
+      "args": {
+        "text": {
+          "lit": "missing ready"
+        }
+      },
+      "id": "express.say@1",
+      "into": "out",
+      "nid": "bad",
+      "op": "Call"
+    },
+    "op": "Guard"
+  },
+  "summary": "Guard: require bag.ready before saying ok (Guard control)"
+}

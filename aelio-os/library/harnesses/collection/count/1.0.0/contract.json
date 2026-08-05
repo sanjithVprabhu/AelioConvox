@@ -1,0 +1,36 @@
+{
+  "id": "collection.count",
+  "version": "1.0.0",
+  "origin": "vendor",
+  "description": "Count list length",
+  "input_imprint": "aelio.any@1",
+  "output_imprint": "aelio.any@1",
+  "errors": [],
+  "effect": "pure",
+  "determinism": "deterministic",
+  "suspendability": "never",
+  "children_allow": [],
+  "budgets": {
+    "steps": 10,
+    "calls": 2,
+    "wall_ms": 500,
+    "depth": 1,
+    "fanout": 1
+  },
+  "program": {
+    "nid": "root",
+    "op": "Call",
+    "id": "collection.count@1",
+    "args": {
+      "list": {
+        "pull": "values"
+      }
+    },
+    "into": "count"
+  },
+  "tags": [
+    "stdlib",
+    "p0"
+  ],
+  "required_capabilities": []
+}

@@ -27,6 +27,7 @@ pub struct World {
     pub adaptive_artifact_host: Box<dyn crate::adaptive::AdaptiveArtifactHost>,
     pub user_state: IndexMap<String, String>,
     pub user_flows: IndexMap<String, crate::blocks::flow::FlowInstance>,
+    pub user_harness: IndexMap<String, crate::harness::HarnessSession>,
     pub llm_provider: Box<dyn LlmProvider>,
     pub turn_recall: Box<dyn TurnRecall>,
     /// The embedder every semantic hot-path decision uses. Defaults to the offline bag-of-hash model;
@@ -39,6 +40,8 @@ pub struct World {
     pub legacy_flow_execution_enabled: bool,
     /// True only when a wrapper can actually commit user-scoped memory durably.
     pub(crate) durable_memory_enabled: bool,
+    /// Stored (default) vs Hardcoded benchmark control for starter harness bodies.
+    pub harness_play_mode: crate::harness::HarnessPlayMode,
 }
 
 impl World {
@@ -52,19 +55,21 @@ impl World {
         world.llm_provider = Box::new(UnavailableLlmProvider::default());
         world.inline_learning_enabled = false;
         world.legacy_flow_execution_enabled = false;
+        world.harness_play_mode = crate::harness::HarnessPlayMode::Stored;
         Ok(world)
     }
 
     /// Atomically replace the active tenant declaration while preserving durable/in-flight
     /// user state. Entity versions remain immutable in durable storage; this method rebuilds
     /// only the active in-memory lookup surface.
-    pub fn replace_tenant(&mut self, tenant: TenantDecl) -> crate::types::AelioResult<()> {
+    pub fn replace_tenant(&mut self, mut tenant: TenantDecl) -> crate::types::AelioResult<()> {
         if tenant.tenant_id != self.tenant.tenant_id {
             return Err(crate::types::AelioError::new(
                 crate::types::ReasonCode::Denied,
                 "cannot replace a runtime with another tenant's catalog",
             ));
         }
+        ensure_starter_harness_programs(&mut tenant);
         let mut registry = Registry::default();
         for tool in &tenant.tools {
             registry.register_tool(tool.clone());
@@ -403,6 +408,8 @@ impl World {
             priority: 1,
         }];
 
+        tenant.harness_programs = crate::harness::starter_harness_library();
+
         let mut registry = Registry::default();
         for t in &tenant.tools {
             registry.register_tool(t.clone());
@@ -470,12 +477,14 @@ impl World {
             adaptive_artifact_host: Box::new(crate::adaptive::UnavailableAdaptiveArtifactHost),
             user_state: IndexMap::new(),
             user_flows: IndexMap::new(),
+            user_harness: IndexMap::new(),
             llm_provider: Box::new(ScriptedLlmProvider::deterministic()),
             turn_recall: Box::new(NoopTurnRecall),
             embedder: std::sync::Arc::new(default_situation_embedder()),
             inline_learning_enabled: true,
             legacy_flow_execution_enabled: true,
             durable_memory_enabled: false,
+            harness_play_mode: crate::harness::HarnessPlayMode::Stored,
         }
     }
 
@@ -496,6 +505,10 @@ impl World {
 
     pub fn set_tool_host(&mut self, host: Box<dyn CapabilityHost>) {
         self.tool_host = host;
+    }
+
+    pub fn set_harness_play_mode(&mut self, mode: crate::harness::HarnessPlayMode) {
+        self.harness_play_mode = mode;
     }
 
     pub fn set_adaptive_artifact_host(
@@ -555,6 +568,11 @@ impl World {
             .ledger_append("turn_user", crate::types::Value::str(user_id));
 
         let active_flow = self.user_flows.get(user_id).cloned();
+        let mut harness = self
+            .user_harness
+            .get(user_id)
+            .cloned()
+            .unwrap_or_default();
         let input = TurnInput {
             turn_id: turn_id.into(),
             utterance: utterance.into(),
@@ -589,12 +607,15 @@ impl World {
             inline_learning_enabled: self.inline_learning_enabled,
             legacy_flow_execution_enabled: self.legacy_flow_execution_enabled,
             durable_memory_enabled: self.durable_memory_enabled,
+            harness: &mut harness,
+            harness_play_mode: self.harness_play_mode,
         };
         let result = rt.run(&input);
 
         if let Some(ref st) = result.new_state {
             self.user_state.insert(user_id.into(), st.clone());
         }
+        self.user_harness.insert(user_id.into(), harness);
         if self.legacy_flow_execution_enabled {
             match &result.active_flow {
                 Some(flow) => {
@@ -656,6 +677,11 @@ impl World {
         let policies = self.tenant.policies.clone();
         let states = self.tenant.states.clone();
         let personality = self.tenant.personalities.first().cloned();
+        let mut harness = self
+            .user_harness
+            .get(user_id)
+            .cloned()
+            .unwrap_or_default();
         TurnRuntime {
             tenant: &self.tenant,
             registry: &mut self.registry,
@@ -674,6 +700,8 @@ impl World {
             inline_learning_enabled: false,
             legacy_flow_execution_enabled: self.legacy_flow_execution_enabled,
             durable_memory_enabled: self.durable_memory_enabled,
+            harness: &mut harness,
+            harness_play_mode: self.harness_play_mode,
         }
         .run_shadow_path(&input, path)
     }
@@ -818,5 +846,12 @@ mod adaptive_execution_tests {
         assert!(result.steps.iter().any(|step| {
             step.name == "AdaptiveInvoke" && step.detail.contains("authority=aelio-runtime")
         }));
+    }
+}
+
+/// Insert missing OS starter programs without overwriting tenant-authored entries.
+pub fn ensure_starter_harness_programs(tenant: &mut TenantDecl) {
+    for (id, program) in crate::harness::starter_harness_library() {
+        tenant.harness_programs.entry(id).or_insert(program);
     }
 }

@@ -1,0 +1,36 @@
+{
+  "nid": "root",
+  "op": "Seq",
+  "steps": [
+    {
+      "nid": "classify",
+      "op": "Call",
+      "id": "understand.classify@1",
+      "args": {
+        "text": {
+          "pull": "utterance"
+        }
+      },
+      "into": "intent"
+    },
+    {
+      "nid": "say",
+      "op": "Call",
+      "id": "express.say@1",
+      "args": {
+        "text": {
+          "fn": "concat",
+          "args": [
+            {
+              "lit": "Intent label="
+            },
+            {
+              "pull": "intent.label"
+            }
+          ]
+        }
+      },
+      "into": "out"
+    }
+  ]
+}

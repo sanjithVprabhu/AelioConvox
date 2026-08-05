@@ -1,0 +1,43 @@
+{
+  "id": "memory_then_full_reply",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "id": {
+            "lit": "memory_attach"
+          },
+          "utterance": {
+            "pull": "utterance"
+          }
+        },
+        "id": "harness.invoke@1",
+        "into": "child",
+        "nid": "mem",
+        "op": "Call"
+      },
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "lit": "Here is a fuller answer. "
+              },
+              {
+                "pull": "child.out.text"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "expand",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Combine memory_attach + full_reply: search/attach then expand answer"
+}

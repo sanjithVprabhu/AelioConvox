@@ -1,0 +1,8 @@
+{
+  "id": "math.divide@1",
+  "class": "compute",
+  "effect": "pure",
+  "input_imprint": "aelio.math.number_pair@1",
+  "output_imprint": "aelio.math.number@1",
+  "impl": "compute::div"
+}

@@ -1,0 +1,15 @@
+{
+  "nid": "root",
+  "op": "Once",
+  "body": {
+    "nid": "otp",
+    "op": "Call",
+    "id": "tool.send_otp@1",
+    "args": {
+      "phone": {
+        "pull": "phone"
+      }
+    },
+    "into": "otp_result"
+  }
+}

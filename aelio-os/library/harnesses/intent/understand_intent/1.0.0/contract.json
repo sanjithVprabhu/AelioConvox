@@ -1,0 +1,62 @@
+{
+  "id": "understand_intent",
+  "version": "1.0.0",
+  "origin": "vendor",
+  "description": "Clarify what the user wants; classify intent; suggest next step.",
+  "input_imprint": "aelio.conversation.utterance@1",
+  "output_imprint": "aelio.conversation.reply@1",
+  "errors": [],
+  "effect": "read",
+  "determinism": "deterministic",
+  "suspendability": "never",
+  "children_allow": [],
+  "budgets": {
+    "steps": 30,
+    "calls": 4,
+    "wall_ms": 3000,
+    "depth": 2,
+    "fanout": 1
+  },
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "classify",
+        "op": "Call",
+        "id": "understand.classify@1",
+        "args": {
+          "text": {
+            "pull": "utterance"
+          }
+        },
+        "into": "intent"
+      },
+      {
+        "nid": "say",
+        "op": "Call",
+        "id": "express.say@1",
+        "args": {
+          "text": {
+            "fn": "concat",
+            "args": [
+              {
+                "lit": "Intent label="
+              },
+              {
+                "pull": "intent.label"
+              }
+            ]
+          }
+        },
+        "into": "out"
+      }
+    ]
+  },
+  "tags": [
+    "intent",
+    "starter",
+    "p0"
+  ],
+  "required_capabilities": []
+}

@@ -1,0 +1,51 @@
+{
+  "id": "full_reply",
+  "version": "1.0.0",
+  "origin": "vendor",
+  "description": "Catch-all free-form reply from utterance (Sol; avoids cold ProposePath).",
+  "input_imprint": "aelio.conversation.utterance@1",
+  "output_imprint": "aelio.conversation.reply@1",
+  "errors": [],
+  "effect": "read",
+  "determinism": "deterministic",
+  "suspendability": "never",
+  "children_allow": [],
+  "budgets": {
+    "steps": 20,
+    "calls": 2,
+    "wall_ms": 2000,
+    "depth": 1,
+    "fanout": 1
+  },
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "reply",
+        "op": "Call",
+        "id": "express.say@1",
+        "args": {
+          "text": {
+            "fn": "concat",
+            "args": [
+              {
+                "lit": "Here is a fuller answer about: "
+              },
+              {
+                "pull": "utterance"
+              }
+            ]
+          }
+        },
+        "into": "out"
+      }
+    ]
+  },
+  "tags": [
+    "conversation",
+    "catch_all",
+    "p0"
+  ],
+  "required_capabilities": []
+}

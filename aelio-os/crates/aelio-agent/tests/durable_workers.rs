@@ -594,17 +594,60 @@ fn exploration_is_bounded_and_never_live_effectful() {
     );
 }
 
+/// Greetings no longer traverse the cold learning path: the Conductor answers them from a stored
+/// harness on turn one. This is the replacement guarantee for the old "authored greeting learning
+/// must not manufacture model-token cost" assertion — the cost is now zero because no model runs at
+/// all, not because a learned procedure kept it at zero. See FLAGS F-024.
+#[test]
+fn conductor_answers_greetings_without_cold_path_or_model_cost() {
+    let shared = store("conductor_greeting_contract");
+    let mut runtime =
+        DurableRuntime::new(aelio_agent::World::demo_tenant("tenant-1"), shared.clone()).unwrap();
+    for index in 0..3 {
+        let result = runtime
+            .run_turn(DurableTurnRequest {
+                turn_id: format!("greet-{index}"),
+                user_id: format!("greet-user-{index}"),
+                utterance: "hi".into(),
+            })
+            .unwrap();
+        assert_eq!(
+            result.llm_calls, 0,
+            "greeting turn {index} must stay model-free"
+        );
+        assert!(
+            !result.steps.iter().any(|s| s.name == "ProposePath"),
+            "greeting turn {index} must not cold-propose"
+        );
+        assert!(
+            result.steps.iter().any(|s| s.name.starts_with("Harness.")),
+            "greeting turn {index} must be answered by a harness"
+        );
+    }
+    // No procedure is learned for greetings any more: the deterministic harness already is the
+    // fast path, so there is nothing for the promotion gate to warm up.
+    let procedures: Vec<StoredRecord<aelio_agent::runtime::PromotedProcedureVersion>> = shared
+        .list("tenant-1", LogicalTable::Procedures, Some("promoted"), 10)
+        .unwrap();
+    assert!(
+        procedures.is_empty(),
+        "greetings must not create learned procedures once Conductor owns them"
+    );
+}
+
 #[test]
 fn repeated_success_promotes_durably_and_next_turn_is_tier_zero() {
     let shared = store("automatic_promotion");
     let mut runtime =
         DurableRuntime::new(aelio_agent::World::demo_tenant("tenant-1"), shared.clone()).unwrap();
+    // A cold-path utterance: the Conductor escalates it, so it still exercises the learning ladder.
+    // Greetings are deliberately excluded now — see `conductor_answers_greetings_without_cold_path_or_model_cost`.
     for index in 0..5 {
         let result = runtime
             .run_turn(DurableTurnRequest {
                 turn_id: format!("cold-{index}"),
                 user_id: format!("user-{index}"),
-                utterance: "hi".into(),
+                utterance: "list jobs".into(),
             })
             .unwrap();
         assert_eq!(result.tier, Some(LookupTier::Tier2));
@@ -624,16 +667,12 @@ fn repeated_success_promotes_durably_and_next_turn_is_tier_zero() {
     );
     assert!(!spec.situation_embedding.is_empty());
     assert!(!spec.contract.postconditions.is_empty());
-    assert_eq!(
-        procedures[0].envelope.value.evidence.token_cost_sum, 0,
-        "authored greeting learning must not manufacture model-token cost"
-    );
 
     let warm = runtime
         .run_turn(DurableTurnRequest {
             turn_id: "warm".into(),
             user_id: "warm-user".into(),
-            utterance: "hi".into(),
+            utterance: "list jobs".into(),
         })
         .unwrap();
     assert_eq!(warm.tier, Some(LookupTier::Tier0));
@@ -1129,12 +1168,13 @@ fn durable_promotion_and_tier_one_use_the_same_configured_embedding_space() {
         embedder,
     )
     .unwrap();
+    // Cold-path utterance so the promotion ladder still runs; greetings are Conductor-owned now.
     for index in 0..5 {
         runtime
             .run_turn(DurableTurnRequest {
                 turn_id: format!("semantic-cold-{index}"),
                 user_id: format!("semantic-user-{index}"),
-                utterance: "hi".into(),
+                utterance: "list jobs".into(),
             })
             .unwrap();
     }
@@ -1151,7 +1191,7 @@ fn durable_promotion_and_tier_one_use_the_same_configured_embedding_space() {
         .run_turn(DurableTurnRequest {
             turn_id: "semantic-near".into(),
             user_id: "semantic-user-0".into(),
-            utterance: "hi".into(),
+            utterance: "list jobs".into(),
         })
         .unwrap();
     assert_eq!(near.tier, Some(LookupTier::Tier1));

@@ -2736,6 +2736,16 @@ impl DurableRuntime {
                 }
             }
         }
+        if !self.world.user_harness.contains_key(user_id) {
+            let harness: Option<crate::storage::StoredRecord<crate::harness::HarnessSession>> =
+                self.store
+                    .get(&self.tenant_id, LogicalTable::HarnessSessions, user_id)?;
+            if let Some(record) = harness {
+                self.world
+                    .user_harness
+                    .insert(user_id.into(), record.envelope.value);
+            }
+        }
         Ok(())
     }
 
@@ -2744,6 +2754,19 @@ impl DurableRuntime {
             self.upsert(
                 LogicalTable::States,
                 envelope(user_id, "state", "active", "runtime", now, state),
+            )?;
+        }
+        if let Some(harness) = self.world.user_harness.get(user_id).cloned() {
+            let status = if harness.is_empty() {
+                "empty"
+            } else if harness.waiting_child().is_some() {
+                "waiting"
+            } else {
+                "active"
+            };
+            self.upsert(
+                LogicalTable::HarnessSessions,
+                envelope(user_id, "harness_session", status, "runtime", now, harness),
             )?;
         }
         if self.world.legacy_flow_execution_enabled {
@@ -2926,12 +2949,22 @@ pub fn validate_catalog(tenant: &TenantDecl) -> AelioResult<()> {
         || tenant.policies.len() > 10_000
         || tenant.flows.len() > 1_000
         || tenant.flow_artifacts.len() > tenant.flows.len()
+        || tenant.harness_programs.len() > 1_000
         || tenant.attributes.len() > 10_000
     {
         return Err(AelioError::new(
             ReasonCode::Validation,
             "catalog identity, required declarations, or collection bounds are invalid",
         ));
+    }
+    for (id, program) in &tenant.harness_programs {
+        if id != &program.id {
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                format!("harness program map key `{id}` must match program.id `{}`", program.id),
+            ));
+        }
+        program.validate()?;
     }
     let mut tool_ids = std::collections::HashSet::new();
     let mut capabilities = std::collections::HashMap::<&str, usize>::new();

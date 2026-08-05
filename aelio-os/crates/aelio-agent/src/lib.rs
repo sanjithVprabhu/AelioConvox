@@ -16,6 +16,7 @@ pub mod contract;
 pub mod decision_log;
 pub mod documents;
 pub mod embedding;
+pub mod harness;
 pub mod memory;
 pub mod ops;
 pub mod path;
@@ -33,6 +34,12 @@ pub use adaptive::{
     ArtifactCandidateV1, ArtifactPinV1, CandidateReasonV1, CapabilityReasonV1, CapabilityRequestV1,
 };
 pub use contract::{AbilityContract, AbilityPath, FieldSchema, Predicate, TypeSchema};
+pub use harness::{
+    detect_stack_control, quick_reply_program, select_starter_harness, starter_catalog,
+    starter_harness_library, ContextPage, HarnessFrame, HarnessPlayMode, HarnessProgramV1,
+    HarnessSession, HarnessStepV1, StackControl, StarterHarness, CONDUCTOR_ID, QUICK_REPLY_ID,
+    UNDERSTAND_INTENT_ID, WAIT_FOR_USER_ID,
+};
 pub use runtime::World;
 pub use types::{
     AelioError, AelioResult, CostClass, Depth, LookupTier, ReasonCode, Recovery, Substrate, Value,

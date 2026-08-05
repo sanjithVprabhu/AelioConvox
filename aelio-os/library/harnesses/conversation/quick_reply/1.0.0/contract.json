@@ -1,0 +1,37 @@
+{
+  "id": "quick_reply",
+  "version": "1.0.0",
+  "origin": "vendor",
+  "description": "Short reply from context (express.say).",
+  "input_imprint": "aelio.any@1",
+  "output_imprint": "aelio.any@1",
+  "errors": [],
+  "effect": "read",
+  "determinism": "deterministic",
+  "suspendability": "never",
+  "children_allow": [],
+  "budgets": {
+    "steps": 50,
+    "calls": 8,
+    "wall_ms": 5000,
+    "depth": 4,
+    "fanout": 2
+  },
+  "program": {
+    "nid": "root",
+    "op": "Call",
+    "id": "express.say@1",
+    "args": {
+      "text": {
+        "lit": "Hey! I can help you."
+      }
+    },
+    "into": "out"
+  },
+  "tags": [
+    "conversation",
+    "starter",
+    "p0"
+  ],
+  "required_capabilities": []
+}

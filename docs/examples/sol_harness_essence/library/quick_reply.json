@@ -1,0 +1,29 @@
+{
+  "id": "quick_reply",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "args": {
+          "text": {
+            "args": [
+              {
+                "lit": "Quick reply: "
+              },
+              {
+                "pull": "utterance"
+              }
+            ],
+            "fn": "concat"
+          }
+        },
+        "id": "express.say@1",
+        "into": "out",
+        "nid": "reply",
+        "op": "Call"
+      }
+    ]
+  },
+  "summary": "Answer briefly in one or two sentences from current context"
+}

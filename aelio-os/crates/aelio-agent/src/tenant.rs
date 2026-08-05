@@ -225,8 +225,9 @@ pub struct FlowSpec {
     pub terminal_states: Vec<String>,
     pub ttl_secs: Option<u64>,
     pub max_attempts: u32,
-    /// Optional closed HOW-layer compiled at catalog admission. Semantic flow declarations remain
-    /// useful without it, but are deliberately non-executable and create materialization demand.
+    /// Optional closed HOW-layer compiled at catalog admission. Flows that declare `lowering`
+    /// are executable OS apps and must pin before the catalog is ready. Flows without it stay
+    /// semantic-only guidance (visible, non-executable, do not block readiness).
     /// Calls inside `program` must use `$cap:<binding>` symbols; raw target ids are rejected.
     #[serde(default)]
     pub lowering: Option<FlowLoweringV1>,
@@ -356,6 +357,9 @@ pub struct TenantDecl {
     /// runtime continuation authoritative; absence retains the migration shadow rail.
     #[serde(default)]
     pub flow_artifacts: IndexMap<String, crate::adaptive::ArtifactPinV1>,
+    /// Saveable Conductor harness programs (vision §10 IR). Keyed by harness id.
+    #[serde(default)]
+    pub harness_programs: IndexMap<String, crate::harness::HarnessProgramV1>,
     pub attributes: Vec<AttributeSpec>,
 }
 
@@ -370,6 +374,7 @@ impl TenantDecl {
             policies: vec![],
             flows: vec![],
             flow_artifacts: IndexMap::new(),
+            harness_programs: IndexMap::new(),
             attributes: vec![],
         }
     }

@@ -1,0 +1,53 @@
+{
+  "id": "memory.attach",
+  "version": "1.0.0",
+  "origin": "vendor",
+  "description": "Search memory and attach snippet to context.",
+  "input_imprint": "aelio.any@1",
+  "output_imprint": "aelio.any@1",
+  "errors": [],
+  "effect": "write",
+  "determinism": "ledgered_nondeterministic",
+  "suspendability": "never",
+  "children_allow": [],
+  "budgets": {
+    "steps": 50,
+    "calls": 8,
+    "wall_ms": 5000,
+    "depth": 4,
+    "fanout": 2
+  },
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "search",
+        "op": "Call",
+        "id": "memory.search@1",
+        "args": {
+          "query": {
+            "pull": "query"
+          }
+        },
+        "into": "hit"
+      },
+      {
+        "nid": "attach",
+        "op": "Call",
+        "id": "context.attach@1",
+        "args": {
+          "snippet": {
+            "pull": "hit.snippet"
+          }
+        },
+        "into": "note"
+      }
+    ]
+  },
+  "tags": [
+    "memory",
+    "p0"
+  ],
+  "required_capabilities": []
+}

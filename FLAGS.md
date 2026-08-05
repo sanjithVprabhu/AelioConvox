@@ -205,3 +205,59 @@ until the constant audit pass (Gate G1-3) closes them one-by-one.
 **Recommendation → (b) for this remediation slice**, with checklist Gate G1-3 owning the inventory.
 Pathway prototype cap is **not** provisional: clamped to **8** per Mother §18.
 Adaptive decision identity is **not** provisional: Mother §4.3 Sol + BLAKE3.
+
+### F-022 — Semantic-only flows vs install readiness — authored-flow lowering
+**What:** Ops doc previously said any flow without lowering keeps readiness degraded. That made
+journey/guidance flows block "OS install complete" even when no executable lowering was declared.
+**Options:** (a) keep every unpinned flow blocking ready; (b) only lowering-declared flows are
+install debt — semantic-only guidance does not block ready; turns refuse operate while executable
+pending > 0; matching skips semantic-only without fail-closed.
+**Recommendation → (b).** Author control: ship `aelio.lowering` to opt a flow into the install.
+`PROVISIONAL` relative to older "always degrade" wording; aligned with install-then-operate.
+
+### F-023 — Session harness stack beside Mother session sense — Conductor vision
+**What:** Product vision requires a multi-frame harness stack + durable per-harness context pages
+(`docs/architecture/HARNESS_CONDUCTOR_VISION.md`). Mother session/`sense` shapes are flatter.
+**Options:** (a) overload FlowInstance as fake stack; (b) new `HarnessSessions` logical table +
+control plane in `TurnRuntime::run` before waiting-child resume.
+**Recommendation → (b).** Implemented as `aelio-agent/src/harness` + `LogicalTable::HarnessSessions`.
+`PROVISIONAL` pending live Conductor preinstall proof; does not weaken pin admission.
+
+### F-024 — Conductor narrows the procedure-learning surface — greetings no longer promote
+**What:** With Conductor default-on, `TurnRuntime::run` returns at `LookupTier::Tier3` for every
+starter selection except `Escalate`. `learn_from_turn` sits inside the ProposePath branch below that
+return, so Conductor-handled turns (greetings, quick replies, clarify) no longer feed
+`observe_and_promote`. Found only after Gate H0-1 restored compilation of `tests/durable_workers.rs`,
+which had not built since the harness slice landed; 2 tests were failing silently behind the build
+break.
+**Impact measured, not assumed:** the learning ladder itself is intact. A cold-path utterance
+(`"list jobs"`) still runs `Tier2 x3 -> Tier0` with a durable promoted procedure. Only utterances the
+Conductor answers directly stop learning.
+**Options:** (a) accept the narrowing — the deterministic harness is already the fast path, so a
+learned procedure adds nothing for greetings; (b) observe Conductor-played harnesses too, synthesising
+an `AbilityPath` per harness so promotion continues.
+**Recommendation -> (a).** For a greeting the Conductor reaches 0 `llm_calls` on turn **one**; the old
+loop reached the same cost only after 3 observations promoted it. (b) would pollute the procedure
+registry with entries that can never beat the harness they duplicate. Cold-path learning — the surface
+Phase 7 create-harness actually builds on — is unchanged.
+**Test consequence:** `repeated_success_promotes_durably_and_next_turn_is_tier_zero` and
+`durable_promotion_and_tier_one_use_the_same_configured_embedding_space` retargeted from `"hi"` to a
+cold-path utterance (their subjects are promotion mechanics and embedding-space identity; the greeting
+was an incidental vehicle). The greeting guarantee it used to carry — no manufactured model-token cost
+— is preserved as a stronger assertion in the new
+`conductor_answers_greetings_without_cold_path_or_model_cost`: zero model calls, no ProposePath, and no
+learned procedure at all.
+`PROVISIONAL` — revisit if Conductor-owned turns ever need warm-tier acceleration.
+
+### F-025 — Path B (Sol-only bodies) resolves LAYER_BREAKDOWN open Path A vs B
+**What:** `LAYER_BREAKDOWN.md` §P1 left Path A (sugar + lowering + dual runtime) vs Path B (Sol-only)
+open. Execution plan §2 chooses **B**: sugar may exist as authoring input but is compiled to Sol at
+admission; only Sol is stored, hashed, and executed. `HarnessStepV1` / `play_harness_program` are
+deleted in Phase 5, not maintained forever.
+**Rationale:** dual runtimes fork behavior silently (the exact class of bug that produced "stored
+programs are persisted" while the live catalog held `{}`). Authoring ergonomics is a tooling problem
+above storage.
+**Identity:** harness identity is Mother §4.3 canonical Sol + BLAKE3 (`aelio_sol::value_hash`), never
+ad-hoc SHA-256 over serde_json (checklist G1-2 / plan O2).
+**Status:** decided; Phase 1 contract model implements sealed identity + admission. Phase 2 freezes
+the Call ISA next. No Mother amendment required for Path B itself.

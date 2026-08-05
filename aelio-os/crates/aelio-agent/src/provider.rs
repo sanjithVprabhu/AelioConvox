@@ -748,6 +748,9 @@ impl TsGatewayProvider {
 
     /// Build from `AELIO_LLM_GATEWAY_URL` (required), optional `AELIO_LLM_GATEWAY_TOKEN` (auth to the
     /// gateway itself — not a vendor key) and `AELIO_LLM_MODEL` (default routing model/alias).
+    ///
+    /// When `AELIO_LLM_GATEWAY_TOKEN` is unset, fall back to `AELIO_HOST_TOKEN` so a single shared
+    /// internal token (the usual local/demo wiring) authorizes gateway calls without a second env.
     pub fn from_env() -> AelioResult<Self> {
         let endpoint = std::env::var("AELIO_LLM_GATEWAY_URL").map_err(|_| {
             AelioError::new(
@@ -756,10 +759,13 @@ impl TsGatewayProvider {
             )
         })?;
         let model = std::env::var("AELIO_LLM_MODEL").unwrap_or_else(|_| "tier:cheap".into());
+        let api_key = std::env::var("AELIO_LLM_GATEWAY_TOKEN")
+            .ok()
+            .or_else(|| std::env::var("AELIO_HOST_TOKEN").ok());
         Self::new(HttpProviderConfig {
             endpoint,
             model,
-            api_key: std::env::var("AELIO_LLM_GATEWAY_TOKEN").ok(),
+            api_key,
             timeout: Duration::from_secs(45),
             extra_headers: IndexMap::new(),
         })
@@ -1033,10 +1039,13 @@ impl GatewayEmbedder {
                 )));
             }
         };
+        let api_key = std::env::var("AELIO_LLM_GATEWAY_TOKEN")
+            .ok()
+            .or_else(|| std::env::var("AELIO_HOST_TOKEN").ok());
         Self::new(
             endpoint,
             model,
-            std::env::var("AELIO_LLM_GATEWAY_TOKEN").ok(),
+            api_key,
             dimension,
             Duration::from_secs(30),
         )

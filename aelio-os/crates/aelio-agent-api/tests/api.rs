@@ -19,6 +19,35 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tower::ServiceExt;
 
+/// Read one JSON frame from an SDK socket, failing fast instead of blocking forever.
+///
+/// These tests previously awaited `socket.next()` with no deadline. When the turn path stopped
+/// dispatching the tool, no `invoke` frame was ever sent and the test hung indefinitely — which
+/// wedged `cargo test --workspace` and masked every other failure in this file behind a suite that
+/// never returned. A missing frame is now a fast, named failure.
+const SDK_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+async fn recv_json<S>(socket: &mut S) -> Value
+where
+    S: futures_util::Stream<
+            Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>,
+        > + Unpin,
+{
+    let frame = tokio::time::timeout(SDK_FRAME_TIMEOUT, socket.next())
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "timed out after {:?} waiting for an SDK socket frame -- the runtime never sent one",
+                SDK_FRAME_TIMEOUT
+            )
+        })
+        .expect("sdk socket closed while a frame was expected")
+        .expect("sdk socket frame error");
+    serde_json::from_str(frame.into_text().unwrap().as_str())
+        .expect("sdk socket frame must be JSON")
+}
+
+
 fn app(tag: &str, keys: Vec<String>) -> axum::Router {
     let path = std::env::temp_dir().join(format!("aelio_server_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
@@ -178,17 +207,7 @@ async fn public_sdk_socket_acks_and_discards_duplicate_tool_results() {
         ))
         .await
         .unwrap();
-    let registration: Value = serde_json::from_str(
-        socket
-            .next()
-            .await
-            .unwrap()
-            .unwrap()
-            .into_text()
-            .unwrap()
-            .as_str(),
-    )
-    .unwrap();
+    let registration: Value = recv_json(&mut socket).await;
     assert_eq!(registration["type"], "register_ack");
     assert_eq!(registration["status"], "active");
 
@@ -212,17 +231,7 @@ async fn public_sdk_socket_acks_and_discards_duplicate_tool_results() {
             .await
         })
     };
-    let invocation: Value = serde_json::from_str(
-        socket
-            .next()
-            .await
-            .unwrap()
-            .unwrap()
-            .into_text()
-            .unwrap()
-            .as_str(),
-    )
-    .unwrap();
+    let invocation: Value = recv_json(&mut socket).await;
     assert_eq!(invocation["type"], "invoke");
     assert_eq!(invocation["tool_id"], "send_otp");
     assert_eq!(invocation["tool_version"], "1");
@@ -242,17 +251,7 @@ async fn public_sdk_socket_acks_and_discards_duplicate_tool_results() {
         ))
         .await
         .unwrap();
-    let accepted: Value = serde_json::from_str(
-        socket
-            .next()
-            .await
-            .unwrap()
-            .unwrap()
-            .into_text()
-            .unwrap()
-            .as_str(),
-    )
-    .unwrap();
+    let accepted: Value = recv_json(&mut socket).await;
     assert_eq!(accepted["type"], "result_ack");
     assert_eq!(accepted["invocation_id"], invocation_id);
     assert_eq!(accepted["disposition"], "accepted");
@@ -298,17 +297,7 @@ async fn public_sdk_socket_acks_and_discards_duplicate_tool_results() {
         ))
         .await
         .unwrap();
-    let duplicate: Value = serde_json::from_str(
-        socket
-            .next()
-            .await
-            .unwrap()
-            .unwrap()
-            .into_text()
-            .unwrap()
-            .as_str(),
-    )
-    .unwrap();
+    let duplicate: Value = recv_json(&mut socket).await;
     assert_eq!(duplicate["type"], "result_ack");
     assert_eq!(duplicate["invocation_id"], invocation_id);
     assert_eq!(duplicate["disposition"], "duplicate");
@@ -414,17 +403,7 @@ async fn public_sdk_disconnect_distinguishes_pre_dispatch_from_unknown_outcome()
             ))
             .await
             .unwrap();
-        let ack: Value = serde_json::from_str(
-            socket
-                .next()
-                .await
-                .unwrap()
-                .unwrap()
-                .into_text()
-                .unwrap()
-                .as_str(),
-        )
-        .unwrap();
+        let ack: Value = recv_json(&mut socket).await;
         assert_eq!(ack["type"], "register_ack");
         socket
     }
@@ -493,17 +472,7 @@ async fn public_sdk_disconnect_distinguishes_pre_dispatch_from_unknown_outcome()
             .await
         })
     };
-    let invocation: Value = serde_json::from_str(
-        dispatched_socket
-            .next()
-            .await
-            .unwrap()
-            .unwrap()
-            .into_text()
-            .unwrap()
-            .as_str(),
-    )
-    .unwrap();
+    let invocation: Value = recv_json(&mut dispatched_socket).await;
     assert_eq!(invocation["type"], "invoke");
     assert_eq!(invocation["tool_id"], "send_otp");
     assert_eq!(invocation["tool_version"], "1");
@@ -575,17 +544,7 @@ async fn public_sdk_disconnect_distinguishes_pre_dispatch_from_unknown_outcome()
         ))
         .await
         .unwrap();
-    let late: Value = serde_json::from_str(
-        late_socket
-            .next()
-            .await
-            .unwrap()
-            .unwrap()
-            .into_text()
-            .unwrap()
-            .as_str(),
-    )
-    .unwrap();
+    let late: Value = recv_json(&mut late_socket).await;
     assert_eq!(late["type"], "result_ack");
     assert_eq!(late["disposition"], "late");
     assert_eq!(
