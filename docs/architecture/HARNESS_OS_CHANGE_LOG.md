@@ -232,5 +232,28 @@ third changes demo-tenant catalog shape with blast radius across the 19 now-pass
 more tests to match the code is exactly the failure mode this log exists to prevent — these are
 product decisions, not cleanups.
 
-**Recommended order:** fix the F-022 lowering first (one product change, closes the safety test and
-is required for the demo), then decide F-024's fixture question once rather than per-test.
+### Correction to the recommended order (measured 2026-08-05, after the push)
+
+An earlier version of this file called the F-022 fix "one product change". **That was wrong** — I
+checked the blast radius before attempting it:
+
+- Declaring `lowering` makes a flow an *executable OS app* that **must pin before the catalog is
+  ready** (`tenant.rs:228-233`).
+- `process_turn` refuses every turn while `install.executable_pending > 0`
+  (`aelio-agent-api/src/lib.rs:678`) with `503 Unavailable`.
+- **16 files** build on `World::demo_tenant`.
+
+So declaring a lowering on the demo login flow without also authoring its Sol program, capability
+bindings and gate cases *and* making it materialize in every fixture would turn every demo-tenant
+turn into a 503 — far past the 3 tests it fixes. There is currently no `lowering: Some(...)` anywhere
+in the tree to copy from.
+
+**Actual recommended order:**
+
+1. **F-024 first** — it is the smaller, self-contained decision (fixture strategy for 2 tests).
+2. **F-022 second, as a scoped piece of work**: author `FlowLoweringV1` for login (Sol program +
+   `$cap:` bindings + gate cases), materialize/pin it in fixtures, *then* the fail-closed test passes.
+   Budget this as real work, not a cleanup.
+
+**Push checkpoint:** commit `f4970b30` on `aelio-final-wrap`, pushed to origin — 146 files,
+22,903 insertions. Everything from here is revertible.
