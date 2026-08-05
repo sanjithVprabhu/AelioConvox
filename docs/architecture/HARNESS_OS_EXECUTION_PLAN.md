@@ -666,7 +666,7 @@ on everything.
 |---|---|---|---|
 | O1 | Path A vs Path B | Phase 2 | **Resolved: B** — Sol-only bodies; sugar compiles at admission (§2); F-025 |
 | O2 | Harness identity hash | Phase 1 | **Resolved** — Canonical Sol + BLAKE3 (`contract_identity`); M-16 |
-| O3 | Does `tool.invoke` need a Mother amendment? | Phase 2 | Likely yes — FLAG with recommendation |
+| O3 | Does `tool.invoke` need a Mother amendment? | Phase 2 | **Resolved: no amendment** — F-026 option (a): host proxy + Once; default stub in `call_isa` |
 | O4 | True parallelism ever? | Phase 2 | Not now — deterministic fan-out/join (§2.1) |
 | O5 | Conductor fully Sol, or Rust fast-path + Sol body? | Phase 4 | Hybrid: keep the 0-LLM greeting path, Sol for the rest |
 | O6 | Tenant harness namespacing / override rules | Phase 5 | `put_if_absent` seeds; tenant ids win; never overwrite on boot |

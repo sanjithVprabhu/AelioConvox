@@ -152,3 +152,52 @@ Product owner confirmed the dumbed-down model as the gold standard (Sol code · 
 **Full audit:** [`GOLD_STANDARD_HARNESS_OS_AUDIT.md`](GOLD_STANDARD_HARNESS_OS_AUDIT.md)
 
 **Headline:** DoD D1–D3 **FAIL** (live path still Layer B; Conductor still Rust keywords; ~37 harnesses not ≥120). Lab Sol + greeting/tool cutover = progress, not the OS.
+
+---
+
+## 10. Phase progress (owner lock — 2026-08-05 afternoon)
+
+**Source:** product owner sequencing over `HARNESS_OS_EXECUTION_PLAN.md`.  
+**Keep this as the working memory of “how far we are.”** Update only when a phase exit is proven.
+
+### Phases
+
+| Phase | Name | Status |
+|-------|------|--------|
+| **0** | Repair + baseline | **Done** |
+| **1** | Contract model (signature, BLAKE3 identity, validation, IO) | **Done** |
+| **2** | Freeze Call ISA | **Done** |
+| **3** | Standard library volume + vectors (≥120) | **Next big** (content; parallelizable) |
+| **4** | Conductor plays Sol (play path + stored selection) | **Critical next** |
+| **5** | One store, admin API, delete `HarnessStepV1` | **Critical after 4** |
+| **6** | Hardening (budgets, replay, soak) | **Early parallel** with 3; finish after 5 |
+| **7** | Draft → admin promote → selectable | **Last** |
+
+**Practical sequence:**  
+`Done: 0 → 1 → 2`  
+`Next big: 3 (library) ‖ early 6`  
+`Critical path: 4 → 5`  
+`Then: finish 6 → 7`
+
+**Short version:** Phase 3 = bulk Sol library + vectors. After that = make OS run it (4), clean store / kill dual IR (5), harden (6), grow via promote (7).
+
+**Sensible forks to execute next:**
+1. Phase 3 core+num with vectors, **or**
+2. Jump critical path to **Phase 4.1 play path** (library can grow in parallel).
+
+### DoD still open → which phase closes it
+
+| # | Criterion | Mostly needs |
+|---|-----------|--------------|
+| D1 | No `HarnessStepV1` on turn path | Phase 4–5 |
+| D2 | Conductor is a stored program | Phase 4 |
+| D3 | ≥120 harnesses + vectors | Phase 3 |
+| D4 | Effectful Calls via host proxy | Phase 2 stub + host wire (6) |
+| D5 | Replay identity for library | Phase 6 (+ vectors in 3) |
+| D6 | BLAKE3 identity + explicit promote | Phase 1 **done**; promote path 5/7 |
+| D7 | Budget/timeout/depth at admission | Phase 1 partial; 6 |
+| D8 | Workspace green `-D warnings` | ongoing |
+
+### Monitor rule
+
+Do **not** mark Phase 3/4/5 complete from presence of demos alone. Exit only when DoD rows above that phase owns are green on the live turn path.
