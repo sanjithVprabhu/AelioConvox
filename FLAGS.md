@@ -550,3 +550,18 @@ range as the full current calendar month; (c) remove it from cacheable relative 
 the caller-provided granularity but has no time-relative warm-plan cache to enforce
 this contract yet. The future cache admission API must reject `MonthToDate` unless its
 validity bucket advances no less often than the chosen upper-bound semantics.
+
+### F-039 — Gate J observation evidence is not yet collectable — `AELIO_MASTER_PLAN Gate J`, `PHASE_2_ACCEPTANCE_SUITE J1–J3`
+**What:** Gate J requires one week of production traffic, daily raw cold/warm/distinct-key/
+executions-per-key observations, and 20 manually selected warm hits re-run cold. The current
+`aelio-agent::reuse_metrics` collector is a process-local `OnceLock<Mutex<_>>`; it is reset at
+restart, has no dated snapshots or durable export, and the repository contains no one-week
+production dataset or recorded cold re-run comparisons. Therefore the required evidence cannot
+be reconstructed or honestly synthesized from tests.
+**Options:** (a) begin a monitored production observation using durable daily metric snapshots,
+then perform the J3 cold re-runs; (b) use unit/integration test traffic as a proxy; (c) start
+Starlark before the observation.
+**Recommendation → (a).** Tests prove the collector and matching gates, not market reuse or
+warm-path correctness over production traffic. Keep Session E blocked until real dated J1 data
+and the J3 review are recorded here. `PROVISIONAL` — implement durable metric retention/export
+before starting the observation if the runtime can restart during the week.
