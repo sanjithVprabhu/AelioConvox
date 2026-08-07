@@ -843,6 +843,102 @@ async fn process_turn(
             return Ok(Json(result));
         }
 
+        // Path B Conductor Sol: decide@1 (LLM host → ModelVerdict, else scripted) → spawn/reply.
+        // Keyword `select_starter_harness` is not authority here. Opt out: AELIO_CONDUCTOR_SOL=0
+        // or legacy spine (AELIO_AGENT_LEGACY=1).
+        if !legacy_spine && aelio_kernel::should_cutover_conductor_sol(&utterance) {
+            {
+                let mut store = os_store.blocking_lock();
+                let _ = aelio_kernel::ensure_demo_conductor_library(store.as_mut(), &tenant_id);
+            }
+            let catalog = aelio_kernel::demo_conductor_catalog();
+            let mut llm_decide_calls = 0u32;
+            let decide_mode = if runtime
+                .world
+                .llm_provider
+                .supports_language_intelligence()
+            {
+                match aelio_agent::harness::llm_decide::decide_with_llm(
+                    runtime.world.llm_provider.as_mut(),
+                    &utterance,
+                    &catalog,
+                ) {
+                    Ok(verdict) => {
+                        llm_decide_calls = 1;
+                        aelio_kernel::DecideMode::Model(std::sync::Arc::new(move |_args| {
+                            Ok(verdict.clone())
+                        }))
+                    }
+                    Err(_) => aelio_kernel::DecideMode::Scripted,
+                }
+            } else {
+                aelio_kernel::DecideMode::Scripted
+            };
+            if let Ok(cut) = aelio_kernel::run_conductor_baby_turn(&utterance, decide_mode) {
+                let event = aelio_kernel::event_from_user_utterance(
+                    &tenant_id,
+                    &user_id,
+                    &channel,
+                    &utterance,
+                    &turn_id,
+                    "v1.turns.conductor_sol",
+                    Some(&turn_id),
+                );
+                {
+                    let mut store = os_store.blocking_lock();
+                    let _ = aelio_kernel::admit_event(store.as_mut(), event, false);
+                }
+                let mut reply = aelio_agent::abilities::express::Utterance::plain(
+                    cut.reply_text.clone(),
+                    aelio_agent::abilities::express::ExpressVia::Template,
+                );
+                reply.template_id = Some("demo.conductor_baby".into());
+                let spawned = cut
+                    .spawned_harness_id
+                    .clone()
+                    .unwrap_or_else(|| "-".into());
+                let mut result = aelio_agent::blocks::turn::TurnResult {
+                    reply,
+                    llm_calls: llm_decide_calls,
+                    tier: None,
+                    depth: aelio_agent::Depth::Shallow,
+                    steps: vec![
+                        aelio_agent::blocks::turn::TurnTraceStep {
+                            name: "Conductor.Sol".into(),
+                            detail: format!(
+                                "authority=demo.conductor_baby kind={} source={} spawn={} bag_hash={}",
+                                cut.decision_kind, cut.decision_source, spawned, cut.bag_hash
+                            ),
+                        },
+                        aelio_agent::blocks::turn::TurnTraceStep {
+                            name: "Conductor.Select".into(),
+                            detail: format!(
+                                "harness={} — sol decide",
+                                cut.spawned_harness_id
+                                    .as_deref()
+                                    .unwrap_or(&cut.decision_kind)
+                            ),
+                        },
+                        aelio_agent::blocks::turn::TurnTraceStep {
+                            name: "Harness.Load".into(),
+                            detail: "id=demo.conductor_baby via conductor.decide@1".into(),
+                        },
+                    ],
+                    opened_loop: false,
+                    new_state: None,
+                    active_flow: None,
+                    situation_hash: None,
+                    proposal_id: None,
+                    suspended: false,
+                };
+                let _ = result
+                    .reply
+                    .ensure_render_frame(&turn_id, &format!("rf-{}", result.steps.len()));
+                drop(runtime);
+                return Ok(Json(result));
+            }
+        }
+
         // Phase 5: installed tool/memory harness cutover (avoids cold ProposePath when present).
         if let Some(intent) =
             (!legacy_spine).then(|| aelio_kernel::resolve_tool_harness_intent(&utterance)).flatten()

@@ -1,0 +1,54 @@
+{
+  "id": "demo.sum_ok",
+  "summary": "Add x+y; reply ok if sum is 5, else nope",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "add_xy",
+        "op": "Call",
+        "id": "compute.hold@1",
+        "args": {
+          "v": {
+            "fn": "add",
+            "args": [
+              { "pull": "x" },
+              { "pull": "y" }
+            ]
+          }
+        },
+        "into": "sum"
+      },
+      {
+        "nid": "gate",
+        "op": "Branch",
+        "pred": {
+          "fn": "eq",
+          "args": [
+            { "pull": "sum" },
+            { "lit": 5 }
+          ]
+        },
+        "then": {
+          "nid": "say_ok",
+          "op": "Call",
+          "id": "express.say@1",
+          "args": {
+            "text": { "lit": "ok" }
+          },
+          "into": "reply"
+        },
+        "else": {
+          "nid": "say_nope",
+          "op": "Call",
+          "id": "express.say@1",
+          "args": {
+            "text": { "lit": "nope" }
+          },
+          "into": "reply"
+        }
+      }
+    ]
+  }
+}

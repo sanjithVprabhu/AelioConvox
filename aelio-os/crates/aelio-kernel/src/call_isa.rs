@@ -89,6 +89,13 @@ pub const PROC_FAMILY: &[CallSpec] = &[
         args_schema: "{ library?: str, effect?: str }",
         summary: "List installed harness ids filtered by library / effect",
     },
+    CallSpec {
+        id: "conductor.decide@1",
+        effect: EffectClass::External,
+        class: TargetClass::Model,
+        args_schema: "{ utterance: str, catalog: [{id, summary}], prompt_id?: str }",
+        summary: "Conductor selection: structured kind/harness_id from utterance+catalog (scripted or model)",
+    },
 ];
 
 /// Tool family (plan §2.2). `tool.act_stub@1` is legacy; prefer `tool.invoke@1`.
@@ -408,6 +415,11 @@ pub fn seed_prompt_pins() -> HashMap<String, PromptArtifactPin> {
         PromptArtifactPin::new("prompt.sanitize.default", 1, "Sanitize sensitive content."),
         PromptArtifactPin::new("prompt.embed.default", 1, "Embed text (model pin)."),
         PromptArtifactPin::new("prompt.rerank.default", 1, "Rerank documents."),
+        PromptArtifactPin::new(
+            "prompt.conductor.decide",
+            1,
+            "Decide Conductor action from utterance and catalog.",
+        ),
     ];
     pins.into_iter().map(|p| (p.id.clone(), p)).collect()
 }
@@ -765,6 +777,18 @@ pub fn register_frozen_call_isa(
             },
         )?;
     }
+
+    // ── conductor.decide@1 (scripted backend; same out-shape as future model) ─
+    registry.register_declared(
+        decl(
+            "conductor.decide@1",
+            TargetClass::Model,
+            EffectClass::External,
+            "aelio.conductor.decide.request@1",
+            "aelio.conductor.decide.result@1",
+        ),
+        |args| crate::conductor_decide::decide(&args),
+    )?;
 
     // ── process control signals ────────────────────────────────────────────
     registry.register_declared(

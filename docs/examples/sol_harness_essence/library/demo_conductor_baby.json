@@ -1,0 +1,74 @@
+{
+  "id": "demo.conductor_baby",
+  "summary": "Baby Conductor: decide Call → spawn named harness from catalog → report child value",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "decide",
+        "op": "Call",
+        "id": "conductor.decide@1",
+        "args": {
+          "utterance": { "pull": "utterance" },
+          "catalog": { "pull": "catalog" }
+        },
+        "into": "decision"
+      },
+      {
+        "nid": "act",
+        "op": "Branch",
+        "pred": {
+          "fn": "eq",
+          "args": [
+            { "pull": "decision.kind" },
+            { "lit": "spawn" }
+          ]
+        },
+        "then": {
+          "nid": "spawn_then_report",
+          "op": "Seq",
+          "steps": [
+            {
+              "nid": "spin",
+              "op": "Call",
+              "id": "harness.invoke@1",
+              "args": {
+                "id": { "pull": "decision.harness_id" },
+                "x": { "pull": "decision.x" },
+                "y": { "pull": "decision.y" }
+              },
+              "into": "child"
+            },
+            {
+              "nid": "report",
+              "op": "Call",
+              "id": "express.say@1",
+              "args": {
+                "text": {
+                  "fn": "concat",
+                  "args": [
+                    { "lit": "conductor spun " },
+                    { "pull": "decision.harness_id" },
+                    { "lit": " → " },
+                    { "pull": "child.reply.text" }
+                  ]
+                }
+              },
+              "into": "out"
+            }
+          ]
+        },
+        "else": {
+          "nid": "talk",
+          "op": "Call",
+          "id": "express.say@1",
+          "args": {
+            "text": { "pull": "decision.reply_text" }
+          },
+          "into": "out"
+        }
+      }
+    ]
+  }
+}

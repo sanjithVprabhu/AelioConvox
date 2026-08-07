@@ -1,0 +1,21 @@
+{
+  "id": "sim.email_draft",
+  "summary": "Draft a short email reply from a brief request",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "say",
+        "op": "Call",
+        "id": "express.say@1",
+        "args": {
+          "text": {
+            "lit": "ran:sim.email_draft"
+          }
+        },
+        "into": "reply"
+      }
+    ]
+  }
+}

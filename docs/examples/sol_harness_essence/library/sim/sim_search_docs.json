@@ -1,0 +1,21 @@
+{
+  "id": "sim.search_docs",
+  "summary": "Search product docs or help articles for a topic",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "say",
+        "op": "Call",
+        "id": "express.say@1",
+        "args": {
+          "text": {
+            "lit": "ran:sim.search_docs"
+          }
+        },
+        "into": "reply"
+      }
+    ]
+  }
+}

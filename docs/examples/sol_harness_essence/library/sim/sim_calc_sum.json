@@ -1,0 +1,21 @@
+{
+  "id": "sim.calc_sum",
+  "summary": "Add two numbers x and y and report the sum",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "say",
+        "op": "Call",
+        "id": "express.say@1",
+        "args": {
+          "text": {
+            "lit": "ran:sim.calc_sum"
+          }
+        },
+        "into": "reply"
+      }
+    ]
+  }
+}

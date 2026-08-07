@@ -67,6 +67,10 @@ pub fn starter_catalog() -> &'static [(StarterHarness, &'static str)] {
 }
 
 /// Rule-first Conductor selection for the starter library.
+///
+/// **Legacy / tests only.** Production Path B must not use this as turn authority —
+/// use stored Conductor Sol + `conductor.decide@1` (LLM or scripted backend).
+/// Kept so `AELIO_AGENT_LEGACY=1` parity fixtures and unit tests still compile.
 pub fn select_starter_harness(utterance: &str, session: &HarnessSession) -> StarterHarness {
     let text = utterance.trim().to_lowercase();
     if text.is_empty() {

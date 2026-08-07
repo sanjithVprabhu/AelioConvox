@@ -1,0 +1,73 @@
+{
+  "id": "demo.conductor_catalog_sim",
+  "summary": "Conductor over a 10-harness sim catalog: decide then spawn by id or reply",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "decide",
+        "op": "Call",
+        "id": "conductor.decide@1",
+        "args": {
+          "utterance": { "pull": "utterance" },
+          "catalog": { "pull": "catalog" }
+        },
+        "into": "decision"
+      },
+      {
+        "nid": "act",
+        "op": "Branch",
+        "pred": {
+          "fn": "eq",
+          "args": [
+            { "pull": "decision.kind" },
+            { "lit": "spawn" }
+          ]
+        },
+        "then": {
+          "nid": "spawn_then_report",
+          "op": "Seq",
+          "steps": [
+            {
+              "nid": "spin",
+              "op": "Call",
+              "id": "harness.invoke@1",
+              "args": {
+                "id": { "pull": "decision.harness_id" },
+                "utterance": { "pull": "utterance" }
+              },
+              "into": "child"
+            },
+            {
+              "nid": "report",
+              "op": "Call",
+              "id": "express.say@1",
+              "args": {
+                "text": {
+                  "fn": "concat",
+                  "args": [
+                    { "lit": "conductor spun " },
+                    { "pull": "decision.harness_id" },
+                    { "lit": " → " },
+                    { "pull": "child.reply.text" }
+                  ]
+                }
+              },
+              "into": "out"
+            }
+          ]
+        },
+        "else": {
+          "nid": "talk",
+          "op": "Call",
+          "id": "express.say@1",
+          "args": {
+            "text": { "pull": "decision.reply_text" }
+          },
+          "into": "out"
+        }
+      }
+    ]
+  }
+}

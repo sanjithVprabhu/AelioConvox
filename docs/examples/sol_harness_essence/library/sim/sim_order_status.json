@@ -1,0 +1,21 @@
+{
+  "id": "sim.order_status",
+  "summary": "Look up order status by order id",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "say",
+        "op": "Call",
+        "id": "express.say@1",
+        "args": {
+          "text": {
+            "lit": "ran:sim.order_status"
+          }
+        },
+        "into": "reply"
+      }
+    ]
+  }
+}

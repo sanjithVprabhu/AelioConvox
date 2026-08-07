@@ -1,0 +1,21 @@
+{
+  "id": "sim.remind",
+  "summary": "Create a reminder from a due time and a short note",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "say",
+        "op": "Call",
+        "id": "express.say@1",
+        "args": {
+          "text": {
+            "lit": "ran:sim.remind"
+          }
+        },
+        "into": "reply"
+      }
+    ]
+  }
+}

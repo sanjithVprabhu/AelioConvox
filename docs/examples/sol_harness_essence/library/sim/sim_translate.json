@@ -1,0 +1,21 @@
+{
+  "id": "sim.translate",
+  "summary": "Translate a short phrase into another language",
+  "program": {
+    "nid": "root",
+    "op": "Seq",
+    "steps": [
+      {
+        "nid": "say",
+        "op": "Call",
+        "id": "express.say@1",
+        "args": {
+          "text": {
+            "lit": "ran:sim.translate"
+          }
+        },
+        "into": "reply"
+      }
+    ]
+  }
+}

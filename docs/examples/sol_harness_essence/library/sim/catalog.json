@@ -1,0 +1,54 @@
+{
+  "contracts": [
+    {
+      "file": "sim/sim_weather.json",
+      "id": "sim.weather",
+      "summary": "Weather forecast for a place; rain, temperature, or forecast questions"
+    },
+    {
+      "file": "sim/sim_calc_sum.json",
+      "id": "sim.calc_sum",
+      "summary": "Add two numbers x and y and report the sum"
+    },
+    {
+      "file": "sim/sim_translate.json",
+      "id": "sim.translate",
+      "summary": "Translate a short phrase into another language"
+    },
+    {
+      "file": "sim/sim_remind.json",
+      "id": "sim.remind",
+      "summary": "Create a reminder from a due time and a short note"
+    },
+    {
+      "file": "sim/sim_search_docs.json",
+      "id": "sim.search_docs",
+      "summary": "Search product docs or help articles for a topic"
+    },
+    {
+      "file": "sim/sim_order_status.json",
+      "id": "sim.order_status",
+      "summary": "Look up order status by order id"
+    },
+    {
+      "file": "sim/sim_joke.json",
+      "id": "sim.joke",
+      "summary": "Tell a short light joke"
+    },
+    {
+      "file": "sim/sim_unit_convert.json",
+      "id": "sim.unit_convert",
+      "summary": "Convert units such as km/mi or C/F"
+    },
+    {
+      "file": "sim/sim_calendar_next.json",
+      "id": "sim.calendar_next",
+      "summary": "Show the next calendar event or schedule peek"
+    },
+    {
+      "file": "sim/sim_email_draft.json",
+      "id": "sim.email_draft",
+      "summary": "Draft a short email reply from a brief request"
+    }
+  ]
+}

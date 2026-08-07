@@ -8,6 +8,9 @@
 pub mod bag;
 pub mod call_isa;
 pub mod compute;
+pub mod conductor_catalog_sim;
+pub mod conductor_decide;
+pub mod conductor_sol_turn;
 pub mod continuation;
 pub mod cutover;
 pub mod driver;
@@ -39,6 +42,23 @@ pub mod waves;
 pub use cutover::{
     is_greeting_cutover_utterance, run_greeting_cutover, should_cutover_deterministic,
     should_cutover_greeting, CutoverGreetingResult,
+};
+pub use conductor_catalog_sim::{
+    assert_sim_turn_executable, ensure_sim_catalog_library, grade_sim_turn,
+    run_conductor_catalog_sim_turn, run_sim_chat_oracle, run_sim_chat_oracle_diverse,
+    run_sim_chat_oracle_script, sim_catalog_contracts, sim_catalog_ids, sim_chat_script,
+    sim_chat_script_diverse, sim_choice_matches, sim_conductor_contract, sim_decide_catalog,
+    sim_oracle_decide, SimChatExpect, SimTurnGrade,
+};
+pub use conductor_decide::{
+    catalog_ids, decide as conductor_decide, decide_injected, model_decide,
+    register_conductor_decide, register_conductor_decide_model, scripted_decide, validate_decision,
+    DecideArgs, ModelVerdict, DECIDE_CALL_ID, KIND_QUICK_REPLY, KIND_ROUGH_CHAT, KIND_SPAWN,
+};
+pub use conductor_sol_turn::{
+    demo_conductor_baby_contract, demo_conductor_catalog, demo_sum_ok_contract,
+    ensure_demo_conductor_library, run_conductor_baby_turn, should_cutover_conductor_sol,
+    ConductorSolTurnResult, DecideMode,
 };
 pub use driver::{replay, Instance, InstanceConfig, Parked, TurnOutcome};
 pub use error::{ErrV1, ExecResult, ReasonCode};

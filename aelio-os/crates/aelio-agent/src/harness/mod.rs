@@ -5,6 +5,7 @@
 //! Playable bodies: saveable `HarnessProgramV1` programs (see `program` module).
 
 pub mod conductor;
+pub mod llm_decide;
 pub mod program;
 
 use indexmap::IndexMap;
