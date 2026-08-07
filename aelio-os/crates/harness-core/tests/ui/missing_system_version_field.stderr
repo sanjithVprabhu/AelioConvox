@@ -1,0 +1,5 @@
+error[E0063]: missing field `tzdb` in initializer of `SystemVersion`
+ --> tests/ui/missing_system_version_field.rs:4:13
+  |
+4 |     let _ = SystemVersion {
+  |             ^^^^^^^^^^^^^ missing `tzdb`

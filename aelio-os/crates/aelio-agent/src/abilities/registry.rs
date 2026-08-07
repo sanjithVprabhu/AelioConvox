@@ -5,6 +5,30 @@ use crate::tenant::{FlowSpec, ToolSpec};
 use crate::types::{AelioError, AelioResult, ReasonCode};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static REGISTRATION_REJECTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PROMOTION_BLOCKED_COMPLETENESS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Named D3 admission/promotion counters. They intentionally count refusals: a permanently
+/// zero count while catalog authors are migrating would mean the gates are not on the path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContractMetrics {
+    pub registration_rejections_total: u64,
+    pub promotion_blocked_completeness_total: u64,
+}
+
+pub fn contract_metrics() -> ContractMetrics {
+    ContractMetrics {
+        registration_rejections_total: REGISTRATION_REJECTIONS_TOTAL.load(Ordering::Relaxed),
+        promotion_blocked_completeness_total: PROMOTION_BLOCKED_COMPLETENESS_TOTAL
+            .load(Ordering::Relaxed),
+    }
+}
+
+pub(crate) fn record_promotion_completeness_block() {
+    PROMOTION_BLOCKED_COMPLETENESS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcedureSpec {
@@ -76,15 +100,75 @@ pub struct Registry {
     pub by_capability: IndexMap<String, Vec<String>>,
 }
 
+/// Reserved id prefix for Aelio's first-party standard tools. Only the `std.` prefix distinguishes
+/// a tool the runtime executes locally from one it dispatches over the tenant's SDK, so the
+/// namespace has to be closed to tenants.
+pub const STANDARD_TOOL_PREFIX: &str = "std.";
+
+/// Deep content equality for `ToolSpec` via canonical JSON comparison rather than a derived
+/// `PartialEq` — `ToolSpec` nests `Value`/`Sensitivity`/etc. that this stays decoupled from.
+/// Only used to decide whether a re-registration is a real contract change worth cascading.
+fn tool_spec_content_eq(a: &ToolSpec, b: &ToolSpec) -> bool {
+    match (serde_json::to_value(a), serde_json::to_value(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        // Unable to compare — fail open toward invalidation rather than silently keeping a
+        // possibly-stale cascade.
+        _ => false,
+    }
+}
+
 impl Registry {
-    pub fn register_tool(&mut self, tool: ToolSpec) {
+    /// Registers a tool. `invalidate_tool` (cascade suspension of dependent procedures/abilities)
+    /// existed but was never called from anywhere except a test — see `FLAGS.md` F-032. A tool
+    /// re-registration under the same id with a changed declared contract is exactly the case
+    /// that cascade exists for (a tenant SDK-side deploy changing params, effect class, or
+    /// output semantics out from under procedures already promoted against the old contract), so
+    /// it now runs synchronously here. Returns the ids of everything suspended/flagged as a
+    /// result — empty on a fresh registration or a byte-identical re-registration.
+    pub fn register_tool(&mut self, tool: ToolSpec) -> AelioResult<Vec<String>> {
+        if tool.contract.is_none() {
+            REGISTRATION_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                format!("tool `{}` is missing its required ToolContract", tool.id),
+            ));
+        }
+        let content_changed = self
+            .tools
+            .get(&tool.id)
+            .map(|existing| !tool_spec_content_eq(existing, &tool))
+            .unwrap_or(false);
         for tag in &tool.capability_tags {
             self.by_capability
                 .entry(tag.clone())
                 .or_default()
                 .push(tool.id.clone());
         }
-        self.tools.insert(tool.id.clone(), tool);
+        let tool_id = tool.id.clone();
+        self.tools.insert(tool_id.clone(), tool);
+        let demoted = if content_changed {
+            self.invalidate_tool(&tool_id)
+        } else {
+            Vec::new()
+        };
+        Ok(demoted)
+    }
+
+    /// Register a tenant-authored tool. Rejects the reserved `std.` namespace: a tenant tool
+    /// named `std.anything` would be silently executed in-process instead of over their SDK,
+    /// and would shadow a first-party tool of the same id. Returns the ids invalidated by a
+    /// content-changing re-registration, same as `register_tool`.
+    pub fn register_tenant_tool(&mut self, tool: ToolSpec) -> AelioResult<Vec<String>> {
+        if tool.id.starts_with(STANDARD_TOOL_PREFIX) {
+            return Err(AelioError::new(
+                ReasonCode::Validation,
+                format!(
+                    "tool id `{}` uses the reserved `{STANDARD_TOOL_PREFIX}` namespace",
+                    tool.id
+                ),
+            ));
+        }
+        self.register_tool(tool)
     }
 
     pub fn register_flow(&mut self, flow: FlowSpec) {
@@ -281,6 +365,7 @@ mod tests {
             name: "send_otp".into(),
             version: "1".into(),
             capability_tags: vec!["auth.otp.send".into()],
+            contract: Some(crate::tenant::ToolContract::complete_read("test_result")),
             effect: None,
             effectful: true,
             idempotent: false,
@@ -292,7 +377,8 @@ mod tests {
             },
             continuations: vec!["auth.otp.verify".into()],
             errors: vec![],
-        });
+        })
+        .unwrap();
         let hits = reg.lookup_tool_by_capability("auth.otp.*");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "send_otp");
@@ -301,6 +387,145 @@ mod tests {
             .is_empty());
         // sensitivity unused but kept for compile
         let _ = Sensitivity::None;
+    }
+
+    /// D7: absent contract fields are a hard registration refusal, never a legacy inference.
+    #[test]
+    fn registration_refuses_a_tool_without_a_contract() {
+        let mut reg = Registry::default();
+        let error = reg
+            .register_tool(ToolSpec {
+                id: "missing_contract".into(),
+                name: "missing_contract".into(),
+                version: "1".into(),
+                capability_tags: vec![],
+                contract: None,
+                effect: None,
+                effectful: false,
+                idempotent: true,
+                dry_run_available: true,
+                params: vec![],
+                output_semantics: crate::tenant::OutputSpec {
+                    fields: IndexMap::new(),
+                    role_hint: None,
+                },
+                continuations: vec![],
+                errors: vec![],
+            })
+            .expect_err("D7 requires a ToolContract");
+        assert_eq!(error.code, ReasonCode::Validation);
+        assert!(error.message.contains("ToolContract"));
+        assert_eq!(reg.tools.len(), 0);
+        assert!(contract_metrics().registration_rejections_total >= 1);
+    }
+
+    /// The `std.` prefix is the only thing distinguishing a locally-executed first-party tool
+    /// from one dispatched over the tenant's SDK, so tenants must not be able to claim it.
+    #[test]
+    fn tenant_tool_cannot_claim_the_std_namespace() {
+        let mut reg = Registry::default();
+        let spec = ToolSpec {
+            id: "std.math.average".into(),
+            name: "hijack".into(),
+            version: "1".into(),
+            capability_tags: vec!["math".into()],
+            contract: Some(crate::tenant::ToolContract::complete_read("test_result")),
+            effect: None,
+            effectful: true,
+            idempotent: false,
+            dry_run_available: false,
+            params: vec![],
+            output_semantics: crate::tenant::OutputSpec {
+                fields: IndexMap::new(),
+                role_hint: None,
+            },
+            continuations: vec![],
+            errors: vec![],
+        };
+        let error = reg
+            .register_tenant_tool(spec)
+            .expect_err("reserved namespace must be rejected");
+        assert_eq!(error.code, ReasonCode::Validation);
+        assert!(reg.tools.is_empty(), "rejected tool must not be registered");
+    }
+
+    fn otp_tool(version: &str, capability_tags: Vec<String>) -> ToolSpec {
+        ToolSpec {
+            id: "send_otp".into(),
+            name: "send_otp".into(),
+            version: version.into(),
+            capability_tags,
+            contract: Some(crate::tenant::ToolContract::complete_read("test_result")),
+            effect: None,
+            effectful: true,
+            idempotent: false,
+            dry_run_available: true,
+            params: vec![],
+            output_semantics: crate::tenant::OutputSpec {
+                fields: IndexMap::new(),
+                role_hint: None,
+            },
+            continuations: vec!["auth.otp.verify".into()],
+            errors: vec![],
+        }
+    }
+
+    /// F-032: `invalidate_tool`'s cascade existed but was never wired to registration itself, so
+    /// a routine tenant SDK-side redeploy of a tool's contract could leave stale promoted
+    /// procedures pointing at a superseded contract until something else happened to call
+    /// `invalidate_tool` by hand. Registration must trigger the cascade synchronously.
+    #[test]
+    fn content_changing_reregistration_synchronously_invalidates_dependents() {
+        let mut reg = Registry::default();
+        let demoted = reg
+            .register_tool(otp_tool("1", vec!["auth.otp.send".into()]))
+            .expect("contracted tool registers");
+        assert!(demoted.is_empty(), "fresh registration invalidates nothing");
+
+        reg.register_procedure(ProcedureSpec {
+            id: "otp_proc".into(),
+            version: "1".into(),
+            tenant_id: "t".into(),
+            situation_hash: "sigma".into(),
+            situation_filter: SituationFilter::default(),
+            situation_embedding: vec![],
+            path: AbilityPath::seq(["send_otp"]),
+            contract: AbilityContract::pure("otp_proc"),
+            tool_deps: vec!["send_otp".into()],
+            prompt_deps: vec![],
+            evidence: ProcedureEvidence::default(),
+            status: ProcedureStatus::Promoted,
+            provenance: ProcedureProvenance {
+                origin: "test".into(),
+                proposed_by: "test".into(),
+                approved_by: None,
+            },
+            supersedes: None,
+        });
+
+        // Byte-identical re-registration must not cascade — nothing about the contract changed.
+        let demoted = reg
+            .register_tool(otp_tool("1", vec!["auth.otp.send".into()]))
+            .expect("contracted tool registers");
+        assert!(
+            demoted.is_empty(),
+            "identical re-registration must not cascade"
+        );
+        assert_eq!(
+            reg.procedures.get("otp_proc").unwrap().status,
+            ProcedureStatus::Promoted
+        );
+
+        // Version bump (a real contract change) must cascade synchronously, with no separate
+        // manual `invalidate_tool` call required.
+        let demoted = reg
+            .register_tool(otp_tool("2", vec!["auth.otp.send".into()]))
+            .expect("contracted tool registers");
+        assert_eq!(demoted, vec!["otp_proc".to_string()]);
+        assert_eq!(
+            reg.procedures.get("otp_proc").unwrap().status,
+            ProcedureStatus::Suspended
+        );
     }
 
     #[test]

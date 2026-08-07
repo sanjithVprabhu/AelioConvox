@@ -6,7 +6,9 @@ import {
   validateRenderFrame,
   type RenderFrame,
 } from '@aelio/chat-sdk';
+import { persistChatMessage } from './chat-memory.js';
 import type { RuntimeDeps } from './runtime-deps.js';
+import { logTurnPipeline } from './turn-pipeline-log.js';
 
 export type ConversationTurnInput = {
   customerExternalId: string;
@@ -15,6 +17,9 @@ export type ConversationTurnInput = {
   message: string;
   /** Stable identifier supplied by the ingress provider (for example a WhatsApp message id). */
   sourceTurnId?: string;
+  /** Internal DB customer id — when set with sessionId, the turn is persisted. */
+  customerId?: string;
+  sessionId?: string;
 };
 
 export type ConversationTurnResult = {
@@ -38,12 +43,33 @@ export async function executeConversationTurn(
   const turnId = input.sourceTurnId
     ? stableTurnId(input.channel, input.customerExternalId, input.sourceTurnId)
     : randomUUID();
+
+  if (input.sessionId && input.customerId) {
+    await persistChatMessage(deps, {
+      sessionId: input.sessionId,
+      customerId: input.customerId,
+      channel: input.channel,
+      role: 'user',
+      content: input.message,
+    });
+  }
+
   const result = await deps.aelioRuntime.submitAgentTurn({
     turn_id: turnId,
     user_id: instanceId,
     utterance: input.message,
     channel: input.channel,
   });
+
+  logTurnPipeline({
+    utterance: input.message,
+    turnId,
+    reply: result.reply.text.trim(),
+    tier: typeof result.tier === 'string' ? result.tier : undefined,
+    llmCalls: result.llm_calls,
+    steps: result.steps ?? [],
+  });
+
   const replyText = result.reply.text.trim();
   let frame: RenderFrame;
   if (result.reply.frame) {
@@ -62,6 +88,17 @@ export async function executeConversationTurn(
   if (!reply.trim()) {
     throw new Error('Aelio Rust agent returned an empty customer-facing reply');
   }
+
+  if (input.sessionId && input.customerId) {
+    await persistChatMessage(deps, {
+      sessionId: input.sessionId,
+      customerId: input.customerId,
+      channel: input.channel,
+      role: 'assistant',
+      content: reply,
+    });
+  }
+
   return {
     reply,
     frame,

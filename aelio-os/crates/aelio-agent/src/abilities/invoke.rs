@@ -2,7 +2,7 @@
 //! Only Call is externally effectful. Ledger brackets Call alone.
 
 use crate::abilities::sig::{self, SignatureRegistry};
-use crate::ops::pure::idem_key;
+use crate::orchestration::wavefront::effect_idempotency_key;
 use crate::policy::{require_allow, PolicyActionRisk, PolicyCtx};
 use crate::tenant::{ErrorSpec, PolicySpec, ToolSpec};
 use crate::types::{AelioError, AelioResult, ReasonCode, Recovery, ResponseRole, Value};
@@ -128,6 +128,9 @@ pub struct InvokeContext<'a> {
     pub once_seen: &'a mut std::collections::HashSet<String>,
     pub user_id: &'a str,
     pub channel: &'a str,
+    pub turn_key: &'a str,
+    pub effect_seq: u64,
+    pub element_index: Option<u64>,
 }
 
 pub fn tool_call_block(
@@ -146,19 +149,7 @@ pub fn tool_call_block(
     };
     require_allow(context.policies, &ctx)?;
 
-    let parts: Vec<String> = {
-        let mut v = vec![
-            context.user_id.to_string(),
-            tool.id.clone(),
-            tool.version.clone(),
-        ];
-        for (k, val) in args {
-            v.push(format!("{k}={}", crate::ops::pure::value_to_json(val)));
-        }
-        v
-    };
-    let part_refs: Vec<&str> = parts.iter().map(|s| s.as_str()).collect();
-    let key = idem_key(&part_refs);
+    let key = effect_idempotency_key(context.turn_key, context.effect_seq, context.element_index);
 
     // Invoke.Call — the only effectful line
     let raw_result =
@@ -353,6 +344,14 @@ mod tests {
             name: "send_otp".into(),
             version: "1".into(),
             capability_tags: vec!["auth.otp.send".into()],
+            contract: Some(crate::tenant::ToolContract {
+                effect_class: crate::tenant::EffectClass::Write,
+                completeness: crate::tenant::Completeness::Complete,
+                returns_entity: "otp_delivery_receipt".into(),
+                pushdown: vec![],
+                max_result_rows: Some(1),
+                row_scoped: false,
+            }),
             effect: None,
             effectful: true,
             idempotent: false,
@@ -399,6 +398,9 @@ mod tests {
                 once_seen: &mut once_seen,
                 user_id: "u1",
                 channel: "test",
+                turn_key: "turn-secret-output",
+                effect_seq: 0,
+                element_index: None,
             },
         )
         .expect("tool call succeeds");
@@ -467,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_version_is_part_of_the_durable_idempotency_identity() {
+    fn effect_sequence_is_part_of_the_durable_idempotency_identity() {
         let policies = [PolicySpec {
             id: "allow-test-effect".into(),
             effect: PolicyEffect::Allow,
@@ -501,6 +503,9 @@ mod tests {
                     once_seen: &mut once_seen,
                     user_id: "u1",
                     channel: "test",
+                    turn_key: "turn-key",
+                    effect_seq: if version == "1" { 0 } else { 1 },
+                    element_index: None,
                 },
             )
             .unwrap();
@@ -565,6 +570,9 @@ mod tests {
                 once_seen: &mut once_seen,
                 user_id: "u1",
                 channel: "test",
+                turn_key: "turn-traced-failure",
+                effect_seq: 0,
+                element_index: None,
             },
         )
         .unwrap_err();

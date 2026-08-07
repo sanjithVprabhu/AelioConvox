@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/unverified_effect_set.rs:5:23
+  |
+5 |     let _ = authorize(&raw, "tool.delete_user");
+  |             --------- ^^^^ expected `&Verified<EffectSet>`, found `&EffectSet`
+  |             |
+  |             arguments to this function are incorrect
+  |
+  = note: expected reference `&Verified<EffectSet>`
+             found reference `&EffectSet`
+note: function defined here
+ --> src/versioning.rs
+  |
+  | pub fn authorize(grants: &Verified<EffectSet>, effect: &str) -> Result<(), AuthorizationError> {
+  |        ^^^^^^^^^

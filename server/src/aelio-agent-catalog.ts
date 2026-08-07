@@ -147,6 +147,16 @@ function toAgentTool(fn: FunctionDefinition) {
     name: fn.name,
     version: '1',
     capability_tags: [fn.intent ?? canonicalAgentToolId(fn.name)],
+    // The SDK schema does not declare result-set coverage. Preserve that fact explicitly:
+    // Unknown is admissible for execution but blocks promotion of aggregate workflows.
+    contract: {
+      effect_class: fn.safety === 'read' ? 'read' : 'write',
+      completeness: { kind: 'unknown' },
+      returns_entity: fn.outputRole ?? `sdk:${canonicalAgentToolId(fn.name)}:result`,
+      pushdown: [],
+      max_result_rows: null,
+      row_scoped: false,
+    },
     effect: fn.safety === 'read' ? 'read' : 'write',
     effectful: fn.safety !== 'read',
     idempotent: fn.safety === 'read',

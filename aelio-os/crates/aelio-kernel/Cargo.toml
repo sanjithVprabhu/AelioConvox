@@ -15,6 +15,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+harness-core = { path = "../harness-core" }
 
 [lints.rust]
 warnings = "warn"

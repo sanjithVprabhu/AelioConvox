@@ -1,0 +1,23 @@
+{
+  "id": "task_graph_budget_overrun_reject",
+  "description": "Child node budget exceeding parent remainder must reject",
+  "graph": {
+    "root_goal": "Budget test",
+    "nodes": [
+      {
+        "id": "heavy",
+        "goal": "Expensive step",
+        "rationale": "Exceeds parent budget",
+        "strategy_hint": [],
+        "inputs": [],
+        "outputs": [],
+        "depends_on": [],
+        "budget": { "max_steps": 100, "max_tokens": 50000, "max_ms": 120000 },
+        "max_refinements": 0
+      }
+    ],
+    "join_spec": { "kind": "last_node", "node_id": "heavy", "field": "result" }
+  },
+  "parent_budget": { "max_steps": 10, "max_tokens": 5000, "max_ms": 30000 },
+  "expect": "reject_budget"
+}

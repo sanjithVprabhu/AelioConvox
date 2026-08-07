@@ -26,6 +26,8 @@ aelio-db-query = { path = "../aelio-db-query" }
 aelio-render = { path = "../aelio-render" }
 aelio-sol.workspace = true
 aelio-kernel.workspace = true
+blake3.workspace = true
+harness-core = { path = "../harness-core" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [dev-dependencies]

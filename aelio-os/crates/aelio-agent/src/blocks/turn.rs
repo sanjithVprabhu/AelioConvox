@@ -1,7 +1,12 @@
 //! Turn spine — the hot loop.
 //!
 //! sense → flow gate → clause split → triage → situation key → tier lookup
-//! → execute → synthesize → write back
+//! → [orchestrate] → execute → synthesize → write back
+//!
+//! **Harness v2 (F-027):** `[orchestrate]` runs on the Tier3 cold path **before** Conductor
+//! starters and flat `ProposePath`. It classifies complexity, may emit a verified `TaskGraph`,
+//! `TaskGraph`, and lowers each node to Sol or scoped abilities. Warm pin matches and Conductor
+//! starters bypass orchestration. See `docs/development/Aelio_harness_v2_multiagent_architecture.md`.
 
 use crate::abilities::express::{self, ExpressVia, Utterance};
 use crate::abilities::invoke::CapabilityHost;
@@ -10,6 +15,7 @@ use crate::abilities::learn::{
     propose_path_with_provider, situation_hash, situation_key, typecheck, ObserveOutcome,
     ProposalMap, SituationKey, PROMOTE_MIN_OBSERVATIONS,
 };
+use crate::abilities::matching::{evaluate_warm_match, MatchingConfig, Outcome};
 use crate::abilities::registry::Registry;
 use crate::abilities::sense::{sense_budget, sense_env, sense_session, SessionSense};
 use crate::abilities::state;
@@ -23,6 +29,8 @@ use crate::blocks::executor::{
 use crate::blocks::flow::{flow_gate, FlowGateResult, FlowInstance};
 use crate::contract::AbilityPath;
 use crate::ops::effects::EffectEnv;
+
+const PENDING_EFFECT_CONFIRMATION_KEY: &str = "__pending_effect_confirmation_clauses";
 use crate::policy::PolicyCtx;
 use crate::provider::{LlmProvider, ProviderCall};
 use crate::runtime::turn_recall::{RecallBudget, TurnRecall};
@@ -47,6 +55,7 @@ pub struct TurnInput {
     pub state_id: String,
     pub slots: IndexMap<String, serde_json::Value>,
     pub active_flow: Option<FlowInstance>,
+    pub graph_suspension: Option<crate::orchestration::suspension::GraphSuspension>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +77,7 @@ pub struct TurnResult {
     pub situation_hash: Option<String>,
     pub proposal_id: Option<String>,
     pub suspended: bool,
+    pub graph_suspension: Option<crate::orchestration::suspension::GraphSuspension>,
 }
 
 struct TierPathOutcome {
@@ -103,6 +113,8 @@ pub struct TurnRuntime<'a> {
     /// intent classification, term bridging, promotion embedding) goes through this one handle.
     pub embedder: &'a dyn crate::embedding::Embedder,
     pub inline_learning_enabled: bool,
+    /// Red-rule switch: disables all Tier0/Tier1 dispatches and cold-authors every request.
+    pub matching_config: MatchingConfig,
     pub legacy_flow_execution_enabled: bool,
     pub(crate) durable_memory_enabled: bool,
     /// Session harness stack + context pages (Conductor architecture).
@@ -144,10 +156,7 @@ impl<'a> TurnRuntime<'a> {
                 if let Some(top) = self.harness.top() {
                     steps.push(TurnTraceStep {
                         name: "Harness.Stack".into(),
-                        detail: format!(
-                            "stay: top={} waiting={}",
-                            top.harness_id, top.waiting
-                        ),
+                        detail: format!("stay: top={} waiting={}", top.harness_id, top.waiting),
                     });
                 }
             }
@@ -188,7 +197,8 @@ impl<'a> TurnRuntime<'a> {
             }
             steps.push(TurnTraceStep {
                 name: "Harness.Stack".into(),
-                detail: "abandoned waiting runtime subject due to exit_up/fresh; not resumed".into(),
+                detail: "abandoned waiting runtime subject due to exit_up/fresh; not resumed"
+                    .into(),
             });
         } else if active_runtime_subject {
             if self.matching_flow(&input.utterance, input).is_some() {
@@ -261,6 +271,7 @@ impl<'a> TurnRuntime<'a> {
                             situation_hash: None,
                             proposal_id: None,
                             suspended,
+                            graph_suspension: None,
                         };
                     }
                     Ok(None) => {
@@ -289,6 +300,23 @@ impl<'a> TurnRuntime<'a> {
             .is_some_and(|flow| flow.flow_id == "__aelio.multi_clause_confirmation")
         {
             return self.resume_multi_clause_plan(input, &mut steps);
+        }
+        // Unified mode persists effect confirmation in the harness session (not legacy user_flows).
+        // Skip this intercept when already executing a confirmed clause — otherwise
+        // `resume_multi_clause_plan` → `run(confirmed utterance)` re-enters here, sees the still-
+        // pending plan, and re-asks "confirm?" forever because the utterance is no longer "yes".
+        if !self.legacy_flow_execution_enabled
+            && input
+                .slots
+                .get("__aelio_effect_confirmed")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+        {
+            if let Some(clauses) = self.pending_effect_confirmation_clauses() {
+                let mut patched = input.clone();
+                patched.active_flow = Some(multi_clause_confirmation_flow(&clauses));
+                return self.resume_multi_clause_plan(&patched, &mut steps);
+            }
         }
         if input
             .active_flow
@@ -399,6 +427,7 @@ impl<'a> TurnRuntime<'a> {
                 situation_hash: None,
                 proposal_id: None,
                 suspended: false,
+                graph_suspension: None,
             };
         }
 
@@ -656,16 +685,22 @@ impl<'a> TurnRuntime<'a> {
             detail: format!("{:?} margin={}", depth_class.depth, depth_class.margin),
         });
 
-        match depth_class.depth {
-            Depth::Shallow => {
-                let mut result = self.shallow_turn(input, &session, &state_node, &mut steps, &env);
-                result.llm_calls = result.llm_calls.saturating_add(llm_calls);
-                return result;
+        // A parked graph owns the next user answer even when that answer is short. Without this
+        // gate a valid phone number or approval reply would be consumed by shallow chat before
+        // the continuation reached its pending client-tool node.
+        if input.graph_suspension.is_none() {
+            match depth_class.depth {
+                Depth::Shallow => {
+                    let mut result =
+                        self.shallow_turn(input, &session, &state_node, &mut steps, &env);
+                    result.llm_calls = result.llm_calls.saturating_add(llm_calls);
+                    return result;
+                }
+                Depth::Boundary => {
+                    return self.boundary_turn(input, &mut steps, &mut llm_calls);
+                }
+                Depth::Deep => {}
             }
-            Depth::Boundary => {
-                return self.boundary_turn(input, &mut steps, &mut llm_calls);
-            }
-            Depth::Deep => {}
         }
 
         // ── 4. SITUATION KEY (bucketed; no personality) ───────────────────
@@ -684,6 +719,30 @@ impl<'a> TurnRuntime<'a> {
             name: "SituationKey".into(),
             detail: sh.clone(),
         });
+
+        if let Some(suspension) = input.graph_suspension.clone() {
+            if suspension.is_expired(now.timestamp_millis()) {
+                self.effect_env.metric_inc("graph_suspension.expired", 1.0);
+                steps.push(TurnTraceStep {
+                    name: "Orchestrate.Expired".into(),
+                    detail: format!(
+                        "suspended_turn={} expired_at_ms={}; treating input as fresh",
+                        suspension.turn_id, suspension.expires_at_ms
+                    ),
+                });
+            } else if let Some(result) = crate::blocks::orchestrate::try_resume_orchestrated_graph(
+                self,
+                input,
+                &suspension,
+                &sh,
+                &sigma,
+                &mut steps,
+                llm_calls,
+            ) {
+                return result;
+            }
+        }
+
         let recalled = match self.turn_recall.retrieve(
             &input.user_id,
             clause,
@@ -734,6 +793,7 @@ impl<'a> TurnRuntime<'a> {
                 situation_hash: Some(sh),
                 proposal_id: None,
                 suspended: false,
+                graph_suspension: None,
             };
         }
 
@@ -765,6 +825,40 @@ impl<'a> TurnRuntime<'a> {
                 });
             }
         }
+        // Tier lookup only selects a candidate. Gate the candidate before it can dispatch any
+        // ability/tool; a rejected candidate becomes an ordinary cold-authoring request.
+        if matches!(tier.tier, LookupTier::Tier0 | LookupTier::Tier1) {
+            let decision = match tier.path.as_ref() {
+                Some(path) => evaluate_warm_match(
+                    self.matching_config,
+                    tier.tier,
+                    self.registry,
+                    path,
+                    clause,
+                    &input.slots,
+                ),
+                None => crate::abilities::matching::MatchDecision {
+                    outcome: Outcome::Rejected,
+                    gate: crate::abilities::matching::Gate::FailClosed,
+                    reason: "warm candidate has no executable path".into(),
+                },
+            };
+            crate::reuse_metrics::record_match_decision(&decision);
+            steps.push(TurnTraceStep {
+                name: "WarmMatchGate".into(),
+                detail: format!(
+                    "{:?}/{:?}: {}",
+                    decision.gate, decision.outcome, decision.reason
+                ),
+            });
+            if decision.outcome != Outcome::Accepted {
+                tier.tier = LookupTier::Tier3;
+                tier.path = None;
+                tier.procedure_id = None;
+                tier.artifact = None;
+            }
+        }
+        crate::reuse_metrics::record_lookup(tier.tier, &sh);
         steps.push(TurnTraceStep {
             name: "LookupTier".into(),
             detail: format!("{:?}", tier.tier),
@@ -819,6 +913,7 @@ impl<'a> TurnRuntime<'a> {
                     situation_hash: Some(sh),
                     proposal_id: procedure_id,
                     suspended: executed.suspended,
+                    graph_suspension: None,
                 }
             }
             LookupTier::Tier2 => {
@@ -861,22 +956,57 @@ impl<'a> TurnRuntime<'a> {
                     situation_hash: Some(sh),
                     proposal_id: Some(prop_id),
                     suspended: executed.suspended,
+                    graph_suspension: None,
                 }
             }
             LookupTier::Tier3 => {
+                // Harness v2: composite/open queries decompose before Conductor starters.
+                if let Some(result) = crate::blocks::orchestrate::try_orchestrated_cold_path(
+                    self, input, clause, &sigma, &sh, &mut steps, llm_calls,
+                ) {
+                    return result;
+                }
                 // Conductor chooses a starter harness; escalate alone falls through to ProposePath.
+                // A starter can also decline its own answer (e.g. ReplyNumericGuard) and fall
+                // through here — count whatever it spent either way.
+                let before_conductor_calls = self.provider_llm_calls();
                 if let Some(result) =
                     self.run_conductor_starters(input, clause, &sh, &mut steps, llm_calls)
                 {
                     return result;
                 }
+                llm_calls += self
+                    .provider_llm_calls()
+                    .saturating_sub(before_conductor_calls) as u32;
                 steps.push(TurnTraceStep {
                     name: "Conductor".into(),
                     detail: "escalate: cold ProposePath over declared abilities".into(),
                 });
-                // LLM proposes path over declared abilities
+                // LLM proposes path over declared abilities. Large catalogs are shortlisted by
+                // relevance first — the id list is also ProposePath's allow-list, so narrowing it
+                // can only shrink what the model may choose, never widen it.
                 let before = self.provider_llm_calls();
-                let ability_ids = self.registry.abilities.keys().cloned().collect::<Vec<_>>();
+                let declared = self.registry.abilities.keys().cloned().collect::<Vec<_>>();
+                // Score against the whole utterance, which is what ProposePath is asked about. A
+                // single clause is a narrower signal and could drop an ability the rest needs.
+                let retrieved = crate::abilities::retrieval::shortlist_abilities(
+                    &input.utterance,
+                    &declared,
+                    self.registry,
+                    self.embedder,
+                    &crate::abilities::retrieval::RetrievalConfig::default(),
+                );
+                if retrieved.applied {
+                    steps.push(TurnTraceStep {
+                        name: "ProposePath.Retrieve".into(),
+                        detail: format!(
+                            "shortlisted {} of {} declared abilities",
+                            retrieved.ability_ids.len(),
+                            retrieved.considered
+                        ),
+                    });
+                }
+                let ability_ids = retrieved.ability_ids;
                 let ability_declarations = ability_ids
                     .iter()
                     .map(|ability_id| {
@@ -932,11 +1062,17 @@ impl<'a> TurnRuntime<'a> {
                         return rejected;
                     }
                 };
+                let proposed_abilities: Vec<String> = path
+                    .steps
+                    .iter()
+                    .map(|step| step.ability_id.clone())
+                    .collect();
                 steps.push(TurnTraceStep {
                     name: "ProposePath".into(),
                     detail: format!(
-                        "{} steps prompt_hash={proposal_prompt_hash}",
-                        path.steps.len()
+                        "{} steps [{}] prompt_hash={proposal_prompt_hash}",
+                        path.steps.len(),
+                        proposed_abilities.join(", ")
                     ),
                 });
                 if let Err(error) = typecheck(self.registry, &path) {
@@ -948,6 +1084,29 @@ impl<'a> TurnRuntime<'a> {
                 }
                 steps.push(TurnTraceStep {
                     name: "TypeCheck".into(),
+                    detail: "ok".into(),
+                });
+                // A path can typecheck cleanly while silently dropping a constraint the
+                // utterance stated ("... in Bangalore" binding to a shape that never mentions
+                // the city). Heuristic, high-recall by design — see abilities::residue.
+                let unconsumed = crate::abilities::residue::residue_check(clause, &path);
+                if !unconsumed.is_empty() {
+                    let fragments = unconsumed
+                        .iter()
+                        .map(|f| f.fragment.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    steps.push(TurnTraceStep {
+                        name: "ResidueCheck".into(),
+                        detail: format!("rejected: unconsumed [{fragments}]"),
+                    });
+                    return rejected_path_turn(
+                        steps,
+                        "The proposed procedure didn't account for everything in the request.",
+                    );
+                }
+                steps.push(TurnTraceStep {
+                    name: "ResidueCheck".into(),
                     detail: "ok".into(),
                 });
                 if let Some(confirmation) =
@@ -984,6 +1143,7 @@ impl<'a> TurnRuntime<'a> {
                     situation_hash: Some(sh),
                     proposal_id: Some(prop_id),
                     suspended: executed.suspended,
+                    graph_suspension: None,
                 }
             }
         }
@@ -1139,11 +1299,13 @@ impl<'a> TurnRuntime<'a> {
                 situation_hash: Some(sh),
                 proposal_id: procedure_id,
                 suspended: false,
+                graph_suspension: None,
             };
         }
 
         // Greeting structure is authored and deterministic; only output-oriented banter needs
         // synthesis intelligence. Prefer Conductor starter harnesses over rediscovering a path.
+        let before_conductor_calls = self.provider_llm_calls();
         if let Some(mut result) =
             self.run_conductor_starters(input, &input.utterance, &sh, steps, 0)
         {
@@ -1151,7 +1313,9 @@ impl<'a> TurnRuntime<'a> {
             return result;
         }
         let path = propose_path_greeting();
-        let mut llm_calls = 0;
+        let mut llm_calls = self
+            .provider_llm_calls()
+            .saturating_sub(before_conductor_calls) as u32;
         steps.push(TurnTraceStep {
             name: "Tier2Compose".into(),
             detail: "authored generic greeting path".into(),
@@ -1212,6 +1376,7 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: Some(sh),
             proposal_id: Some(prop_id),
             suspended: false,
+            graph_suspension: None,
         }
     }
 
@@ -1271,6 +1436,7 @@ impl<'a> TurnRuntime<'a> {
                     situation_hash,
                     proposal_id: procedure_id,
                     suspended,
+                    graph_suspension: None,
                 }
             }
             Err(error) => {
@@ -1293,12 +1459,16 @@ impl<'a> TurnRuntime<'a> {
         llm_calls: &mut u32,
     ) -> TurnResult {
         // Conductor owns ambiguous boundary turns when a starter harness fits.
+        let before_conductor_calls = self.provider_llm_calls();
         if let Some(mut result) =
             self.run_conductor_starters(input, &input.utterance, "boundary", steps, *llm_calls)
         {
             result.depth = Depth::Boundary;
             return result;
         }
+        *llm_calls += self
+            .provider_llm_calls()
+            .saturating_sub(before_conductor_calls) as u32;
         let recalled = self
             .turn_recall
             .retrieve(
@@ -1354,6 +1524,7 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: None,
             proposal_id: None,
             suspended: false,
+            graph_suspension: None,
         }
     }
 
@@ -1535,6 +1706,7 @@ impl<'a> TurnRuntime<'a> {
             slots: frame.slots.clone(),
             ..Default::default()
         };
+        let mut effect_seq = 0;
         execute_path(
             path,
             frame,
@@ -1549,6 +1721,8 @@ impl<'a> TurnRuntime<'a> {
                 effects: self.effect_env,
                 user_id: &input.user_id,
                 channel: &input.channel,
+                turn_key: &input.turn_id,
+                effect_seq: &mut effect_seq,
             },
         )
     }
@@ -1724,6 +1898,7 @@ impl<'a> TurnRuntime<'a> {
                     situation_hash: None,
                     proposal_id: None,
                     suspended,
+                    graph_suspension: None,
                 }
             }
             Err(error) => {
@@ -2012,6 +2187,7 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: None,
             proposal_id: None,
             suspended: false,
+            graph_suspension: None,
         }
     }
 
@@ -2098,6 +2274,7 @@ impl<'a> TurnRuntime<'a> {
                     situation_hash: None,
                     proposal_id: None,
                     suspended: true,
+                    graph_suspension: None,
                 }))
             }
             crate::blocks::term_resolve::TermResolution::Resolved { plan, margin } => {
@@ -2146,6 +2323,7 @@ impl<'a> TurnRuntime<'a> {
                     situation_hash: None,
                     proposal_id: None,
                     suspended: false,
+                    graph_suspension: None,
                 }))
             }
         }
@@ -2212,6 +2390,7 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: None,
             proposal_id: None,
             suspended: outcome.suspended,
+            graph_suspension: None,
         }
     }
 
@@ -2262,6 +2441,10 @@ impl<'a> TurnRuntime<'a> {
                 detail: format!(
                     "obs={observations}/{PROMOTE_MIN_OBSERVATIONS} effectful={effectful}"
                 ),
+            }),
+            ObserveOutcome::Blocked { reason } => steps.push(TurnTraceStep {
+                name: "Learn.PromotionBlocked".into(),
+                detail: reason,
             }),
         }
         crate::abilities::learn::proposal_id(sigma, path)
@@ -2353,6 +2536,7 @@ impl<'a> TurnRuntime<'a> {
                     situation_hash: None,
                     proposal_id: None,
                     suspended: true,
+                    graph_suspension: None,
                 };
             }
         }
@@ -2393,6 +2577,7 @@ impl<'a> TurnRuntime<'a> {
                 situation_hash: None,
                 proposal_id: None,
                 suspended: true,
+                graph_suspension: None,
             };
         }
 
@@ -2414,6 +2599,7 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: None,
             proposal_id: None,
             suspended: false,
+            graph_suspension: None,
         }
     }
 
@@ -2486,6 +2672,7 @@ impl<'a> TurnRuntime<'a> {
                 situation_hash: None,
                 proposal_id: None,
                 suspended: true,
+                graph_suspension: None,
             };
         }
         let Some(plan) = crate::blocks::term_resolve::confirmed_plan(
@@ -2531,6 +2718,7 @@ impl<'a> TurnRuntime<'a> {
                 name: "MultiClauseConfirm".into(),
                 detail: "ordered action plan cancelled".into(),
             });
+            self.clear_pending_effect_confirmation();
             return multi_clause_completed("Okay, I cancelled that action plan.", steps.clone());
         }
         if !matches!(normalized.as_str(), "yes" | "y" | "confirm" | "proceed") {
@@ -2546,6 +2734,7 @@ impl<'a> TurnRuntime<'a> {
                 situation_hash: None,
                 proposal_id: None,
                 suspended: true,
+                graph_suspension: None,
             };
         }
 
@@ -2553,6 +2742,10 @@ impl<'a> TurnRuntime<'a> {
             name: "MultiClauseConfirm".into(),
             detail: format!("confirmed ordered plan with {} actions", plan.len()),
         });
+        // Drop the harness pending marker before re-entering `run`. Confirmed execution carries
+        // `__aelio_effect_confirmed` on each sub-turn; leaving the pending plan in place made
+        // nested `run` calls treat the clause text as a fresh unconfirmed ask.
+        self.clear_pending_effect_confirmation();
         let mut replies = Vec::new();
         let mut refs = Vec::new();
         let mut calls = 0;
@@ -2598,9 +2791,11 @@ impl<'a> TurnRuntime<'a> {
                     situation_hash: result.situation_hash,
                     proposal_id: result.proposal_id,
                     suspended: true,
+                    graph_suspension: None,
                 };
             }
         }
+        self.clear_pending_effect_confirmation();
         TurnResult {
             reply: Utterance {
                 text: replies.join("\n"),
@@ -2619,11 +2814,44 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: None,
             proposal_id: None,
             suspended: false,
+            graph_suspension: None,
+        }
+    }
+
+    fn pending_effect_confirmation_clauses(&self) -> Option<Vec<String>> {
+        self.harness
+            .pages
+            .get(crate::harness::CONDUCTOR_ID)
+            .and_then(|page| page.slots.get(PENDING_EFFECT_CONFIRMATION_KEY))
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|clauses| !clauses.is_empty())
+    }
+
+    fn store_pending_effect_confirmation(&mut self, clauses: &[String]) {
+        self.harness
+            .ensure_page(crate::harness::CONDUCTOR_ID)
+            .slots
+            .insert(
+                PENDING_EFFECT_CONFIRMATION_KEY.into(),
+                serde_json::json!(clauses),
+            );
+    }
+
+    fn clear_pending_effect_confirmation(&mut self) {
+        if let Some(page) = self.harness.pages.get_mut(crate::harness::CONDUCTOR_ID) {
+            page.slots.shift_remove(PENDING_EFFECT_CONFIRMATION_KEY);
         }
     }
 
     fn confirm_effectful_path(
-        &self,
+        &mut self,
         input: &TurnInput,
         path: &AbilityPath,
         steps: &mut Vec<TurnTraceStep>,
@@ -2680,6 +2908,9 @@ impl<'a> TurnRuntime<'a> {
                 tools.join(",")
             ),
         });
+        if !self.legacy_flow_execution_enabled {
+            self.store_pending_effect_confirmation(std::slice::from_ref(&input.utterance));
+        }
         Some(TurnResult {
             reply: express::confirm("execute this action", &action),
             llm_calls,
@@ -2694,6 +2925,7 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: None,
             proposal_id: None,
             suspended: true,
+            graph_suspension: None,
         })
     }
 
@@ -2787,40 +3019,44 @@ impl<'a> TurnRuntime<'a> {
             other => {
                 let harness_id = other.id();
                 match self.harness_play_mode {
-                    HarnessPlayMode::Hardcoded => Some(match other {
-                        StarterHarness::QuickReply => self.exec_quick_reply(
+                    // `QuickReply` alone can decline its own answer (ReplyNumericGuard) and
+                    // return `None`, falling through to escalation like `Escalate` itself would
+                    // — it is not wrapped in `Some` here.
+                    HarnessPlayMode::Hardcoded => match other {
+                        StarterHarness::QuickReply => {
+                            self.exec_quick_reply(input, clause, situation_hash, steps, llm_calls)
+                        }
+                        StarterHarness::UnderstandIntent => Some(self.exec_understand_intent(
                             input,
                             clause,
                             situation_hash,
                             steps,
                             llm_calls,
-                        ),
-                        StarterHarness::UnderstandIntent => self.exec_understand_intent(
+                        )),
+                        StarterHarness::WaitForUser => Some(self.exec_wait_for_user(
                             input,
                             clause,
                             situation_hash,
                             steps,
                             llm_calls,
-                        ),
-                        StarterHarness::WaitForUser => self.exec_wait_for_user(
+                        )),
+                        StarterHarness::MemoryAttach => Some(self.exec_memory_attach(
                             input,
                             clause,
                             situation_hash,
                             steps,
                             llm_calls,
-                        ),
-                        StarterHarness::MemoryAttach => self.exec_memory_attach(
-                            input,
-                            clause,
-                            situation_hash,
-                            steps,
-                            llm_calls,
-                        ),
+                        )),
                         StarterHarness::Escalate => unreachable!(),
-                    }),
-                    HarnessPlayMode::Stored => {
-                        Some(self.play_stored_starter(harness_id, input, clause, situation_hash, steps, llm_calls))
-                    }
+                    },
+                    HarnessPlayMode::Stored => Some(self.play_stored_starter(
+                        harness_id,
+                        input,
+                        clause,
+                        situation_hash,
+                        steps,
+                        llm_calls,
+                    )),
                 }
             }
         }
@@ -2877,7 +3113,8 @@ impl<'a> TurnRuntime<'a> {
         mut llm_calls: u32,
     ) -> TurnResult {
         use crate::harness::{
-            AttachSource, EvidenceSource, HarnessStepV1, QuerySource, CONDUCTOR_ID, WAIT_FOR_USER_ID,
+            AttachSource, EvidenceSource, HarnessStepV1, QuerySource, CONDUCTOR_ID,
+            WAIT_FOR_USER_ID,
         };
 
         let waiting = program
@@ -2905,15 +3142,22 @@ impl<'a> TurnRuntime<'a> {
                         .get(CONDUCTOR_ID)
                         .map(|page| page.notes.join("; "))
                         .unwrap_or_default();
-                    let is_tiny_greeting = ["hi", "hello", "hey", "thanks", "thank you", "ok", "okay"]
-                        .iter()
-                        .any(|w| clause.trim().eq_ignore_ascii_case(w));
+                    let is_tiny_greeting =
+                        ["hi", "hello", "hey", "thanks", "thank you", "ok", "okay"]
+                            .iter()
+                            .any(|w| clause.trim().eq_ignore_ascii_case(w));
                     let (utterance, calls) = match evidence_from {
                         EvidenceSource::GreetingTemplateOrPageUser
                             if is_tiny_greeting && notes.is_empty() =>
                         {
                             (
-                                express::greeting_template(self.personality, None, &[], false, false),
+                                express::greeting_template(
+                                    self.personality,
+                                    None,
+                                    &[],
+                                    false,
+                                    false,
+                                ),
                                 0u32,
                             )
                         }
@@ -2940,8 +3184,9 @@ impl<'a> TurnRuntime<'a> {
                             (utterance, calls)
                         }
                         EvidenceSource::UserOnly => {
-                            let evidence =
-                                format!("User said: {clause}. Reply briefly in one or two sentences.");
+                            let evidence = format!(
+                                "User said: {clause}. Reply briefly in one or two sentences."
+                            );
                             let before = self.provider_llm_calls();
                             let utterance = self.synthesize_or_fallback(&evidence);
                             let calls = self.provider_llm_calls().saturating_sub(before) as u32;
@@ -3064,6 +3309,7 @@ impl<'a> TurnRuntime<'a> {
                         situation_hash: Some(situation_hash.into()),
                         proposal_id: None,
                         suspended,
+                        graph_suspension: None,
                     };
                 }
                 HarnessStepV1::ReturnFinish | HarnessStepV1::ReturnParent => {
@@ -3105,9 +3351,8 @@ impl<'a> TurnRuntime<'a> {
         }
 
         TurnResult {
-            reply: reply.unwrap_or_else(|| {
-                express::template("harness_empty", "Done.", &IndexMap::new())
-            }),
+            reply: reply
+                .unwrap_or_else(|| express::template("harness_empty", "Done.", &IndexMap::new())),
             llm_calls,
             tier: Some(LookupTier::Tier3),
             depth: Depth::Deep,
@@ -3118,9 +3363,13 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: Some(situation_hash.into()),
             proposal_id: None,
             suspended,
+            graph_suspension: None,
         }
     }
 
+    /// Returns `None` when the synthesized reply fails `ReplyNumericGuard` (see F-032) —
+    /// the caller falls through to escalation exactly as it does for `StarterHarness::Escalate`,
+    /// rather than serving a conversational reply that states an unverified number as fact.
     fn exec_quick_reply(
         &mut self,
         input: &TurnInput,
@@ -3128,7 +3377,7 @@ impl<'a> TurnRuntime<'a> {
         situation_hash: &str,
         steps: &mut Vec<TurnTraceStep>,
         llm_calls: u32,
-    ) -> TurnResult {
+    ) -> Option<TurnResult> {
         use crate::harness::{CONDUCTOR_ID, QUICK_REPLY_ID};
 
         self.harness.push(QUICK_REPLY_ID, false);
@@ -3148,10 +3397,11 @@ impl<'a> TurnRuntime<'a> {
             .iter()
             .any(|w| clause.trim().eq_ignore_ascii_case(w));
 
-        let (reply, calls) = if is_tiny_greeting && notes.is_empty() {
+        let (reply, calls, synthesized) = if is_tiny_greeting && notes.is_empty() {
             (
                 express::greeting_template(self.personality, None, &[], false, false),
                 0u32,
+                false,
             )
         } else {
             let evidence = if notes.is_empty() {
@@ -3164,15 +3414,29 @@ impl<'a> TurnRuntime<'a> {
             let before = self.provider_llm_calls();
             let reply = self.synthesize_or_fallback(&evidence);
             let calls = self.provider_llm_calls().saturating_sub(before) as u32;
-            (reply, calls)
+            (reply, calls, true)
         };
+
+        // ReplyNumericGuard (F-032): a QuickReply never has a tool result behind it, so a
+        // synthesized reply stating a number/currency/percent has nothing verifying it. High
+        // recall by design — a false positive costs one re-triage through the cold path; a
+        // false negative states a fabricated number as settled fact.
+        if synthesized && reply_states_unverified_number(&reply.text) {
+            steps.push(TurnTraceStep {
+                name: "ReplyNumericGuard".into(),
+                detail: "rejected: synthesized reply states an unverified number/currency/percent — escalating".into(),
+            });
+            let _ = self.harness.exit_up();
+            return None;
+        }
+
         self.harness.attach_note(
             CONDUCTOR_ID,
             format!("quick_reply handled: {}", truncate_for_note(clause, 80)),
         );
         let _ = self.harness.exit_up(); // pop quick_reply; conductor remains
         let _ = input;
-        TurnResult {
+        Some(TurnResult {
             reply,
             llm_calls: llm_calls.saturating_add(calls),
             tier: Some(LookupTier::Tier3),
@@ -3184,7 +3448,8 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: Some(situation_hash.into()),
             proposal_id: None,
             suspended: false,
-        }
+            graph_suspension: None,
+        })
     }
 
     fn exec_understand_intent(
@@ -3234,6 +3499,7 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: Some(situation_hash.into()),
             proposal_id: None,
             suspended: false,
+            graph_suspension: None,
         }
     }
 
@@ -3278,6 +3544,7 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: Some(situation_hash.into()),
             proposal_id: None,
             suspended: true,
+            graph_suspension: None,
         }
     }
 
@@ -3298,7 +3565,11 @@ impl<'a> TurnRuntime<'a> {
             .to_string();
         steps.push(TurnTraceStep {
             name: "Harness.wait_for_user.resume".into(),
-            detail: format!("prior={} answer={}", truncate_for_note(&prior, 40), truncate_for_note(&input.utterance, 40)),
+            detail: format!(
+                "prior={} answer={}",
+                truncate_for_note(&prior, 40),
+                truncate_for_note(&input.utterance, 40)
+            ),
         });
         self.harness.attach_note(
             CONDUCTOR_ID,
@@ -3340,6 +3611,7 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: None,
             proposal_id: None,
             suspended: false,
+            graph_suspension: None,
         }
     }
 
@@ -3374,8 +3646,10 @@ impl<'a> TurnRuntime<'a> {
                 .collect::<Vec<_>>()
                 .join(" | ")
         };
-        self.harness
-            .attach_note(CONDUCTOR_ID, format!("memory: {}", truncate_for_note(&snippet, 200)));
+        self.harness.attach_note(
+            CONDUCTOR_ID,
+            format!("memory: {}", truncate_for_note(&snippet, 200)),
+        );
         steps.push(TurnTraceStep {
             name: "Harness.memory_attach".into(),
             detail: format!("claims={}", recalled.claims.len()),
@@ -3407,6 +3681,7 @@ impl<'a> TurnRuntime<'a> {
             situation_hash: Some(situation_hash.into()),
             proposal_id: None,
             suspended: false,
+            graph_suspension: None,
         }
     }
 }
@@ -3467,6 +3742,7 @@ fn multi_clause_suspension(reply: Utterance, steps: Vec<TurnTraceStep>) -> TurnR
         situation_hash: None,
         proposal_id: None,
         suspended: true,
+        graph_suspension: None,
     }
 }
 
@@ -3546,6 +3822,7 @@ fn multi_clause_completed(text: &str, steps: Vec<TurnTraceStep>) -> TurnResult {
         situation_hash: None,
         proposal_id: None,
         suspended: false,
+        graph_suspension: None,
     }
 }
 
@@ -3630,6 +3907,7 @@ fn suspended_turn(
         situation_hash: None,
         proposal_id: None,
         suspended: true,
+        graph_suspension: None,
     }
 }
 
@@ -3658,6 +3936,7 @@ fn deferred_runtime_flow_turn(steps: Vec<TurnTraceStep>) -> TurnResult {
         situation_hash: None,
         proposal_id: None,
         suspended: true,
+                graph_suspension: None,
     }
 }
 
@@ -3666,6 +3945,16 @@ fn deferred_runtime_flow_turn(steps: Vec<TurnTraceStep>) -> TurnResult {
 /// marker splitter produced. Real clause detection is the LLM `Understand.SplitClauses` ability's
 /// job; this only keeps the gate from firing on ordinary conjunctions. Self-contained by design so
 /// it does not collide with other splitter guards under concurrent edit.
+/// True when `text` contains a digit or a currency/percent symbol. Used by `ReplyNumericGuard`
+/// (F-032) to keep a QuickReply from stating an unverified number as fact — deliberately blunt:
+/// it does not try to distinguish "the 3rd time" from "$3,000 refund," because the cost of a
+/// false positive (one extra re-triage) is far cheaper than the cost of a false negative (a
+/// confidently fabricated number reaching the user with no tool result behind it).
+fn reply_states_unverified_number(text: &str) -> bool {
+    text.chars()
+        .any(|c| c.is_ascii_digit() || matches!(c, '$' | '€' | '£' | '¥' | '%'))
+}
+
 fn clause_looks_actionable(clause: &str) -> bool {
     const REQUEST_WORDS: &[&str] = &[
         "show", "list", "find", "get", "check", "tell", "send", "resend", "create", "update",
@@ -3737,6 +4026,7 @@ fn rejected_path_turn(steps: Vec<TurnTraceStep>, message: &str) -> TurnResult {
         situation_hash: None,
         proposal_id: None,
         suspended: false,
+        graph_suspension: None,
     }
 }
 
@@ -3744,7 +4034,15 @@ fn rejected_path_turn(steps: Vec<TurnTraceStep>, message: &str) -> TurnResult {
 /// declared field names, paths and type tags. Other error messages can originate in a tenant tool
 /// and therefore stay hidden from the redacted trace.
 fn trace_safe_error_detail(error: &AelioError) -> String {
-    if matches!(error.code, crate::types::ReasonCode::SigMismatch) {
+    // Conflict/Unavailable messages are structural (instance pins, host disconnect) and contain no
+    // tenant PII — surface them so operators can diagnose tool-proxy identity bugs. SigMismatch
+    // messages name declared field paths only.
+    if matches!(
+        error.code,
+        crate::types::ReasonCode::SigMismatch
+            | crate::types::ReasonCode::Conflict
+            | crate::types::ReasonCode::Unavailable
+    ) {
         format!("failed: {:?}: {}", error.code, error.message)
     } else {
         format!("failed: {:?}", error.code)
@@ -3868,5 +4166,17 @@ mod tests {
         assert!(!clause_looks_actionable("invoices"));
         assert!(!clause_looks_actionable("my account"));
         assert!(clause_looks_actionable("cancel my order"));
+    }
+
+    #[test]
+    fn reply_numeric_guard_flags_digits_and_currency_and_percent() {
+        assert!(reply_states_unverified_number(
+            "Your balance is 42 dollars."
+        ));
+        assert!(reply_states_unverified_number("That'll be $19.99."));
+        assert!(reply_states_unverified_number("Roughly 15% off today."));
+        assert!(!reply_states_unverified_number(
+            "Sure, I can help with that — happy to look into it."
+        ));
     }
 }

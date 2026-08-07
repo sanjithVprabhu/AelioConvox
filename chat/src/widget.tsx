@@ -28,6 +28,10 @@ type ServerMessage =
         protocol: string;
       };
     }
+  | {
+      type: 'history';
+      messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+    }
   | { type: 'message'; role: 'assistant'; content: string; frame?: RenderFrame; turnId?: string }
   | { type: 'confirmation'; prompt: string; frame?: RenderFrame; turnId?: string }
   | { type: 'typing'; active: boolean }
@@ -41,6 +45,27 @@ const HANDSHAKE_TIMEOUT_MS = 8000;
 const MAX_MESSAGE_LENGTH = 4096;
 // Stop auto-reconnecting after this many consecutive failures.
 const MAX_RECONNECT_ATTEMPTS = 10;
+
+function sessionStorageKey(customerId: string): string {
+  return `aelio:session:${customerId}`;
+}
+
+function readStoredSessionId(customerId: string): string | undefined {
+  try {
+    const value = localStorage.getItem(sessionStorageKey(customerId));
+    return value && value.length > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeStoredSessionId(customerId: string, sessionId: string): void {
+  try {
+    localStorage.setItem(sessionStorageKey(customerId), sessionId);
+  } catch {
+    /* quota / private mode — session resume degrades gracefully */
+  }
+}
 
 export type AelioChatOptions = {
   serverUrl: string;
@@ -153,7 +178,8 @@ function escapeAttr(s: string): string {
 function ChatWidget({ options }: { options: NormalizedOptions }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [acceptedKinds, setAcceptedKinds] = useState<string[]>([...CORE_KINDS]);
+  // Ref only — must not live in the connection effect deps or the ready handshake retriggers it.
+  const acceptedKindsRef = useRef<string[]>([...CORE_KINDS]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
@@ -170,6 +196,7 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
       customerId: options.customerId,
       authToken: options.authToken,
       email: options.email,
+      sessionId: readStoredSessionId(options.customerId),
       hello: makeHello(),
     }),
     [options.authToken, options.customerId, options.email],
@@ -276,10 +303,23 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
           clearTimers();
           attempt = 0;
           if (data.welcome?.accepted_kinds?.length) {
-            setAcceptedKinds(data.welcome.accepted_kinds);
+            acceptedKindsRef.current = data.welcome.accepted_kinds;
+          }
+          if (data.welcome?.session_id) {
+            writeStoredSessionId(options.customerId, data.welcome.session_id);
           }
           setStatus('connected');
           setStatusDetail('');
+          return;
+        }
+        if (data.type === 'history') {
+          setMessages(
+            data.messages.map((row) =>
+              row.role === 'assistant'
+                ? assistantFromFrame(undefined, row.content, acceptedKindsRef.current)
+                : { role: 'user', content: row.content },
+            ),
+          );
           return;
         }
         if (data.type === 'typing') {
@@ -290,7 +330,7 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
           setPendingConfirmationIndex(null);
           setMessages((prev) => [
             ...prev,
-            assistantFromFrame(data.frame, data.content, acceptedKinds),
+            assistantFromFrame(data.frame, data.content, acceptedKindsRef.current),
           ]);
           return;
         }
@@ -298,7 +338,7 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
           setMessages((prev) => {
             const next: ChatMessage[] = [
               ...prev,
-              assistantFromFrame(data.frame, data.prompt, acceptedKinds),
+              assistantFromFrame(data.frame, data.prompt, acceptedKindsRef.current),
             ];
             setPendingConfirmationIndex(next.length - 1);
             return next;
@@ -343,7 +383,7 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
       clearTimers();
       socketRef.current?.close();
     };
-  }, [acceptedKinds, initPayload, options.serverUrl]);
+  }, [initPayload, options.serverUrl]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });

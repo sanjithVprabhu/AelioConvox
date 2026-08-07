@@ -279,3 +279,274 @@ seed-library back-compat only.
 **Open:** whether host re-registration needs a dedicated `Registry::replace_host_target` API vs
 building the registry only once at boot with the real adapter. Prefer boot-time injection for now.
 `PROVISIONAL` until agent-host wires the reverse channel.
+
+### F-027 — Harness v2 TaskGraph contract above kernel — `§4`, `§8`, Harness v2 plan
+**What:** Harness v2 introduces `TaskNode` / `TaskGraph` / `EvalVerdict` as orchestration-layer
+contracts (goal, rationale, strategy_hint, per-node budgets, refinement loop). Mother §4 covers
+Sol bags and imprints; it does not name TaskGraph explicitly. Multi-agent decomposition is a
+**planning/orchestration** artifact that lowers to Sol op trees + existing Call targets — not a
+new kernel op class.
+**Options:** (a) treat TaskGraph as agent-layer JSON contracts in `aelio-sol::task_graph` with
+canonical hashing for promotion evidence; (b) amend Mother §4 to normatively define TaskGraph.
+**Recommendation → (a).** Each TaskNode lowers to Sol before kernel execution; ledger/replay
+invariants remain on kernel turns. Promotion stores situation key → TaskGraph hash or lowered Sol
+pin. `PROVISIONAL` until Phase 7 promotion vectors pass.
+**Orchestrate insertion:** `aelio-agent/src/blocks/turn.rs` — after tier lookup on cold path
+(Tier3 escalate → ProposePath branch), before flat `execute_tier_path`. Conductor starters and
+warm pin matches bypass Orchestrate. See `docs/development/Aelio_harness_v2_multiagent_architecture.md`.
+
+### F-028 — Ephemeral runtime sub-agents — Harness v2, std tool catalog
+**What:** When orchestration cannot match a pinned workflow or registered `std.*` tool, the system
+needs a bounded fallback that mints a short-lived sub-agent (verified pipeline of pure `std.*`
+steps), executes it once, and destroys it — analogous to attach-doc-then-discard patterns in other
+agent systems. Mother doc does not define ephemeral tools; this is agent-layer only.
+**Options:** (a) `std.ephemeral.adapt` meta-tool + `EphemeralScope` RAII lifecycle in
+`orchestration/ephemeral.rs`; (b) fall through to cold ProposePath only; (c) LLM-synthesized
+arbitrary code (rejected — non-deterministic, unauditable).
+**Recommendation → (a).** Heuristic synthesizer maps document/text/count goals to std pipelines;
+`EphemeralScope` tracks created/destroyed IDs per turn for trace. LLM-driven synthesis deferred to
+Phase E. Ephemeral pipelines are **not** promoted to warm path unless separately observed.
+**Routing (F-028b, amended):** `tool_router.rs` enforces pinned workflow → std → ephemeral →
+fallthrough. Orchestration **never selects a tenant tool from utterance keywords.** The original
+`match_client_tool` scored capability-tag segments, so `auth.otp.send` matched the word "send" in
+ordinary prose and reached the host with every gate skipped. It is deleted. Tenant tool selection
+belongs to ProposePath, where the proposal is typechecked against declared abilities.
+A tenant tool reaches `execute_task_graph` only when a verified TaskGraph node names it in
+`strategy_hint`, and it is then invoked through `blocks/tool_call.rs::run_tool_call_block` —
+policy, `resolve_all` parameter binding, derived per-call `idem_key`, error-envelope
+classification, and response redaction all apply. Unbound required params return
+`GraphExecution::NeedUser` rather than calling with a missing argument. `std.*` and ephemeral
+tools execute in-process but still pass `require_allow` at `ReadOnly` risk, so a tenant can deny
+specific first-party tools. `PROVISIONAL`.
+
+### F-029 — The `std.` tool namespace is reserved — Harness v2, `§tenant catalog`
+**What:** Nothing but the id prefix distinguishes a first-party tool the runtime executes locally
+from one it dispatches over the tenant's SDK — there is no `provider` field on `ToolSpec`. A
+tenant registering `std.math.average` would therefore both shadow the first-party tool and have
+their "tool" silently executed in-process.
+**Options:** (a) reserve the prefix and reject tenant registrations that use it; (b) add a
+`provider` field to `ToolSpec` and key routing on that; (c) namespace tenant tools instead.
+**Recommendation → (a) now, (b) later.** `Registry::register_tenant_tool` rejects the `std.`
+prefix with `ReasonCode::Validation`; `register_tool` stays infallible for first-party boot
+registration. (b) is the cleaner long-term model but changes a serialized tenant contract, so it
+is deferred rather than taken silently. `PROVISIONAL`.
+
+### F-031 — Ability retrieval before ProposePath — Harness v2, `§ProposePath`
+**What:** ProposePath serialized *every* declared ability, with tools and params, into one prompt.
+Registering the 58 first-party `std.*` tools took the demo tenant from 9 abilities to 67, so every
+cold prompt now carried the whole utility catalog. This scales badly twice over: context limits,
+and selection accuracy degrading well before the limit is hit.
+**Options:** (a) embedding retrieval to shortlist candidates before prompting; (b) exclude `std.*`
+from ProposePath entirely; (c) leave it and cap tenant catalog size.
+**Recommendation → (a).** `abilities/retrieval.rs` ranks abilities against the utterance using the
+existing `Embedder`, following the `term_resolve` / `classify_intent` precedent: deterministic
+token coverage, with embedding cosine as a semantic bridge that is inert under the offline
+bag-of-hash embedder and live under a real model.
+
+Three properties make this safe to put in front of a gate:
+
+1. **Retrieval nominates, it never decides.** ProposePath still selects and the selection is still
+   typechecked; the tool-call gate still authorizes. Because `propose_path_with_provider` uses the
+   id list as its allow-list, shortlisting can only *narrow* what the model may pick — a poor
+   shortlist costs a failed-closed proposal, never a wrong effect.
+2. **Recall over precision.** A near-tie is retained rather than resolved — the inverse of
+   `term_resolve`, which escalates a thin margin to the user, because there the score selects and
+   here it only nominates. A group that scores flat is passed through whole. Tie expansion is
+   capped at 2× budget so a uniformly-scoring group cannot defeat the budget entirely; ordering is
+   score-desc then id-asc, so that cut is deterministic.
+3. **Tenant abilities are budgeted separately from `std.*`.** Observed during implementation:
+   for "list jobs" the `std.data.*` descriptors matched lexically and evicted every tenant
+   capability from the shortlist. Partitioning fixes it — the tenant/engine set has its own
+   reserve and the utility catalog is sampled within its own budget. Demo tenant goes 67 → 17
+   with all three tenant abilities and all six engine abilities retained.
+
+Catalogs at or below `always_inline_below` (24) pass through untouched, so small tenants see
+today's behavior exactly. `PROVISIONAL` — thresholds are unvalidated against a real large catalog.
+
+**Not addressed:** whether `std.*` belongs in the ProposePath candidate set at all. Option (b) is
+arguably cleaner — those are first-party pure ops, not tenant capability composition — but it
+changes what paths can be proposed, so it is deferred rather than taken silently.
+
+### F-030 — Orchestration ledger hashing must be content-stable — `§4.3`
+**What:** `wavefront::hash_args` used `std::collections::hash_map::DefaultHasher` behind a helper
+misleadingly named `md5_hash`. `DefaultHasher`'s output is stable for neither Rust versions nor
+platforms, so a ledger `args_hash` could not survive replay. Separately, `std.ephemeral.adapt`
+embedded a wall-clock-nanosecond `_ephemeral_id` in its node output, which landed in
+`ExecutorState.ledger[].result` and broke replay bit-identity outright.
+**Resolution:** `hash_args` is BLAKE3 over key-sorted canonical JSON via `aelio_sol::blake3_hex`.
+Ephemeral pipeline ids are derived from the scope sequence plus a BLAKE3 digest of the goal, never
+the clock, and stay in `EphemeralScope` — they no longer enter node output. Covered by
+`repeat_execution_produces_an_identical_ledger`. Not provisional; this restores a locked §4.3
+invariant.
+
+---
+
+### F-032 — `docs/updates/HARNESS_KERNEL_V4.md` doc set vs. `aelio-os` — cross-cutting
+**What:** Three untracked documents (`HARNESS_KERNEL_V4.md`, `CONVERGENCE_MATRIX.md`,
+`M1_STATUS.md`) describe a system with different terminology (`starlark-rust`, `Astrolobe`,
+`redb`, a `harness-core` crate) from the one actually implemented here. `M1_STATUS.md` claimed a
+`harness-core/` crate tree with 34, then 54, passing tests; a repo-wide and whole-filesystem
+search found this tree **does not exist anywhere on this machine**. Directed to treat the two
+systems as the same product idea under different names, map terminology, and fix real
+divergences — four parallel code audits checked ~24 specific HARNESS_KERNEL_V4 claims against the
+real code.
+
+**Terminology map (HKv4 → real `aelio-os`):**
+
+| HKv4 | Real system |
+|---|---|
+| `harness-core` (numeric/canonical/agg/versioning) | `aelio-sol` (`value.rs`, `canonical.rs`, `hash.rs`, `limits.rs`) |
+| Astrolobe (control-plane vector+graph+text+columnar) | Aelio DB (`aelio-db-graph`, `aelio-db-index`, `aelio-db-text`, `aelio-db-format`, `aelio-db-query`) |
+| `redb` data-plane store | `aelio-store` (`EmbeddedStore` over the same Aelio DB engine) |
+| Skeleton + typed holes + signature | Edge-scoped converters (`aelio-convert`, `edge_id`) + literal `AbilityPath` procedures (`aelio-agent/abilities/registry.rs`) — no hole abstraction |
+| Phase 0–3 matching + residue check | `LookupTier` Tier0–3 ladder (`aelio-agent/abilities/learn.rs`) — **no residue-equivalent existed** (fixed below) |
+| Reply / Compute / Clarify triage | `StarterHarness` (QuickReply / Escalate / UnderstandIntent / WaitForUser) in `harness/conductor.rs` |
+| Per-value taint bits | Args-only least-privilege projection into `Call`/`Map` boundaries (mother §4.2.4, §6.3, §10.3.1) — different mechanism, same goal |
+| `SystemVersion` / `Verified<T>` / `impl_hash` | No equivalent; closest is per-Call-target `version` pinning (mother §10.1) |
+| Ledger `LedgerEntry` (path/skeleton_sig/join_path_hash/…) | `aelio-kernel::ledger::Entry` (`seq, turn_id, nid, kind, category, payload, payload_hash, prev`) — different, mother-defined shape (App G) |
+| Dual volume/evidence promotion routes | Single reach-tiered gate, `aelio-convert/src/gate.rs` (Structural→Shadow→Canary→Promoted, distinct-input thresholds) |
+
+**Verdict, by area (full detail in the four audit transcripts this entry summarizes):**
+- **Aligned already:** canonical float/map hashing (BLAKE3, ryu, `-0.0→0.0`, sorted keys,
+  `canonical.rs`); the unified vector+graph+text+columnar store (Aelio DB); fail-closed matching
+  (`learn.rs` Tier1 never executes a below-threshold nearest neighbour); Once/CAS idempotency
+  (§12.4); args-only least-privilege boundary.
+- **No equivalent, by design — accepted as a different valid design, not a defect:** `Decimal`
+  numeric tower + null-explicit aggregate ops (real type system is mother §5's
+  `null|bool|int|float|str|list|map`, no `Decimal`); skeleton/hole template reuse (real reuse is
+  edge-scoped converters + literal procedure paths); per-value taint bits (args-only projection
+  instead); `SystemVersion`/`Verified<T>`/`impl_hash`; privacy modes (Private/Assisted/Isolated) +
+  transmission allow-list; `redb`-shaped data-plane tables; HKv4's `LedgerEntry` field shape;
+  multi-replica ledger lease/segments (mother §33: single-instance v0, tenant-sharded scale-out);
+  HKv4's named two-route (volume/evidence) promotion ladder.
+- **Genuinely missing, fixed by this entry (see Resolution):** a residue-style "was every stated
+  constraint actually consumed" check; a numeric-fabrication guard on the Reply/QuickReply path;
+  synchronous contract-invalidation blast-radius reporting at tool registration;
+  determinism-hygiene guardrails (`HashMap` ban, cross-arch CI) scoped to the hashing-critical
+  crate.
+- **`M1_STATUS.md` pass-2 findings N12–N15, checked against real code:**
+  - **N15** (replay past journal end must hard-refuse, never dispatch) — **already true**:
+    `ReplayBackend::pop` in `aelio-kernel/src/driver.rs:912-916` returns
+    `Err(ReasonCode::Internal, .., "replay ran past the ledger")`.
+  - **N14** (Budget needs CAS, not `fetch_sub`, for concurrent `map_tool`) — **not applicable**:
+    real `Map` walks elements sequentially (`aelio-kernel/src/exec.rs:761-866`); no concurrent
+    race exists in v0. Re-check only if `Map` becomes parallel.
+  - **N12/N13** (taint implicit-flow, map-key taint laundering) — **not applicable**: no
+    taint-bit system exists to have this class of bug in.
+
+**Resolution → accept the "genuinely missing" list above as real gaps and close them:**
+1. Residue check: heuristic constraint-fragment extraction + consumption check, wired into
+   `blocks/turn.rs` after `ProposePath` typecheck, before execution.
+2. Reply numeric guard: scan synthesized `QuickReply` text for digits/currency/`%`; on a hit,
+   force re-triage to `Escalate` instead of serving the reply.
+3. Contract-invalidation blast radius: `Registry::register_tool`/`register_tenant_tool` now call
+   `invalidate_tool` synchronously on a content-changing re-registration and return the suspended
+   procedure ids.
+4. Determinism hygiene: `aelio-sol/clippy.toml` bans `HashMap`/`HashSet` (crate-scoped, since
+   `aelio-sol` is already `BTreeMap`-only and other crates use `HashMap` legitimately elsewhere);
+   CI gains a native `ubuntu-24.04-arm` job running `aelio-sol`'s own test suite.
+
+Everything in the "no equivalent, by design" list is `PROVISIONAL` only in the sense that a future
+`AELIO_DSL_MOTHER.md` amendment could adopt one of HKv4's mechanisms instead — none of them is a
+defect in the current locked spec, so none is queued as follow-up work.
+
+---
+
+### F-033 — Framework migration: HKv4 + Starlark replaces mother-doc authority — cross-cutting
+**What:** Product direction shifts from DSL interpretation (`AELIO_DSL_MOTHER.md` Planner/Executor)
+to **LLM-generated Starlark modules** executed under a deterministic harness (HKv4 /
+`IMPLEMENTATION_VERIFICATION.md`). The mother doc remains in-repo for historical P0 work but is
+**no longer implementation authority** for new features.
+
+**Decision (2026-08-07):**
+1. **North star:** `docs/updates/HARNESS_KERNEL_V4.md` + `IMPLEMENTATION_VERIFICATION.md`.
+2. **Substrate crate:** `aelio-os/crates/harness-core/` — numeric, agg, taint, versioning, exec
+   (Phase 2; stubs landed in F-033, implementation follows Starlark wiring order).
+3. **Bridge:** existing TaskGraph orchestration + `aelio-sol` canonical hashing stay until
+   Starlark eval is locked (§8 dialect flags, taint wrapper, budget pool).
+4. **Phase 1 fixes (this entry):** promotion σ alignment, TaskGraph/wavefront hash paths off
+   serde_json, NeedUser suspension, determinism tests, effectful detection via registry.
+
+**Rationale:** LLMs produce better imperative code than rigid DSL hole-filling; the harness
+invariants (determinism, taint, budget, versioning) must be settled *before* the embedding,
+not bolted on after — Section 8 is `[KILL if wired]` without them.
+
+**Status:** Phase 1 fixes applied; Phase 2 work order in
+`docs/updates/PHASE_2_INSTRUCTIONS.md`. **Correction:** full `harness-core` (2,111 lines, 54
+tests) exists in external deliverables — Phase 1 incorrectly scaffolded stubs; Task 2 is
+**port, not reimplement**. `AELIO_DSL_MOTHER.md` frozen — amendments only via explicit FLAGS entries.
+
+---
+
+### F-034 — Starlark codegen: text emission + AST authority (hybrid) — §8.3
+**What:** Phase 1 report ratified "LLM-generated Starlark text" over HKv4 §8.3 AST-as-JSON without
+flagging the cost: code-emission parse failures (~2.4%) and >20pt success drop. Pure text hashing
+also fragments the content-addressed store (whitespace/comment variants → different hashes).
+
+**Decision (2026-08-07) — hybrid with one non-negotiable rule:**
+1. Model **may** emit Starlark **text** (comfort zone for hosted APIs without grammar-constrained decoding).
+2. Text is **immediately parsed**; from that point the **AST is the only authoritative artifact**:
+   - `harness_hash` = BLAKE3(canonical re-render(parse(text))), **never** raw emitted text.
+   - Skeleton extraction (§6.3) runs on parsed AST.
+   - Verification rendering for Phase 3 / user is rendered from AST by the same renderer.
+3. Parse failure → capped repair loop (max 3) with structured diagnostics → Clarify. No unbounded retry.
+4. **Property test required:** `render(parse(text))` re-parses to identical AST for every authored harness.
+
+**Rejected:** Pure text with text-hashing — accepted only if explicitly chosen; would fragment cache.
+
+**Status:** Decision locked; implementation in Phase 2 Task 7 (after substrate Tasks 2–6).
+
+---
+
+### F-035 — Fail-closed gating stubs — orchestration eval (Task 3)
+**What:** `orchestration/executor.rs` semantic eval hook returned unconditional `pass: true`; exhausted
+refinement loop returned `NodeStep::Done` even when verdict failed — downstream believed verification ran.
+
+**Resolution → shape-only gate + fail-closed on exhaustion:**
+- Semantic hook removed; only `evaluate_shape` runs until semantic gate is implemented.
+- Shape failure after refinement budget → hard error, not silent Done.
+- `GraphSuspension` types: **pending** wire into NeedUser resume or delete (Task 3.3).
+
+**Gates currently fail-closed-pending-implementation:**
+| Gate | Location | Status |
+|------|----------|--------|
+| Semantic refinement | `executor.rs` | Removed fake pass; shape only |
+| GraphSuspension resume | `suspension.rs`, `orchestrate.rs`, `world.rs` | Wired: NeedUser saves snapshot; next turn resumes via `try_resume_orchestrated_graph` |
+| Per-step replay divergence | `harness-core/exec.rs`, `aelio-kernel/tests/replay_steps.rs` | `verify_replay` reports first diverging seq; kernel underrun typed `Journal.Underrun` |
+
+**Status:** Sessions A–C complete (2026-08-07). **Session D0 blocks D+** — see F-036.
+
+### F-036 — harness-core reimplementation vs 54-test deliverable (Session D0)
+**What:** Phase 2 Session A reimplemented `harness-core` from HKv4 spec (40 tests), not ported from the original 54-test bundle. Fourteen behaviours may be untested or implemented with contested defaults (division scale, negative banker's ties, agg float-order sentinel, CAS vs fetch_sub, three null policies, implicit flow, etc.).
+
+**Resolution:** [`docs/updates/PHASE_2D_INSTRUCTIONS.md`](docs/updates/PHASE_2D_INSTRUCTIONS.md) Part 0 — test-by-test reconciliation by name, API-shape checks (Verified&lt;T&gt; privacy, SystemVersion exhaustive destructuring, CAS drain), hash provenance freeze. Re-pin hashes once at D0 exit if serialisation changes; then `SystemVersion.serialiser` bump only.
+
+**Status (2026-08-07):** D0 complete — 65 harness-core tests pass in debug and release. The reconciliation added the three-null-policy aggregate golden case, negative half-even and decimal-scale coverage, conservative container/PC taint propagation, CAS-backed frame budgets, journal underrun/stub semantics, exhaustive version-field perturbation, effect-set bounds, and determinism construction-path/repetition fixtures. Canonical serialisation did not change; pinned hashes remain `a66bcd6a…` and `0140b77a…`. `check-canonical-writer.sh` passes. D1–D6 may proceed in their declared dependency order.
+
+### F-037 — Bridge warm-path time-window cache audit (Part 5c urgent)
+**What:** If the bridge warm path caches resolved calendar windows (e.g. "last 7 days" computed once at promotion), reuse serves stale answers on every subsequent hit until the cache expires — independent of the D4 time module.
+
+**Audit (2026-08-07):** Grep on `aelio-agent/src/` for `days_ago`, `LastNDays`, calendar windows intersecting `cache|promot|warm|lookup|situation` — **no calendar-window cache found** on the warm lookup path. `SituationKey.last_seen_bucket` (visit recency) is in σ; it is not a calendar validity bucket.
+
+**Options:** (a) add `validity_bucket` to σ when D4 time module lands; (b) hotfix now if grep finds resolved dates in promotion store.
+
+**Recommendation → (a) unless grep finds a hit.** Re-run the Part 5c grep before D4 and before enabling matching on real traffic; record result in this flag.
+
+**Status (D4 re-audit, 2026-08-07):** Clear. Re-ran the prescribed search across
+`aelio-agent/src/`; its only cache-adjacent time hit is a durable exploration-rate
+window, not a resolved user calendar range or warm procedure lookup. No
+`SituationKey.validity_bucket` was added: changing σ without a time-relative cached
+plan would fragment warm matches without protecting a stale answer. Re-audit before
+matching is enabled against real traffic.
+
+### F-038 — Month-to-date cache validity granularity — `HARNESS_KERNEL_V4 §2.7`
+**What:** `TemporalBinding::MonthToDate` has an exact journaled-now upper bound, while
+the specification leaves the caller-selected `granularity` open. A cache keyed only by
+a Month bucket would therefore reuse a range with an old upper bound during the same
+month.
+**Options:** (a) require `Hour` or finer validity for `MonthToDate`; (b) redefine the
+range as the full current calendar month; (c) remove it from cacheable relative forms.
+**Recommendation → (a).** The D4 core records both the exact resolved interval and
+the caller-provided granularity but has no time-relative warm-plan cache to enforce
+this contract yet. The future cache admission API must reject `MonthToDate` unless its
+validity bucket advances no less often than the chosen upper-bound semantics.

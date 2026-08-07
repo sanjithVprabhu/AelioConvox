@@ -1,0 +1,33 @@
+{
+  "id": "task_graph_cycle_reject",
+  "description": "TaskGraph with cycle must be rejected at validation",
+  "graph": {
+    "root_goal": "Invalid cyclic plan",
+    "nodes": [
+      {
+        "id": "a",
+        "goal": "Step A",
+        "rationale": "Depends on B",
+        "strategy_hint": [],
+        "inputs": [],
+        "outputs": [],
+        "depends_on": ["b"],
+        "budget": { "max_steps": 1, "max_tokens": 100, "max_ms": 1000 },
+        "max_refinements": 0
+      },
+      {
+        "id": "b",
+        "goal": "Step B",
+        "rationale": "Depends on A",
+        "strategy_hint": [],
+        "inputs": [],
+        "outputs": [],
+        "depends_on": ["a"],
+        "budget": { "max_steps": 1, "max_tokens": 100, "max_ms": 1000 },
+        "max_refinements": 0
+      }
+    ],
+    "join_spec": { "kind": "last_node", "node_id": "a", "field": "result" }
+  },
+  "expect": "reject_cycle"
+}

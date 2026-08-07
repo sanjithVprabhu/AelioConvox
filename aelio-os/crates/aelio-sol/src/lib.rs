@@ -11,12 +11,18 @@
 //! - **Program-bearing bags can't be hashed** — `fn`/`flow` aren't representable in [`SolValue`]
 //!   (§4.1.4), so the boundary rule holds by construction.
 
+// Determinism hygiene (F-032): `HashMap`/`HashSet` iteration order is randomized per process.
+// Banned crate-wide via `clippy.toml`'s `disallowed-types`; this enables the (allow-by-default)
+// lint that config feeds.
+#![warn(clippy::disallowed_types)]
+
 mod canonical;
 mod error;
 mod hash;
 mod imprint;
 mod limits;
 mod path;
+mod task_graph;
 mod value;
 
 pub use canonical::{to_bytes as canonical_bytes, to_string as canonical_string};
@@ -25,4 +31,8 @@ pub use hash::{blake3_hex, value_hash};
 pub use imprint::{shape_signature, structural as structural_imprint};
 pub use limits::Limits;
 pub use path::{Path, Segment};
+pub use task_graph::{
+    ComplexityClass, EvalFailureReason, EvalVerdict, JoinSpec, SlotRef, SlotSpec, TaskBudget,
+    TaskGraph, TaskGraphValidationError, TaskNode,
+};
 pub use value::{SolValue, TypeTag};

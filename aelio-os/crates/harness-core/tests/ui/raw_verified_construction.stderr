@@ -1,0 +1,13 @@
+error[E0599]: no associated function or constant named `new` found for struct `Verified<T>` in the current scope
+ --> tests/ui/raw_verified_construction.rs:4:36
+  |
+4 |     let _ = Verified::<EffectSet>::new();
+  |                                    ^^^ associated function or constant not found in `Verified<EffectSet>`
+  |
+note: if you're trying to build a new `Verified<EffectSet>`, consider using `Verified::<T>::load` which returns `Result<Verified<_>, VerifyError>`
+ --> src/versioning.rs
+  |
+  |     pub fn load(expected: Hash, value: T, actual: Hash) -> Result<Self, VerifyError> {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is a method `ne` with a similar name, but with different arguments
+ --> $RUST/core/src/cmp.rs

@@ -1,6 +1,6 @@
 //! In-memory tenant world for tests and local bake.
 
-use crate::abilities::invoke::{MockToolHost, CapabilityHost};
+use crate::abilities::invoke::{CapabilityHost, MockToolHost};
 use crate::abilities::learn::{default_situation_embedder, ProposalMap};
 use crate::abilities::registry::Registry;
 use crate::abilities::sig::SignatureRegistry;
@@ -27,6 +27,7 @@ pub struct World {
     pub adaptive_artifact_host: Box<dyn crate::adaptive::AdaptiveArtifactHost>,
     pub user_state: IndexMap<String, String>,
     pub user_flows: IndexMap<String, crate::blocks::flow::FlowInstance>,
+    pub user_graph_suspensions: IndexMap<String, crate::orchestration::suspension::GraphSuspension>,
     pub user_harness: IndexMap<String, crate::harness::HarnessSession>,
     pub llm_provider: Box<dyn LlmProvider>,
     pub turn_recall: Box<dyn TurnRecall>,
@@ -35,6 +36,8 @@ pub struct World {
     pub embedder: std::sync::Arc<dyn Embedder>,
     /// Local bake may warm immediately; durable production uses behavioral signals + cold loop.
     pub inline_learning_enabled: bool,
+    /// Red-rule circuit breaker for Tier0/Tier1 reuse.
+    pub matching_config: crate::abilities::matching::MatchingConfig,
     /// Transitional local/parity switch. Unified production constructors disable this so an
     /// unmaterialized FlowSpec cannot regain effect or continuation authority.
     pub legacy_flow_execution_enabled: bool,
@@ -72,8 +75,9 @@ impl World {
         ensure_starter_harness_programs(&mut tenant);
         let mut registry = Registry::default();
         for tool in &tenant.tools {
-            registry.register_tool(tool.clone());
+            registry.register_tenant_tool(tool.clone())?;
         }
+        crate::orchestration::register_standard_tools(&mut registry);
         register_tool_capabilities(&mut registry);
         for flow in &tenant.flows {
             registry.register_flow(flow.clone());
@@ -154,6 +158,14 @@ impl World {
                 name: "send_otp".into(),
                 version: "1".into(),
                 capability_tags: vec!["auth.otp.send".into()],
+                contract: Some(crate::tenant::ToolContract {
+                    effect_class: crate::tenant::EffectClass::Write,
+                    completeness: crate::tenant::Completeness::Complete,
+                    returns_entity: "otp_delivery_receipt".into(),
+                    pushdown: vec![],
+                    max_result_rows: Some(1),
+                    row_scoped: false,
+                }),
                 effect: Some(crate::tenant::ToolEffect::External),
                 effectful: true,
                 idempotent: false,
@@ -202,6 +214,14 @@ impl World {
                 name: "verify_otp".into(),
                 version: "1".into(),
                 capability_tags: vec!["auth.otp.verify".into()],
+                contract: Some(crate::tenant::ToolContract {
+                    effect_class: crate::tenant::EffectClass::Write,
+                    completeness: crate::tenant::Completeness::Complete,
+                    returns_entity: "otp_verification_receipt".into(),
+                    pushdown: vec![],
+                    max_result_rows: Some(1),
+                    row_scoped: false,
+                }),
                 effect: Some(crate::tenant::ToolEffect::External),
                 effectful: true,
                 idempotent: false,
@@ -259,6 +279,16 @@ impl World {
                 name: "clients_query".into(),
                 version: "1".into(),
                 capability_tags: vec!["crm.clients.query".into()],
+                // The demo source never declares pagination or a total count. It is therefore
+                // intentionally Unknown rather than pretending aggregate answers are complete.
+                contract: Some(crate::tenant::ToolContract {
+                    effect_class: crate::tenant::EffectClass::Read,
+                    completeness: crate::tenant::Completeness::Unknown,
+                    returns_entity: "client".into(),
+                    pushdown: vec!["filter".into(), "sort".into()],
+                    max_result_rows: None,
+                    row_scoped: true,
+                }),
                 effect: Some(crate::tenant::ToolEffect::Read),
                 effectful: false,
                 idempotent: true,
@@ -412,8 +442,11 @@ impl World {
 
         let mut registry = Registry::default();
         for t in &tenant.tools {
-            registry.register_tool(t.clone());
+            registry
+                .register_tenant_tool(t.clone())
+                .expect("built-in demo catalog must not use the reserved std. namespace");
         }
+        crate::orchestration::register_standard_tools(&mut registry);
         register_tool_capabilities(&mut registry);
         for f in &tenant.flows {
             registry.register_flow(f.clone());
@@ -477,11 +510,13 @@ impl World {
             adaptive_artifact_host: Box::new(crate::adaptive::UnavailableAdaptiveArtifactHost),
             user_state: IndexMap::new(),
             user_flows: IndexMap::new(),
+            user_graph_suspensions: IndexMap::new(),
             user_harness: IndexMap::new(),
             llm_provider: Box::new(ScriptedLlmProvider::deterministic()),
             turn_recall: Box::new(NoopTurnRecall),
             embedder: std::sync::Arc::new(default_situation_embedder()),
             inline_learning_enabled: true,
+            matching_config: crate::abilities::matching::MatchingConfig::default(),
             legacy_flow_execution_enabled: true,
             durable_memory_enabled: false,
             harness_play_mode: crate::harness::HarnessPlayMode::Stored,
@@ -568,11 +603,8 @@ impl World {
             .ledger_append("turn_user", crate::types::Value::str(user_id));
 
         let active_flow = self.user_flows.get(user_id).cloned();
-        let mut harness = self
-            .user_harness
-            .get(user_id)
-            .cloned()
-            .unwrap_or_default();
+        let graph_suspension = self.user_graph_suspensions.get(user_id).cloned();
+        let mut harness = self.user_harness.get(user_id).cloned().unwrap_or_default();
         let input = TurnInput {
             turn_id: turn_id.into(),
             utterance: utterance.into(),
@@ -583,6 +615,7 @@ impl World {
             state_id,
             slots: IndexMap::new(),
             active_flow,
+            graph_suspension,
         };
 
         let policies = self.tenant.policies.clone();
@@ -605,6 +638,7 @@ impl World {
             turn_recall: self.turn_recall.as_mut(),
             embedder: self.embedder.as_ref(),
             inline_learning_enabled: self.inline_learning_enabled,
+            matching_config: self.matching_config,
             legacy_flow_execution_enabled: self.legacy_flow_execution_enabled,
             durable_memory_enabled: self.durable_memory_enabled,
             harness: &mut harness,
@@ -627,9 +661,22 @@ impl World {
                 None => {}
             }
         }
+        match &result.graph_suspension {
+            Some(suspension) => {
+                self.user_graph_suspensions
+                    .insert(user_id.into(), suspension.clone());
+            }
+            None if !result.suspended
+                || result
+                    .steps
+                    .iter()
+                    .any(|step| step.name == "Orchestrate.Expired") =>
+            {
+                self.user_graph_suspensions.shift_remove(user_id);
+            }
+            None => {}
+        }
 
-        // Emit only after the in-memory state/flow commit. DurableRuntime adds a separate durable
-        // commit line after its final compare-and-swap succeeds.
         if crate::decision_log::enabled() {
             eprintln!(
                 "{}",
@@ -673,15 +720,12 @@ impl World {
             state_id,
             slots: IndexMap::new(),
             active_flow: None,
+            graph_suspension: None,
         };
         let policies = self.tenant.policies.clone();
         let states = self.tenant.states.clone();
         let personality = self.tenant.personalities.first().cloned();
-        let mut harness = self
-            .user_harness
-            .get(user_id)
-            .cloned()
-            .unwrap_or_default();
+        let mut harness = self.user_harness.get(user_id).cloned().unwrap_or_default();
         TurnRuntime {
             tenant: &self.tenant,
             registry: &mut self.registry,
@@ -698,6 +742,7 @@ impl World {
             turn_recall: self.turn_recall.as_mut(),
             embedder: self.embedder.as_ref(),
             inline_learning_enabled: false,
+            matching_config: self.matching_config,
             legacy_flow_execution_enabled: self.legacy_flow_execution_enabled,
             durable_memory_enabled: self.durable_memory_enabled,
             harness: &mut harness,

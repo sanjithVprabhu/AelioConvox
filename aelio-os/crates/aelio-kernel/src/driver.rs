@@ -913,7 +913,13 @@ impl ReplayBackend<'_> {
         let e = self
             .entries
             .pop_front()
-            .ok_or_else(|| ErrV1::new(ReasonCode::Internal, nid, "replay ran past the ledger"))?;
+            .ok_or_else(|| {
+                ErrV1::new(
+                    ReasonCode::JournalUnderrun,
+                    nid,
+                    "replay ran past the ledger",
+                )
+            })?;
         if !expect_kind.contains(&e.kind.as_str()) {
             // §12.3: kind/nid mismatch ⇒ hard refuse.
             return Err(ErrV1::new(
@@ -1116,4 +1122,21 @@ fn verify_call_identity(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod replay_backend_tests {
+    use super::*;
+
+    #[test]
+    fn pop_past_ledger_end_is_journal_underrun() {
+        let mut entries = VecDeque::new();
+        let mut backend = ReplayBackend {
+            entries: &mut entries,
+        };
+        let err = backend
+            .pop(&["read_result"], "c1")
+            .expect_err("empty journal must underrun");
+        assert_eq!(err.code, ReasonCode::JournalUnderrun);
+    }
 }

@@ -94,9 +94,11 @@ pub fn select_starter_harness(utterance: &str, session: &HarnessSession) -> Star
     {
         return StarterHarness::MemoryAttach;
     }
-    // Effectful domain verbs without an installed pin → escalate to cold tools path.
-    // Checked before short-utterance quick_reply so "send otp …" is never swallowed.
-    const EFFECT_HINTS: &[&str] = &[
+    // Domain intents that need registered tools → cold ProposePath. Checked before the
+    // short-utterance quick_reply heuristic so "show me my appointments" (4 words) is not
+    // answered from context without calling list_appointments.
+    const TOOL_INTENT_HINTS: &[&str] = &[
+        // effectful / write
         "send otp",
         "login",
         "log in",
@@ -107,8 +109,38 @@ pub fn select_starter_harness(utterance: &str, session: &HarnessSession) -> Star
         "cancel",
         "pay",
         "book",
+        "reschedule",
+        "register",
+        // read / lookup
+        "show me",
+        "show my",
+        "show all",
+        "list my",
+        "list all",
+        "what are my",
+        "what is my",
+        "what's my",
+        "get my",
+        "view my",
+        "see my",
+        "check my",
+        "look up",
+        "lookup",
+        "retrieve",
+        "provide me",
+        "appointment",
+        "prescription",
+        "lab result",
+        "billing",
+        "invoice",
+        "schedule",
+        "doctor",
+        "patient",
+        "order status",
+        "my orders",
+        "my order",
     ];
-    if EFFECT_HINTS.iter().any(|h| text.contains(h)) {
+    if TOOL_INTENT_HINTS.iter().any(|h| text.contains(h)) {
         return StarterHarness::Escalate;
     }
     // Ambiguous / deep task → understand first.
@@ -132,15 +164,17 @@ pub fn select_starter_harness(utterance: &str, session: &HarnessSession) -> Star
     {
         return StarterHarness::QuickReply;
     }
-    // If conductor page already has rich notes, prefer short reply.
+    // If conductor page already has rich notes, prefer short reply for conversational
+    // follow-ups — but never swallow an explicit tool intent from above.
     if session
         .pages
         .get(CONDUCTOR_ID)
         .is_some_and(|page| page.notes.len() >= 2)
+        && !TOOL_INTENT_HINTS.iter().any(|h| text.contains(h))
     {
         return StarterHarness::QuickReply;
     }
-    StarterHarness::UnderstandIntent
+    StarterHarness::Escalate
 }
 
 #[cfg(test)]
@@ -160,6 +194,25 @@ mod tests {
     fn selects_escalate_for_otp() {
         assert_eq!(
             select_starter_harness("send otp to 9611266596", &HarnessSession::default()),
+            StarterHarness::Escalate
+        );
+    }
+
+    #[test]
+    fn selects_escalate_for_short_appointment_query() {
+        assert_eq!(
+            select_starter_harness("show me my appointments", &HarnessSession::default()),
+            StarterHarness::Escalate
+        );
+    }
+
+    #[test]
+    fn selects_escalate_for_appointment_query_even_with_rich_notes() {
+        let mut session = HarnessSession::default();
+        session.attach_note(CONDUCTOR_ID, String::from("quick_reply handled: hi"));
+        session.attach_note(CONDUCTOR_ID, String::from("quick_reply handled: thanks"));
+        assert_eq!(
+            select_starter_harness("could you show me appointments", &session),
             StarterHarness::Escalate
         );
     }

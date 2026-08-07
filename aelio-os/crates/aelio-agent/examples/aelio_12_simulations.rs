@@ -639,6 +639,7 @@ fn tier2_procedures(world: &mut World) {
         name: "resolve_customer".into(),
         version: "1".into(),
         capability_tags: vec!["customer.resolve".into()],
+        contract: Some(aelio_agent::tenant::ToolContract::complete_read("customer")),
         effect: None,
         effectful: false,
         idempotent: true,
@@ -665,6 +666,17 @@ fn tier2_procedures(world: &mut World) {
         // A declared intent label, not an engine keyword. This supplies the goal's output
         // semantics while the promoted procedures supply the reusable implementation.
         capability_tags: vec!["invoices".into()],
+        contract: Some(aelio_agent::tenant::ToolContract {
+            effect_class: aelio_agent::tenant::EffectClass::Read,
+            completeness: aelio_agent::tenant::Completeness::Paginated {
+                cursor_key: "cursor".into(),
+                max: 100,
+            },
+            returns_entity: "invoice".into(),
+            pushdown: vec!["customer_id".into()],
+            max_result_rows: Some(100),
+            row_scoped: true,
+        }),
         effect: None,
         effectful: false,
         idempotent: true,

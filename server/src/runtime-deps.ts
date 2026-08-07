@@ -1,5 +1,7 @@
 import type {
   ConvoxMessageStore,
+  ConvoxMemoryStore,
+  ConvoxSessionStore,
   ConvoxCustomerStore,
   ConvoxJobStore,
   ConvoxInboundDedupStore,
@@ -23,6 +25,8 @@ export type RuntimeDeps = {
   whatsappSender: WhatsAppSender | null;
   aelioDbClient: AelioDbClient;
   messageStore: ConvoxMessageStore;
+  sessionStore: ConvoxSessionStore;
+  memoryStore: ConvoxMemoryStore;
   customerStore: ConvoxCustomerStore;
   jobStore: ConvoxJobStore;
   inboundDedupStore: ConvoxInboundDedupStore;

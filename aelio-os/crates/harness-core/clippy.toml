@@ -1,0 +1,6 @@
+# harness-core is the HKv4 deterministic foundation for Starlark embedding (§2.10, F-033).
+# Hashing, aggregation, and journal paths must never use HashMap/HashSet iteration order.
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "harness-core requires deterministic iteration — use BTreeMap (see clippy.toml, F-033)" },
+    { path = "std::collections::HashSet", reason = "harness-core requires deterministic iteration — use BTreeSet (see clippy.toml, F-033)" },
+]

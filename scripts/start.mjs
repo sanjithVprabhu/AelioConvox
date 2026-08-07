@@ -63,6 +63,12 @@ function needsBuild() {
   );
 }
 
+/** Root node_modules can exist but be stale after branch checkout — workspace bins must be present. */
+function needsInstall() {
+  if (!existsSync(join(root, 'node_modules'))) return true;
+  return !existsSync(join(root, 'node_modules/.bin/turbo'));
+}
+
 function isPortFree(port) {
   return new Promise((resolve) => {
     const probe = createServer();
@@ -118,7 +124,7 @@ const resolvedConfig = configPath.startsWith('/') ? configPath : join(root, conf
 
 // ── Install & build ─────────────────────────────────────────────────────────
 
-if (!existsSync(join(root, 'node_modules'))) {
+if (needsInstall()) {
   log('setup', 'installing dependencies…');
   runSync('pnpm', ['install']);
 }
@@ -277,9 +283,17 @@ log('boot', 'starting TypeScript channel/model edge…');
 run('server', 'pnpm', ['--filter', '@aelio/server', 'dev:once'], root);
 await waitFor(`http://127.0.0.1:${serverPort}/health`);
 
-log('boot', 'starting example SDK backend…');
-run('sdk', 'pnpm', ['--filter', 'aelio-example-express', 'start'], root);
-await waitForSdkReady();
+const skipExampleSdk =
+  process.env.AELIO_SKIP_EXAMPLE_SDK === '1' ||
+  process.env.AELIO_SKIP_EXAMPLE_SDK === 'true';
+
+if (skipExampleSdk) {
+  log('boot', 'skipping bundled example SDK (AELIO_SKIP_EXAMPLE_SDK) — connect your own backend');
+} else {
+  log('boot', 'starting example SDK backend…');
+  run('sdk', 'pnpm', ['--filter', 'aelio-example-express', 'start'], root);
+  await waitForSdkReady();
+}
 
 console.log('\n────────────────────────────────────────────────────────');
 console.log('  Aelio is running');
@@ -290,5 +304,11 @@ console.log(`  Rust runtime: ${rustUrl}`);
 console.log(`  Port:         ${serverPort} (set AELIO_PORT to change; default ${DEFAULT_AELIO_PORT})`);
 console.log('  Config:       ' + resolvedConfig);
 console.log('  LLM:          mock (edit config.yaml or .env for a real provider)');
+if (skipExampleSdk) {
+  console.log('  SDK:          (none — start your backend, e.g. aelio-test-3 ./start.sh)');
+} else {
+  console.log(`  Example SDK:  http://127.0.0.1:${examplePort} (ShopCo demo tools)`);
+  console.log('  Tip:          testing aelio-test-3? restart with AELIO_SKIP_EXAMPLE_SDK=1');
+}
 console.log('  Stop:         Ctrl+C');
 console.log('────────────────────────────────────────────────────────\n');

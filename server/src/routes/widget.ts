@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { verifySessionToken, withSessionLock } from '@aelio/core/edge';
 import type { FastifyInstance } from 'fastify';
-import { randomUUID } from 'node:crypto';
 import { resolvePublicDir } from '../paths.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 import { executeConversationTurn } from '../conversation-turn.js';
+import { ensureChatSession, loadChatHistory } from '../chat-memory.js';
 import { z } from 'zod';
 import { CORE_KINDS, makeHello, intersectKinds } from '@aelio/chat-sdk';
 import { MAX_WS_FRAME_BYTES } from '@aelio/protocol';
@@ -19,6 +20,7 @@ const ClientMessageSchema = z.discriminatedUnion('type', [
     customerId: z.string().min(1),
     email: z.string().email().optional(),
     authToken: z.string().min(1).optional(),
+    sessionId: z.string().uuid().optional(),
     hello: z
       .object({
         protocol: z.literal('aelio-render@v1'),
@@ -91,6 +93,8 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
 
     let customerId = 'anonymous';
     let channelAddress = `web:${remoteAddress}`;
+    let internalCustomerId: string | null = null;
+    let sessionId: string | null = null;
     let initialized = false;
 
     socket.on('message', (raw: Buffer | ArrayBuffer | Buffer[]) => {
@@ -187,9 +191,46 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
             },
             'Widget client initialized',
           );
+
+          try {
+            const chatSession = await ensureChatSession(deps, {
+              customerExternalId: customerId,
+              channel: 'web',
+              channelAddress,
+              resumeSessionId: message.sessionId,
+            });
+            internalCustomerId = chatSession.customerId;
+            sessionId = chatSession.sessionId;
+
+            const history = await loadChatHistory(deps, sessionId);
+            if (history.length > 0) {
+              socket.send(
+                JSON.stringify({
+                  type: 'history',
+                  messages: history.filter(
+                    (row) => row.role === 'user' || row.role === 'assistant',
+                  ),
+                }),
+              );
+            }
+          } catch (error) {
+            app.log.error(
+              { err: error, route: WIDGET_WS_PATH, remoteAddress, customerId },
+              'Widget session bootstrap failed',
+            );
+            socket.send(
+              JSON.stringify({
+                type: 'error',
+                code: 'session_bootstrap_failed',
+                message: 'Could not restore your chat session. Please refresh and try again.',
+              }),
+            );
+            socket.close(1011, 'Session bootstrap failed');
+            return;
+          }
+
           const hello = message.hello ?? makeHello();
           const accepted = intersectKinds(hello.kinds, CORE_KINDS);
-          const sessionId = randomUUID();
           socket.send(
             JSON.stringify({
               type: 'ready',
@@ -205,7 +246,7 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
           return;
         }
 
-        if (!initialized) {
+        if (!initialized || !internalCustomerId || !sessionId) {
           socket.send(JSON.stringify({ type: 'error', message: 'Send init before messaging' }));
           return;
         }
@@ -221,6 +262,8 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
               channelAddress,
               message: message.content,
               sourceTurnId: message.id,
+              customerId: internalCustomerId,
+              sessionId,
             },
           );
 

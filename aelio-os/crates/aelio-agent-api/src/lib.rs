@@ -315,6 +315,7 @@ fn tool_harness_turn_result(
         situation_hash: None,
         proposal_id: None,
         suspended: bag_hash.starts_with("parked:"),
+        graph_suspension: None,
     };
     let _ = result
         .reply
@@ -763,6 +764,7 @@ async fn process_turn(
                     situation_hash: None,
                     proposal_id: None,
                     suspended: false,
+                    graph_suspension: None,
                 };
                 let _ = result
                     .reply
@@ -834,6 +836,7 @@ async fn process_turn(
                 situation_hash: None,
                 proposal_id: None,
                 suspended: false,
+                graph_suspension: None,
             };
             let _ = result
                 .reply
@@ -925,6 +928,7 @@ async fn process_turn(
                 situation_hash: None,
                 proposal_id: None,
                 suspended: false,
+                graph_suspension: None,
             };
             let _ = result
                 .reply

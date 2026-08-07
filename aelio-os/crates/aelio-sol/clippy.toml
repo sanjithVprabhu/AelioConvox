@@ -1,0 +1,9 @@
+# aelio-sol is the canonical-hashing foundation (§4.3): every value it materializes must have a
+# key/iteration order that is a pure function of content, never of a per-process hash seed.
+# HashMap/HashSet iteration order is randomized per process, so any of it reachable from a
+# canonical form, a hash, or an execution-order decision (e.g. TaskGraph::waves) is a determinism
+# bug waiting to happen. Scoped to this crate only — see FLAGS.md F-032.
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "aelio-sol requires deterministic iteration order — use BTreeMap (see clippy.toml, F-032)" },
+    { path = "std::collections::HashSet", reason = "aelio-sol requires deterministic iteration order — use BTreeSet (see clippy.toml, F-032)" },
+]

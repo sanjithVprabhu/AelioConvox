@@ -1,0 +1,36 @@
+{
+  "id": "task_graph_valid_linear",
+  "description": "Valid linear TaskGraph — two nodes, no cycle",
+  "graph": {
+    "root_goal": "Calculate average of user-provided numbers",
+    "nodes": [
+      {
+        "id": "sum",
+        "goal": "Sum all input values",
+        "rationale": "Average requires total before division",
+        "strategy_hint": ["std.math.sum"],
+        "inputs": [{ "kind": "slot", "name": "values" }],
+        "outputs": [{ "name": "total", "ty": "float" }],
+        "depends_on": [],
+        "budget": { "max_steps": 2, "max_tokens": 500, "max_ms": 5000 },
+        "max_refinements": 1
+      },
+      {
+        "id": "avg",
+        "goal": "Divide total by count",
+        "rationale": "Complete average calculation",
+        "strategy_hint": ["std.math.divide"],
+        "inputs": [
+          { "kind": "node_output", "node_id": "sum", "field": "total" },
+          { "kind": "slot", "name": "count" }
+        ],
+        "outputs": [{ "name": "average", "ty": "float" }],
+        "depends_on": ["sum"],
+        "budget": { "max_steps": 2, "max_tokens": 500, "max_ms": 5000 },
+        "max_refinements": 1
+      }
+    ],
+    "join_spec": { "kind": "last_node", "node_id": "avg", "field": "average" }
+  },
+  "expect": "valid"
+}

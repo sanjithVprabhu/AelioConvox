@@ -230,6 +230,35 @@ fn path_get_and_exists() {
     );
 }
 
+#[test]
+fn minus_zero_and_zero_hash_equally() {
+    let zero = SolValue::float(0.0).unwrap();
+    let minus_zero = SolValue::float(-0.0).unwrap();
+    assert_eq!(value_hash(&zero), value_hash(&minus_zero), "§4.3 -0.0 → 0.0");
+}
+
+#[test]
+fn float_sum_and_literal_differ_in_hash() {
+    let sum = SolValue::float(0.1 + 0.2).unwrap();
+    let literal = SolValue::float(0.3).unwrap();
+    assert_ne!(
+        value_hash(&sum),
+        value_hash(&literal),
+        "§4.3 shortest round-trip: 0.1+0.2 ≠ 0.3 as float"
+    );
+}
+
+#[test]
+fn adjacent_string_list_elements_hash_differ() {
+    let ab_c = SolValue::list([SolValue::str("ab"), SolValue::str("c")]);
+    let a_bc = SolValue::list([SolValue::str("a"), SolValue::str("bc")]);
+    assert_ne!(
+        value_hash(&ab_c),
+        value_hash(&a_bc),
+        "§4.3 list elements are length-delimited by structure"
+    );
+}
+
 // ── §4.3 depth-32 path boundary (F2 completion) ───────────────────────────────────────────────
 #[test]
 fn path_depth_32_boundary() {

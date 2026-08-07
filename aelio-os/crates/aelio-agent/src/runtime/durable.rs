@@ -34,6 +34,12 @@ fn durable_turn_request_hash(request: &DurableTurnRequest, channel: &str) -> Str
     hex::encode(hasher.finalize())
 }
 
+/// Keeps graph continuations in the existing flow-instance namespace without colliding with a
+/// legacy authored flow, whose key remains the raw user id.
+fn graph_suspension_key(user_id: &str) -> String {
+    format!("graph:{user_id}")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EmbeddingSpaceBinding {
     space_id: String,
@@ -346,59 +352,56 @@ impl CapabilityHost for DurableToolHost {
                             )
                         });
                     }
-                    DurableIdempotencyState::Failed => {
-                        return Err(AelioError::new(
-                            current
-                                .envelope
-                                .value
-                                .reason_code
-                                .unwrap_or(ReasonCode::ToolError),
-                            current
-                                .envelope
-                                .value
-                                .failure_message
-                                .unwrap_or_else(|| "previous tool invocation failed".into()),
-                        ));
-                    }
                     DurableIdempotencyState::ManualReview => {
                         return Err(AelioError::new(
                             ReasonCode::NeedsEscalation,
                             "tool outcome requires manual review",
                         ));
                     }
+                    // A recorded failure means the effect did not complete successfully. Replaying
+                    // the error forever would poison every later turn that shares the same
+                    // (user, tool, args) key — including after the root cause is fixed. Fall
+                    // through and reclaim so the call can be retried.
+                    DurableIdempotencyState::Failed => {}
                     DurableIdempotencyState::Processing
-                    | DurableIdempotencyState::UnknownOutcome => {}
-                }
-                if current
-                    .envelope
-                    .value
-                    .lease_expires_at_ms
-                    .is_some_and(|expires| expires > now)
-                {
-                    return Err(AelioError::new(
-                        ReasonCode::Conflict,
-                        "tool invocation is already leased",
-                    ));
-                }
-                if !tool.idempotent {
-                    self.persist_outcome(
-                        &current,
-                        DurableIdempotencyState::ManualReview,
-                        None,
-                        None,
-                        now,
-                    )?;
-                    return Err(AelioError::new(
-                        ReasonCode::NeedsEscalation,
-                        "non-idempotent tool has an unknown outcome after restart",
-                    ));
+                    | DurableIdempotencyState::UnknownOutcome => {
+                        if current
+                            .envelope
+                            .value
+                            .lease_expires_at_ms
+                            .is_some_and(|expires| expires > now)
+                        {
+                            return Err(AelioError::new(
+                                ReasonCode::Conflict,
+                                "tool invocation is already leased",
+                            ));
+                        }
+                        if !tool.idempotent {
+                            self.persist_outcome(
+                                &current,
+                                DurableIdempotencyState::ManualReview,
+                                None,
+                                None,
+                                now,
+                            )?;
+                            return Err(AelioError::new(
+                                ReasonCode::NeedsEscalation,
+                                "non-idempotent tool has an unknown outcome after restart",
+                            ));
+                        }
+                    }
                 }
                 let mut next = current.envelope.clone();
+                next.status = "processing".into();
                 next.owner = self.owner.clone();
                 next.updated_at_ms = now;
                 next.expires_at_ms = Some(now.saturating_add(TOOL_LEASE_MS));
+                next.value.state = DurableIdempotencyState::Processing;
                 next.value.lease_owner = self.owner.clone();
                 next.value.lease_expires_at_ms = next.expires_at_ms;
+                next.value.reason_code = None;
+                next.value.failure_message = None;
+                next.value.safe_result = None;
                 next.value.attempts = next.value.attempts.saturating_add(1);
                 match self.store.compare_swap(
                     &self.tenant_id,
@@ -2736,6 +2739,20 @@ impl DurableRuntime {
                 }
             }
         }
+        if !self.world.user_graph_suspensions.contains_key(user_id) {
+            let graph_suspension: Option<
+                StoredRecord<Option<crate::orchestration::suspension::GraphSuspension>>,
+            > = self.store.get(
+                &self.tenant_id,
+                LogicalTable::FlowInstances,
+                &graph_suspension_key(user_id),
+            )?;
+            if let Some(suspension) = graph_suspension.and_then(|record| record.envelope.value) {
+                self.world
+                    .user_graph_suspensions
+                    .insert(user_id.into(), suspension);
+            }
+        }
         if !self.world.user_harness.contains_key(user_id) {
             let harness: Option<crate::storage::StoredRecord<crate::harness::HarnessSession>> =
                 self.store
@@ -2787,6 +2804,21 @@ impl DurableRuntime {
                 ),
             )?;
         }
+        self.upsert(
+            LogicalTable::FlowInstances,
+            envelope(
+                graph_suspension_key(user_id),
+                "graph_suspension",
+                if result.graph_suspension.is_some() {
+                    "parked"
+                } else {
+                    "closed"
+                },
+                "runtime",
+                now,
+                result.graph_suspension.clone(),
+            ),
+        )?;
         Ok(())
     }
 
@@ -2961,7 +2993,10 @@ pub fn validate_catalog(tenant: &TenantDecl) -> AelioResult<()> {
         if id != &program.id {
             return Err(AelioError::new(
                 ReasonCode::Validation,
-                format!("harness program map key `{id}` must match program.id `{}`", program.id),
+                format!(
+                    "harness program map key `{id}` must match program.id `{}`",
+                    program.id
+                ),
             ));
         }
         program.validate()?;
@@ -3962,6 +3997,86 @@ mod tests {
             .unwrap();
         assert_eq!(second.new_state.as_deref(), Some("authenticated"));
         assert_eq!(runtime.world.tool_host.invocation_count(), Some(2));
+    }
+
+    #[test]
+    fn graph_suspension_is_rehydrated_and_duplicate_resume_turn_is_exactly_once() {
+        let mut runtime = runtime("graph_suspension");
+        let tool = runtime
+            .world
+            .registry
+            .tools
+            .get_mut("send_otp")
+            .expect("demo client tool");
+        tool.output_semantics.fields.insert(
+            "ok".into(),
+            crate::tenant::OutputField {
+                path: "ok".into(),
+                type_name: "bool".into(),
+                sensitivity: crate::types::Sensitivity::None,
+                meaning: "the OTP request was accepted".into(),
+            },
+        );
+        let graph = crate::orchestration::tool_router::single_tool_graph(
+            "send an OTP",
+            tool,
+            crate::orchestration::ToolRoute::Client,
+        );
+        let mut suspension = crate::orchestration::suspension::GraphSuspension::awaiting_info(
+            "turn-open".into(),
+            "u1".into(),
+            graph.clone(),
+            IndexMap::new(),
+            crate::orchestration::suspension::SuspendedExecutorSnapshot::from(
+                &crate::orchestration::ExecutorState::default(),
+            ),
+            graph.nodes[0].id.clone(),
+            vec!["phone".into()],
+            1,
+        );
+        suspension.expires_at_ms = i64::MAX;
+        runtime
+            .world
+            .user_graph_suspensions
+            .insert("u1".into(), suspension);
+
+        let invalid = runtime
+            .run_turn(DurableTurnRequest {
+                turn_id: "turn-invalid".into(),
+                user_id: "u1".into(),
+                utterance: "not a phone number".into(),
+            })
+            .unwrap();
+        assert!(invalid.suspended, "steps={:?}", invalid.steps);
+        runtime.world.user_graph_suspensions.clear();
+
+        let resumed = runtime
+            .run_turn(DurableTurnRequest {
+                turn_id: "turn-resume".into(),
+                user_id: "u1".into(),
+                utterance: "+919876543210".into(),
+            })
+            .unwrap();
+        assert!(resumed.steps.iter().any(|step| {
+            step.name == "Orchestrate.ResumeLinked"
+                && step.detail.contains("suspended_turn=turn-open")
+                && step.detail.contains("resumed_turn=turn-resume")
+        }));
+        assert_eq!(runtime.world.tool_host.invocation_count(), Some(1));
+
+        let duplicate = runtime
+            .run_turn(DurableTurnRequest {
+                turn_id: "turn-resume".into(),
+                user_id: "u1".into(),
+                utterance: "+919876543210".into(),
+            })
+            .unwrap();
+        assert_eq!(duplicate.reply.text, resumed.reply.text);
+        assert_eq!(
+            runtime.world.tool_host.invocation_count(),
+            Some(1),
+            "durable turn idempotency must not re-run the resumed client tool"
+        );
     }
 
     #[test]

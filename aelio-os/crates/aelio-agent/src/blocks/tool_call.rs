@@ -31,6 +31,12 @@ pub struct ToolCallContext<'a> {
     pub effects: &'a mut EffectEnv,
     pub user_id: &'a str,
     pub channel: &'a str,
+    /// Client-supplied retry-stable turn identity; never derived from tool arguments.
+    pub turn_key: &'a str,
+    /// Monotonic effect position within the turn.
+    pub effect_seq: &'a mut u64,
+    /// Map child position when this call is executing per-element.
+    pub element_index: Option<u64>,
 }
 
 pub fn run_tool_call_block(
@@ -83,6 +89,8 @@ pub fn run_tool_call_block(
         }),
     )?;
 
+    let effect_seq = *context.effect_seq;
+    *context.effect_seq += 1;
     let receipt = match tool_call_block(
         tool,
         &resolved.bound,
@@ -94,6 +102,9 @@ pub fn run_tool_call_block(
             once_seen: context.once_seen,
             user_id: context.user_id,
             channel: context.channel,
+            turn_key: context.turn_key,
+            effect_seq,
+            element_index: context.element_index,
         },
     ) {
         Ok(receipt) => receipt,

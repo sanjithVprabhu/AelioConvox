@@ -2,6 +2,7 @@
 
 pub mod executor;
 pub mod flow;
+pub mod orchestrate;
 pub mod term_resolve;
 pub mod tool_call;
 pub mod turn;

@@ -106,7 +106,7 @@ impl HttpAgentToolHost {
             target: format!("{tool_id}@{version}"),
             args: serde_json::json!({
                 "args": args,
-                "context": {"channel": channel}
+                "context": { "channel": channel, "user_id": user_id },
             }),
         };
         let response = self

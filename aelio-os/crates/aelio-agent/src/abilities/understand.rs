@@ -515,9 +515,12 @@ fn intent_label_score(
             best = best.max(hits as f64 / label_tokens.len() as f64);
         }
     }
-    // Semantic bridge (inert under a bag-of-hash embedder; live under a real model).
-    if let (Some(uv), Ok(lv)) = (utterance_vec, embedder.embed(&label_text)) {
-        best = best.max(cosine_similarity(uv, &lv));
+    // Semantic bridge (only when the embedder's space is meaningful for synonyms). Lexical
+    // overlap already carries most labels; skip the remote round-trip when it is decisive.
+    if embedder.supports_semantic_equivalence() && best < 0.45 {
+        if let (Some(uv), Ok(lv)) = (utterance_vec, embedder.embed(&label_text)) {
+            best = best.max(cosine_similarity(uv, &lv));
+        }
     }
     best
 }

@@ -57,6 +57,8 @@ pub struct PathExecutionContext<'a> {
     pub effects: &'a mut EffectEnv,
     pub user_id: &'a str,
     pub channel: &'a str,
+    pub turn_key: &'a str,
+    pub effect_seq: &'a mut u64,
 }
 
 pub fn execute_path(
@@ -120,6 +122,9 @@ pub fn execute_path(
                     effects: context.effects,
                     user_id: context.user_id,
                     channel: context.channel,
+                    turn_key: context.turn_key,
+                    effect_seq: context.effect_seq,
+                    element_index: None,
                 },
             )? {
                 ToolCallOutcome::NeedUser { missing, question } => {

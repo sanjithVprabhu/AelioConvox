@@ -233,6 +233,7 @@ fn arbitrary_capability_path_executes_generically() {
         name: "custom_ping".into(),
         version: "1".into(),
         capability_tags: vec!["custom.arbitrary.ping".into()],
+        contract: Some(aelio_agent::tenant::ToolContract::complete_read("ping_result")),
         effect: None,
         effectful: false,
         idempotent: true,
@@ -251,7 +252,7 @@ fn arbitrary_capability_path_executes_generically() {
         },
         continuations: vec![],
         errors: vec![],
-    });
+    }).unwrap();
     world.registry.register_ability(
         AbilityContract::effect("custom.arbitrary.ping")
             .with_tool_deps(vec!["custom_ping".into()])
@@ -268,6 +269,7 @@ fn arbitrary_capability_path_executes_generically() {
     ));
 
     let tenant_id = world.tenant.tenant_id.clone();
+    let mut effect_seq = 0;
     let result = execute_path(
         &AbilityPath::seq(["custom.arbitrary.ping"]),
         ExecutionFrame::default(),
@@ -285,6 +287,8 @@ fn arbitrary_capability_path_executes_generically() {
             effects: &mut world.effect_env,
             user_id: "u1",
             channel: "test",
+            turn_key: "golden-custom-ping",
+            effect_seq: &mut effect_seq,
         },
     )
     .expect("generic capability should execute");
@@ -320,6 +324,7 @@ fn composed_tools_pass_only_declared_sanitized_evidence_to_the_next_step() {
         name: "resolve_customer".into(),
         version: "1".into(),
         capability_tags: vec!["customer.resolve".into()],
+        contract: Some(aelio_agent::tenant::ToolContract::complete_read("customer")),
         effect: None,
         effectful: false,
         idempotent: true,
@@ -338,12 +343,23 @@ fn composed_tools_pass_only_declared_sanitized_evidence_to_the_next_step() {
         },
         continuations: vec![],
         errors: vec![],
-    });
+    }).unwrap();
     world.registry.register_tool(ToolSpec {
         id: "list_invoices".into(),
         name: "list_invoices".into(),
         version: "1".into(),
         capability_tags: vec!["invoice.list".into()],
+        contract: Some(aelio_agent::tenant::ToolContract {
+            effect_class: aelio_agent::tenant::EffectClass::Read,
+            completeness: aelio_agent::tenant::Completeness::Paginated {
+                cursor_key: "cursor".into(),
+                max: 100,
+            },
+            returns_entity: "invoice".into(),
+            pushdown: vec!["customer_id".into()],
+            max_result_rows: Some(100),
+            row_scoped: true,
+        }),
         effect: None,
         effectful: false,
         idempotent: true,
@@ -375,7 +391,7 @@ fn composed_tools_pass_only_declared_sanitized_evidence_to_the_next_step() {
         },
         continuations: vec![],
         errors: vec![],
-    });
+    }).unwrap();
     world.set_tool_host(Box::new(
         aelio_agent::abilities::invoke::MockToolHost::default()
             .on("resolve_customer", |_| {
@@ -401,6 +417,7 @@ fn composed_tools_pass_only_declared_sanitized_evidence_to_the_next_step() {
             }),
     ));
 
+    let mut effect_seq = 0;
     let result = execute_path(
         &AbilityPath::seq(["customer.resolve", "invoice.list"]),
         ExecutionFrame::default(),
@@ -418,6 +435,8 @@ fn composed_tools_pass_only_declared_sanitized_evidence_to_the_next_step() {
             effects: &mut world.effect_env,
             user_id: "u1",
             channel: "test",
+            turn_key: "golden-composed-tools",
+            effect_seq: &mut effect_seq,
         },
     )
     .expect("the composed evidence handoff must execute");
@@ -516,6 +535,7 @@ fn tier_zero_deep_path_uses_generic_executor() {
         name: "read_snapshot".into(),
         version: "1".into(),
         capability_tags: vec!["telemetry.snapshot.read".into()],
+        contract: Some(aelio_agent::tenant::ToolContract::complete_read("telemetry_snapshot")),
         effect: None,
         effectful: false,
         idempotent: true,
@@ -534,7 +554,7 @@ fn tier_zero_deep_path_uses_generic_executor() {
         },
         continuations: vec![],
         errors: vec![],
-    });
+    }).unwrap();
     world.registry.register_ability(
         AbilityContract::pure("telemetry.snapshot.read")
             .with_tool_deps(vec!["read_snapshot".into()])
@@ -703,6 +723,56 @@ fn multi_clause_mutations_are_persisted_until_confirmation() {
         .to_ascii_lowercase()
         .contains("cancelled"));
     assert_eq!(world.tool_host.invocation_count(), Some(0));
+}
+
+/// Unified mode parks effect confirmation on the harness page (not `user_flows`). Saying "yes"
+/// used to re-enter `run` while that pending plan was still set, so the nested turn saw the
+/// original clause text (not "yes") and re-prompted forever.
+#[test]
+fn unified_effect_confirm_yes_does_not_reprompt() {
+    let mut world = World::demo_tenant("t_confirm_loop");
+    world.disable_legacy_flow_execution();
+    let clause = "cancel my order";
+    world
+        .user_harness
+        .entry("u-confirm".into())
+        .or_default()
+        .ensure_page(aelio_agent::harness::CONDUCTOR_ID)
+        .slots
+        .insert(
+            "__pending_effect_confirmation_clauses".into(),
+            serde_json::json!([clause]),
+        );
+
+    let confirmed = world.run_turn("u-confirm", "yes");
+    let reply = confirmed.reply.text.to_ascii_lowercase();
+    assert!(
+        !reply.contains("please confirm"),
+        "confirmed turn must not re-ask; got: {}",
+        confirmed.reply.text
+    );
+    assert!(
+        !reply.contains(&format!("execute these actions in order ({clause})")),
+        "confirmed turn must not echo the parked clause as a new confirm prompt; got: {}",
+        confirmed.reply.text
+    );
+    assert!(
+        confirmed
+            .steps
+            .iter()
+            .any(|step| step.name == "MultiClauseConfirm"),
+        "expected MultiClauseConfirm step, got {:?}",
+        confirmed.steps
+    );
+    let pending_still = world
+        .user_harness
+        .get("u-confirm")
+        .and_then(|session| session.pages.get(aelio_agent::harness::CONDUCTOR_ID))
+        .and_then(|page| page.slots.get("__pending_effect_confirmation_clauses"));
+    assert!(
+        pending_still.is_none(),
+        "harness pending confirmation must be cleared after yes"
+    );
 }
 
 #[test]
@@ -968,4 +1038,72 @@ fn tier2_composes_procedures() {
     .expect("should compose P1 → P2");
     assert!(typecheck(&world.registry, &path).is_ok());
     assert!(path.steps.len() >= 2);
+}
+
+/// Cold ProposePath shortlists a large ability catalog before prompting. Registering the 58
+/// first-party `std.*` tools took the demo tenant from a handful of abilities to 67, so every cold
+/// prompt was carrying the whole utility catalog. Retrieval trims it — without ever dropping a
+/// tenant capability, which is the only part of the catalog the proposal is actually about.
+#[test]
+fn cold_propose_path_shortlists_the_ability_catalog() {
+    let mut world = World::demo_tenant("t_retrieval");
+    let declared = world.registry.abilities.len();
+    assert!(
+        declared > 24,
+        "demo catalog should be large enough to shortlist, got {declared}"
+    );
+
+    let result = world.run_turn("u1", "send otp to my phone");
+    let retrieve = result
+        .steps
+        .iter()
+        .find(|s| s.name == "ProposePath.Retrieve")
+        .unwrap_or_else(|| panic!("expected a retrieval step, got {:?}", result.steps));
+    assert!(
+        retrieve.detail.contains(&format!("of {declared} declared")),
+        "retrieval should report the full catalog size: {}",
+        retrieve.detail
+    );
+    assert!(
+        result.steps.iter().any(|s| s.name == "ProposePath"),
+        "retrieval must not prevent the proposal from running"
+    );
+}
+
+/// Retrieval nominates candidates; it must never drop the tenant capability a turn needs. The
+/// engine's own abilities are equally load-bearing for path composition.
+#[test]
+fn shortlist_retains_tenant_and_engine_abilities() {
+    let world = World::demo_tenant("t_retrieval_ids");
+    let ids: Vec<String> = world.registry.abilities.keys().cloned().collect();
+
+    for (utterance, needed) in [
+        ("send otp to my phone", "auth.otp.send"),
+        ("verify the otp code", "auth.otp.verify"),
+        ("show me my clients", "crm.clients.query"),
+        // Vocabulary the tenant never declared: the tenant set must still survive intact.
+        ("list jobs", "crm.clients.query"),
+    ] {
+        let outcome = aelio_agent::abilities::retrieval::shortlist_abilities(
+            utterance,
+            &ids,
+            &world.registry,
+            world.embedder.as_ref(),
+            &aelio_agent::abilities::retrieval::RetrievalConfig::default(),
+        );
+        assert!(
+            outcome.ability_ids.iter().any(|id| id == needed),
+            "{utterance:?} dropped `{needed}`: {:?}",
+            outcome.ability_ids
+        );
+        assert!(
+            outcome.ability_ids.iter().any(|id| id == "Express.Synthesize"),
+            "{utterance:?} dropped an engine ability: {:?}",
+            outcome.ability_ids
+        );
+        assert!(
+            outcome.ability_ids.len() < ids.len(),
+            "{utterance:?} should trim the utility catalog"
+        );
+    }
 }

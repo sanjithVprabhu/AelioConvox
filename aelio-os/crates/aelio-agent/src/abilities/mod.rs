@@ -5,7 +5,10 @@ pub mod express;
 pub mod invoke;
 pub mod judge;
 pub mod learn;
+pub mod matching;
 pub mod registry;
+pub mod residue;
+pub mod retrieval;
 pub mod sense;
 pub mod sig;
 pub mod state;
@@ -23,7 +26,10 @@ pub use learn::{
     situation_near_text, typecheck, Proposal, ProposalMap, SeenBucket, SituationKey, StepCredit,
     TierLookup, TurnBucket, SITUATION_EMBED_DIM, TIER1_MARGIN_THRESHOLD,
 };
+pub use matching::{evaluate_warm_match, Gate, MatchDecision, MatchingConfig, Outcome};
 pub use registry::*;
+pub use residue::{residue_check, residue_check_with_values, UnconsumedFragment};
+pub use retrieval::{ability_descriptor, shortlist_abilities, RetrievalConfig, RetrievalOutcome};
 pub use sense::*;
 pub use sig::{
     classify, compute, extract, hash, match_plan, propose as propose_plan, ExtractField,

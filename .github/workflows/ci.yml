@@ -25,9 +25,54 @@ jobs:
           workspaces: aelio-os
 
       - run: cargo fmt --all -- --check
+      - run: bash ../scripts/check-canonical-writer.sh
+      - name: Reject nondeterministic build configuration
+        run: |
+          if grep -R -n -E \
+            --include='*.rs' \
+            --include='*.toml' \
+            --include='*.yml' \
+            --include='*.yaml' \
+            --exclude='ci.yml' \
+            -e '-ffast-math' \
+            -e '/fp:fast' \
+            -e 'target-feature=[^[:space:]]*\+fma' \
+            .; then
+            echo "fast-math or FMA-enabling build configuration is forbidden"
+            exit 1
+          fi
+          tree_features="$(cargo tree -p harness-core --locked -e features)"
+          if grep -E -q 'serde_json feature "preserve_order"' <<<"$tree_features"; then
+            echo "serde_json preserve_order is forbidden because canonical map order must not vary"
+            exit 1
+          fi
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
+      - run: bash ../scripts/restart-hash-drill.sh
       - run: cargo build --workspace --release --locked
+
+  aelio-sol-arm64:
+    name: aelio-sol determinism (aarch64)
+    # F-032: canonical hashing/serialization (§4.3) must be architecture-independent — a
+    # float-formatting or FMA-contraction difference on ARM would silently break cross-platform
+    # replay `bag_hash` equality. The x86_64 job above never exercises this; this one runs
+    # aelio-sol's own suite (canonical/hash/imprint/limits/path/task_graph conformance) natively
+    # on arm64 so a divergence fails CI instead of showing up on a user's Apple Silicon machine.
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: aelio-os
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.75
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aelio-os
+          key: aarch64
+
+      - run: cargo test -p aelio-sol -p harness-core --locked
 
   test:
     runs-on: ubuntu-latest

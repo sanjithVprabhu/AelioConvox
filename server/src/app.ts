@@ -29,6 +29,7 @@ import { startInboundWorker } from './workers/inbound.js';
 import { startOutboundWorker } from './workers/outbound.js';
 import { AelioRuntimeClient } from './aelio-runtime-client.js';
 import { buildAgentCatalog } from './aelio-agent-catalog.js';
+import { createQuietLoggerStream } from './turn-pipeline-log.js';
 
 /** Providers that don't need an API key (they run locally / are test doubles). */
 const KEYLESS_PROVIDERS = new Set(['mock', 'ollama']);
@@ -152,6 +153,8 @@ export async function createApp(config: AelioConfig) {
     whatsappSender,
     aelioDbClient: aelioDb.client,
     messageStore: aelioDb.messageStore,
+    sessionStore: aelioDb.sessionStore,
+    memoryStore: aelioDb.memoryStore,
     customerStore: aelioDb.customerStore,
     jobStore: aelioDb.jobStore,
     inboundDedupStore: aelioDb.inboundDedupStore,
@@ -162,6 +165,7 @@ export async function createApp(config: AelioConfig) {
   const app = Fastify({
     logger: {
       level: config.logging.level,
+      stream: createQuietLoggerStream(),
     },
   });
 

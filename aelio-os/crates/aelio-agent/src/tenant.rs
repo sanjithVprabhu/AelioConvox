@@ -15,6 +15,10 @@ pub struct ToolSpec {
     pub version: String,
     /// How the system FINDS this tool — not judgment, lookup.
     pub capability_tags: Vec<String>,
+    /// Required execution contract. It is optional only at the deserialization boundary so the
+    /// registry can reject legacy catalog entries instead of silently inferring authority.
+    #[serde(default)]
+    pub contract: Option<ToolContract>,
     /// Exact kernel effect class. `None` is accepted only for legacy/local declarations and
     /// conservatively derives External when `effectful` is true, Read otherwise.
     #[serde(default)]
@@ -36,6 +40,66 @@ pub enum ToolEffect {
     Read,
     Write,
     External,
+}
+
+/// The declared effect category used by policy, promotion, and durable dispatch.
+///
+/// This deliberately does not infer from the historical `effectful` boolean: a missing
+/// declaration is an admission failure, not a conservative runtime guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectClass {
+    Read,
+    Write,
+    IdempotentWrite,
+}
+
+impl EffectClass {
+    pub fn is_effectful(self) -> bool {
+        matches!(self, Self::Write | Self::IdempotentWrite)
+    }
+}
+
+/// Whether a tool's returned entity set can support a complete aggregate answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Completeness {
+    Complete,
+    Paginated { cursor_key: String, max: u64 },
+    Sampled,
+    Unknown,
+}
+
+impl Completeness {
+    pub fn blocks_aggregate_promotion(&self) -> bool {
+        matches!(self, Self::Sampled | Self::Unknown)
+    }
+}
+
+/// Required, explicit tool execution and result-set contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolContract {
+    pub effect_class: EffectClass,
+    pub completeness: Completeness,
+    pub returns_entity: String,
+    #[serde(default)]
+    pub pushdown: Vec<String>,
+    #[serde(default)]
+    pub max_result_rows: Option<u64>,
+    pub row_scoped: bool,
+}
+
+impl ToolContract {
+    pub fn complete_read(returns_entity: impl Into<String>) -> Self {
+        Self {
+            effect_class: EffectClass::Read,
+            completeness: Completeness::Complete,
+            returns_entity: returns_entity.into(),
+            pushdown: vec![],
+            max_result_rows: None,
+            row_scoped: false,
+        }
+    }
 }
 
 impl ToolSpec {

@@ -25,6 +25,8 @@ pub enum ReasonCode {
     ConvertNoEdge,
     ConvertRuleFail,
     Internal,
+    /// Replay reached an effect the original journal does not contain (§12.3, N15).
+    JournalUnderrun,
 }
 
 impl ReasonCode {
@@ -52,6 +54,7 @@ impl ReasonCode {
             ConvertNoEdge => "Convert.NoEdge",
             ConvertRuleFail => "Convert.RuleFail",
             Internal => "Internal",
+            JournalUnderrun => "Journal.Underrun",
         }
     }
 
@@ -87,6 +90,7 @@ impl ReasonCode {
             "Convert.NoEdge" => ConvertNoEdge,
             "Convert.RuleFail" => ConvertRuleFail,
             "Internal" => Internal,
+            "Journal.Underrun" => JournalUnderrun,
             _ => return None,
         })
     }

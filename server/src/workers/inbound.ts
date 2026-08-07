@@ -6,6 +6,7 @@ import {
   requeueStaleJobs,
   resolveWhatsAppIdentity,
 } from '@aelio/core/edge';
+import { ensureChatSession } from '../chat-memory.js';
 import { executeConversationTurn } from '../conversation-turn.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 import type { FastifyBaseLogger } from 'fastify';
@@ -41,12 +42,20 @@ export function startInboundWorker(deps: RuntimeDeps, logger: FastifyBaseLogger)
               ? resolveWhatsAppIdentity(from)
               : { externalId: from, channelAddress: from };
 
+          const chatSession = await ensureChatSession(deps, {
+            customerExternalId: identity.externalId,
+            channel,
+            channelAddress: identity.channelAddress,
+          });
+
           const { reply } = await executeConversationTurn(deps, {
             customerExternalId: identity.externalId,
             channel,
             channelAddress: identity.channelAddress,
             message: text,
             sourceTurnId,
+            customerId: chatSession.customerId,
+            sessionId: chatSession.sessionId,
           });
 
           await enqueueJob('outbound', {

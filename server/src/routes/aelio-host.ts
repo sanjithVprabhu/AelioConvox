@@ -36,6 +36,7 @@ const ToolArgsSchema = z.object({
     channel: z.string().min(1).default('web'),
     channel_address: z.string().min(1).optional(),
     locale: z.string().optional(),
+    user_id: z.string().min(1).optional(),
   }).optional(),
 }).strict();
 
@@ -120,12 +121,15 @@ export async function registerAelioHostRoutes(app: FastifyInstance, deps: Runtim
             : `Multiple SDK functions map to admitted tool "${name}"`,
         );
       }
-      const result = await deps.sdkBridge.invokeCorrelated(externalNames[0]!, args.args, {
-        customerId: call.instance_id,
-        sessionId: call.instance_id,
-        channel: args.context?.channel ?? 'web',
-        channelAddress: args.context?.channel_address ?? `aelio:${call.instance_id}`,
-        locale: args.context?.locale,
+      const toolContext = args.context;
+      const customerId = toolContext?.user_id ?? call.instance_id;
+      const sdkFunction = externalNames[0]!;
+      const result = await deps.sdkBridge.invokeCorrelated(sdkFunction, args.args, {
+        customerId,
+        sessionId: customerId,
+        channel: toolContext?.channel ?? 'web',
+        channelAddress: toolContext?.channel_address ?? `aelio:${customerId}`,
+        locale: toolContext?.locale,
         metadata: {
           tenant: call.tenant,
           turnId: call.turn_id,

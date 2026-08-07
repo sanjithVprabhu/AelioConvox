@@ -460,6 +460,32 @@ pub fn json_to_value(v: &serde_json::Value) -> Value {
     }
 }
 
+pub fn value_to_sol(v: &Value) -> Result<aelio_sol::SolValue, aelio_sol::SolError> {
+    use aelio_sol::SolValue;
+    use std::collections::BTreeMap;
+    match v {
+        Value::Null => Ok(SolValue::Null),
+        Value::Bool(b) => Ok(SolValue::Bool(*b)),
+        Value::Int(i) => Ok(SolValue::Int(*i)),
+        Value::Float(f) => SolValue::float(*f),
+        Value::Str(s) => Ok(SolValue::str(s)),
+        Value::List(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(value_to_sol(item)?);
+            }
+            Ok(SolValue::List(out))
+        }
+        Value::Map(map) => {
+            let mut out = BTreeMap::new();
+            for (k, item) in map {
+                out.insert(k.clone(), value_to_sol(item)?);
+            }
+            Ok(SolValue::Map(out))
+        }
+    }
+}
+
 pub fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         Value::Null => serde_json::Value::Null,

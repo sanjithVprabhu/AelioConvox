@@ -633,6 +633,8 @@ pub enum ObserveOutcome {
     Accumulating { observations: u64 },
     /// The proposal cleared the gate and is now a promoted procedure in the registry.
     Promoted { procedure_id: String },
+    /// Structural promotion refusal. The proposal remains cold/shadow-only.
+    Blocked { reason: String },
 }
 
 pub fn propose_path_prompt_spec() -> PromptSpec {
@@ -1361,6 +1363,14 @@ mod tests {
             name: "write_order".into(),
             version: "1".into(),
             capability_tags: vec!["orders.write".into()],
+            contract: Some(crate::tenant::ToolContract {
+                effect_class: crate::tenant::EffectClass::Write,
+                completeness: crate::tenant::Completeness::Complete,
+                returns_entity: "order_receipt".into(),
+                pushdown: vec![],
+                max_result_rows: Some(1),
+                row_scoped: false,
+            }),
             effect: None,
             effectful: true,
             idempotent: false,
@@ -1372,7 +1382,8 @@ mod tests {
             },
             continuations: vec![],
             errors: vec![],
-        });
+        })
+        .unwrap();
         let mut ability =
             AbilityContract::effect("orders.write").with_tool_deps(vec!["write_order".into()]);
         ability.prompt_hash = Some("orders-write-prompt-v1".into());
@@ -1467,6 +1478,14 @@ mod tests {
             name: "send_otp".into(),
             version: "1".into(),
             capability_tags: vec!["auth.otp.send".into()],
+            contract: Some(crate::tenant::ToolContract {
+                effect_class: crate::tenant::EffectClass::Write,
+                completeness: crate::tenant::Completeness::Complete,
+                returns_entity: "otp_delivery_receipt".into(),
+                pushdown: vec![],
+                max_result_rows: Some(1),
+                row_scoped: false,
+            }),
             effect: None,
             effectful: true,
             idempotent: false,
@@ -1478,7 +1497,8 @@ mod tests {
             },
             continuations: vec![],
             errors: vec![],
-        });
+        })
+        .unwrap();
         let mut proposals = ProposalMap::new();
         let sigma = situation_key("unauthenticated", "login", vec![], vec![], None, 0, None);
         let path = AbilityPath::seq(["send_otp"]);

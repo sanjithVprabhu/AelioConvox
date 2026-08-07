@@ -126,6 +126,8 @@ fn explain(step_name: &str) -> Option<&'static str> {
         "ExecutePromoted" => "ran the promoted deterministic path — no model in the loop",
         "ProposePath" => "cold start only: the model proposes an ordered path over declared abilities",
         "TypeCheck" => "each step's postcondition must satisfy the next's precondition before anything runs",
+        "ResidueCheck" => "every number/quote/named value in the request must land in some arg, or a stated constraint could silently vanish (F-032)",
+        "ReplyNumericGuard" => "a QuickReply has no tool result behind it, so a synthesized number/currency/percent forces escalation instead of being served (F-032)",
         "BoundaryAnswer" => "answerable from state + world knowledge; one synthesis call, no tools",
         "ActivateFlow" => "hard preconditions + policy filtered first; the trigger margin only broke ties",
         "ResumeFlow" => "re-checks policy, state, and pinned tool/prompt versions — never trusts stale auth",

@@ -38,13 +38,22 @@ impl CapabilityHost for RuntimeArtifactToolHost {
     ) -> AelioResult<Value> {
         let version = parse_version(tool)?;
         let flow_id = format!("aelio.proxy.{}", tool.id);
-        let instance_id = stable_instance_id(&self.tenant_id, &tool.id, version, idempotency_key);
+        // Runtime instance identity must be per (tool, idempotency_key) — never the conversational
+        // subject. `claim_instance` pins one instance_id to one proxy artifact for its lifetime;
+        // reusing `user_id` made the first tool call permanently own the subject, so a later call
+        // to a different tool Conflicted ("pinned to another artifact") and same-tool retries
+        // either Conflicted ("already completed") or silently replayed a stale bag.
+        //
+        // Customer identity for the SDK still flows through `context.user_id`. The TS host prefers
+        // that field over `instance_id` when present (`aelio-host.ts`).
+        let instance_id =
+            stable_instance_id(&self.tenant_id, &tool.id, version, idempotency_key);
         let input = serde_json::json!({
             "args": args
                 .iter()
                 .map(|(name, value)| (name.clone(), value_to_json(value)))
                 .collect::<serde_json::Map<String, serde_json::Value>>(),
-            "context": { "channel": channel },
+            "context": { "channel": channel, "user_id": _user_id },
         });
 
         let reply = self.runtime.invoke_pinned_artifact(TurnSubmit {
@@ -196,6 +205,12 @@ mod tests {
         assert_ne!(
             first,
             stable_instance_id("tenant", "orders.list", 2, "idem")
+        );
+        // Different tools must never share an instance, even with the same idempotency key —
+        // that is the failure mode of using bare user_id as instance_id.
+        assert_ne!(
+            stable_instance_id("tenant", "list_doctors", 1, "same-user-key"),
+            stable_instance_id("tenant", "list_appointments", 1, "same-user-key")
         );
     }
 }
