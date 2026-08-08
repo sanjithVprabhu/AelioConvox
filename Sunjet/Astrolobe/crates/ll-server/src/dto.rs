@@ -105,6 +105,13 @@ pub struct CreateTableResponse {
     pub table_id: u32,
 }
 
+/// Additive, nullable catalog migration. Existing rows receive an implicit `NULL` until the
+/// application writes a value; columns cannot be removed or have their type changed here.
+#[derive(Debug, Deserialize)]
+pub struct AddColumnsRequest {
+    pub columns: Vec<ColumnSpec>,
+}
+
 /// `{"values": {"embedding": {"type":"vector","value":[...]}, "year": {"type":"i64","value":2020}}}`
 #[derive(Debug, Deserialize)]
 pub struct RowRequest {
@@ -121,6 +128,65 @@ pub struct MutateResponse {
     /// Whether the row existed and the mutation took effect (delete/update return false for a
     /// missing or already-deleted row).
     pub applied: bool,
+}
+
+/// An atomic, ordered group of row writes. Each mutation is fully validated before it reaches
+/// the WAL; if any one is invalid, no member of the group is committed. Runtime callers use
+/// this endpoint for an event claim together with its state, ledger, and outbox records.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+pub enum TransactionMutationRequest {
+    Insert {
+        table: String,
+        values: std::collections::HashMap<String, ApiValue>,
+    },
+    Update {
+        table: String,
+        row_id: u64,
+        values: std::collections::HashMap<String, ApiValue>,
+    },
+    Delete {
+        table: String,
+        row_id: u64,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TransactionRequest {
+    #[serde(default)]
+    pub preconditions: Vec<TransactionPreconditionRequest>,
+    pub mutations: Vec<TransactionMutationRequest>,
+}
+
+/// Preconditions are evaluated under the same writer lock as the mutation batch. `absent` is
+/// the durable delivery/idempotency claim; `row_matches` is an explicit optimistic CAS rule.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TransactionPreconditionRequest {
+    Absent {
+        table: String,
+        equals: std::collections::HashMap<String, ApiValue>,
+    },
+    RowMatches {
+        table: String,
+        row_id: u64,
+        equals: std::collections::HashMap<String, ApiValue>,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub struct TransactionMutationResponse {
+    pub op: &'static str,
+    pub row_id: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TransactionResponse {
+    /// False means a precondition failed; no mutation was appended to the WAL.
+    pub applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_lsn: Option<u64>,
+    pub results: Vec<TransactionMutationResponse>,
 }
 
 // --- Query ---------------------------------------------------------------------------------

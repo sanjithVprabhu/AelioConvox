@@ -21,6 +21,8 @@
     "test:phase5": "tsx scripts/test-phase5-memory.mjs",
     "test:phase6:lifecycle": "node scripts/test-phase6-lifecycle.mjs",
     "test:harness": "node scripts/test-harness-executor.mjs",
+    "test:runtime": "node scripts/test-aelio-runtime.mjs",
+    "test:runtime:faults": "tsx scripts/test-aelio-runtime-faults.mjs",
     "test:llm": "node scripts/test-llm-providers.mjs",
     "test:sunjet": "node scripts/test-sunjet-integration.mjs",
     "test:all": "node scripts/run-tests.mjs",

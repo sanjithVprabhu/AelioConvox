@@ -2,6 +2,7 @@ import { enqueueJob } from '@aelio/core';
 import { parseWhatsAppWebhook, verifyWhatsAppSignature } from '@aelio/channels';
 import type { FastifyInstance } from 'fastify';
 import type { RuntimeDeps } from '../runtime-deps.js';
+import { randomUUID } from 'node:crypto';
 
 export async function registerWhatsAppRoutes(app: FastifyInstance, deps: RuntimeDeps) {
   const wa = deps.config.channels.whatsapp;
@@ -59,6 +60,24 @@ export async function registerWhatsAppRoutes(app: FastifyInstance, deps: Runtime
 
     let queued = 0;
     for (const message of messages) {
+      if (deps.runtimeStore) {
+        // Provider ids are a durable inbox key. Persist before acknowledging Meta; the scheduler
+        // owns LLM/conductor work so a slow model cannot force webhook redelivery.
+        const scheduleId = `wa:${message.messageId ?? randomUUID()}`;
+        const scheduled = await deps.runtimeStore.scheduleEvent({
+          scheduleId,
+          tenantId: deps.config.name,
+          subjectId: message.from,
+          dueAt: Date.now(),
+          payload: {
+            message: message.text,
+            channel: 'whatsapp',
+            delivery: { channel: 'whatsapp', to: message.from },
+          },
+        });
+        if (scheduled) queued += 1;
+        continue;
+      }
       // Meta redelivers webhooks on slow ACKs — drop ids we already claimed.
       if (message.messageId && !deps.database.claimInboundMessage(`wa:${message.messageId}`)) {
         app.log.info({ messageId: message.messageId }, 'Duplicate WhatsApp webhook dropped');

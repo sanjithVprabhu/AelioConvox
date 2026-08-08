@@ -4,7 +4,7 @@
 //! Recovery replays the WAL, applies only committed transactions, and reopens the log for
 //! continued appends. Flush writes the live rows as a `.vss` file.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::Path;
 
@@ -41,6 +41,16 @@ pub struct Engine {
     next_txn: u64,
 }
 
+/// A mutation in one durable engine transaction. The transaction is committed only after every
+/// logical record reaches the WAL and the commit marker is fsynced. The memtable is updated only
+/// afterwards, so a failed or torn batch is never visible in-process and recovery replays only
+/// the committed batch.
+pub enum WriteOp {
+    Insert { row_id: u64, row: Row },
+    Put { row_id: u64, row: Row },
+    Delete { row_id: u64 },
+}
+
 impl Engine {
     /// Create a fresh engine backed by a new WAL at `wal_path`.
     pub fn create<P: AsRef<Path>>(wal_path: P, base_lsn: u64) -> io::Result<Self> {
@@ -51,28 +61,49 @@ impl Engine {
         })
     }
 
-    /// Insert/replace a row (auto-committed and fsynced). Returns the write LSN.
-    pub fn insert(&mut self, row_id: u64, row: Row) -> io::Result<u64> {
+    /// Apply a bounded group of row mutations atomically. This is the storage primitive Aelio's
+    /// runtime uses for event-claim → state/ledger/outbox commits; callers must prepare and
+    /// validate the complete write set before calling it.
+    pub fn transact(&mut self, ops: Vec<WriteOp>) -> io::Result<u64> {
+        if ops.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "transaction requires at least one mutation"));
+        }
         let txn = self.next_txn;
         self.next_txn += 1;
-        let lsn = self
-            .wal
-            .append(txn, RecordType::InsertRow, &codec::encode_put(row_id, &row))?;
-        self.wal.commit(txn)?;
-        self.mem.apply(row_id, Op::Put(row), lsn);
-        Ok(lsn)
+        let mut stamped = Vec::with_capacity(ops.len());
+        for op in ops {
+            let (rtype, payload) = match &op {
+                WriteOp::Insert { row_id, row } => (RecordType::InsertRow, codec::encode_put(*row_id, row)),
+                WriteOp::Put { row_id, row } => (RecordType::UpdateRow, codec::encode_put(*row_id, row)),
+                WriteOp::Delete { row_id } => (RecordType::DeleteRow, codec::encode_delete(*row_id)),
+            };
+            let lsn = self.wal.append(txn, rtype, &payload)?;
+            stamped.push((lsn, op));
+        }
+        let commit_lsn = self.wal.commit(txn)?;
+        // Every row in the batch becomes visible at the SAME commit LSN, not at its own record
+        // LSN. This is what makes the batch atomic to a reader: a snapshot taken between two
+        // record LSNs of one transaction must not see half of it. It also means the LSN this
+        // returns is exactly the snapshot at which the batch first appears.
+        for (_record_lsn, op) in stamped {
+            match op {
+                WriteOp::Insert { row_id, row } | WriteOp::Put { row_id, row } => {
+                    self.mem.apply(row_id, Op::Put(row), commit_lsn)
+                }
+                WriteOp::Delete { row_id } => self.mem.apply(row_id, Op::Delete, commit_lsn),
+            }
+        }
+        Ok(commit_lsn)
     }
 
-    /// Delete a row (auto-committed and fsynced). Returns the write LSN.
+    /// Insert/replace a row (auto-committed and fsynced). Returns the commit LSN.
+    pub fn insert(&mut self, row_id: u64, row: Row) -> io::Result<u64> {
+        self.transact(vec![WriteOp::Insert { row_id, row }])
+    }
+
+    /// Delete a row (auto-committed and fsynced). Returns the commit LSN.
     pub fn delete(&mut self, row_id: u64) -> io::Result<u64> {
-        let txn = self.next_txn;
-        self.next_txn += 1;
-        let lsn = self
-            .wal
-            .append(txn, RecordType::DeleteRow, &codec::encode_delete(row_id))?;
-        self.wal.commit(txn)?;
-        self.mem.apply(row_id, Op::Delete, lsn);
-        Ok(lsn)
+        self.transact(vec![WriteOp::Delete { row_id }])
     }
 
     /// Visible row at the latest snapshot.
@@ -107,20 +138,26 @@ impl Engine {
         // Truncate any torn tail and reopen for appending; reuse the replay it returns.
         let (wal, r) = Wal::open_append(&wal_path)?;
 
-        let committed: HashSet<u64> = r
+        // txn → its commit LSN. Recovery must reproduce the same visibility the live engine
+        // produced, so a recovered row carries its transaction's commit LSN, never its own
+        // record LSN — otherwise a batch would become partially visible after a restart.
+        let committed: HashMap<u64, u64> = r
             .records
             .iter()
             .filter(|rec| rec.rtype == RecordType::Commit)
-            .map(|rec| rec.txn_id)
+            .map(|rec| (rec.txn_id, rec.lsn))
             .collect();
 
         let mut mem = Memtable::new();
         let mut max_txn = 0u64;
         for rec in &r.records {
             max_txn = max_txn.max(rec.txn_id);
-            if rec.lsn > checkpoint_lsn && committed.contains(&rec.txn_id) {
+            let Some(&commit_lsn) = committed.get(&rec.txn_id) else {
+                continue;
+            };
+            if commit_lsn > checkpoint_lsn {
                 if let Some((row_id, op)) = codec::decode(rec.rtype, &rec.payload) {
-                    mem.apply(row_id, op, rec.lsn);
+                    mem.apply(row_id, op, commit_lsn);
                 }
             }
         }

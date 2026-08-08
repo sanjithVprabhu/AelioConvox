@@ -99,6 +99,9 @@ const server = spawn('npx', ['tsx', 'src/main.ts'], {
   env: {
     ...process.env,
     AELIO_CONFIG: configPath,
+    // Pin the port explicitly rather than relying on the YAML rewrite alone: a developer's own
+    // Aelio server is often already on the default port, and the suite must never collide with it.
+    AELIO_PORT: String(testPort),
     AELIO_SDK_SECRET: process.env.AELIO_SDK_SECRET ?? 'change-me-in-production',
     AELIO_TEST_MODE: '1',
   },
@@ -125,6 +128,9 @@ try {
 
   console.log('\n=== Running harness executor unit tests ===');
   await run('node', [join(root, 'scripts/test-harness-executor.mjs')], {});
+  await run('node', [join(root, 'scripts/test-aelio-runtime.mjs')], {});
+  // Runs under tsx: it drives the real server-side artifact runner, not a copy of it.
+  await run('npx', ['tsx', join(root, 'scripts/test-aelio-runtime-faults.mjs')], {});
 
   await waitForHealth(baseUrl, server, getServerLogs);
 

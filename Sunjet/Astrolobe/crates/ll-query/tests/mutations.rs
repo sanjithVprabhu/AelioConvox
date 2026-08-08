@@ -1,7 +1,10 @@
 //! Database-level mutations: delete, update, and compaction — across the memtable/segment
 //! boundary, with crash-safe reopen, exercised through the public `Database` facade.
 
-use ll_query::{ColumnKind, Database, HybridQuery, PredOp, Value};
+use ll_query::{
+    ColumnKind, Database, HybridQuery, PredOp, TransactionMutation, TransactionMutationResult,
+    TransactionPrecondition, Value,
+};
 
 fn tmpdir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("ll_mut_{tag}_{}", std::process::id()));
@@ -43,6 +46,135 @@ fn delete_removes_a_memtable_row_from_results() {
     assert!(db.delete("docs", a).unwrap());
     let res = db.query("docs", &HybridQuery::new(5).vector("embedding", vec![0.0, 0.0])).unwrap();
     assert_eq!(ids(&res), vec![b], "deleted memtable row must not appear: {res:?}");
+}
+
+#[test]
+fn transaction_commits_multiple_rows_together_and_recovers() {
+    let dir = tmpdir("batch");
+    let (first, second) = {
+        let mut db = Database::create(&dir).unwrap();
+        db.create_table("docs", &schema()).unwrap();
+        let result = db
+            .transact(vec![
+                TransactionMutation::Insert {
+                    table: "docs".into(),
+                    values: row([0.0, 0.0], "alpha", vec![], 1)
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v))
+                        .collect(),
+                },
+                TransactionMutation::Insert {
+                    table: "docs".into(),
+                    values: row([10.0, 0.0], "beta", vec![], 2)
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v))
+                        .collect(),
+                },
+            ])
+            .unwrap();
+        assert_eq!(result.results.len(), 2);
+        let first = match result.results[0] {
+            TransactionMutationResult::Inserted { row_id } => row_id,
+            _ => panic!("expected inserted row"),
+        };
+        let second = match result.results[1] {
+            TransactionMutationResult::Inserted { row_id } => row_id,
+            _ => panic!("expected inserted row"),
+        };
+        (first, second)
+    };
+    let db = Database::open(&dir).unwrap();
+    let results = db.query("docs", &HybridQuery::new(2).vector("embedding", vec![0.0, 0.0])).unwrap();
+    let got = ids(&results);
+    assert!(got.contains(&first) && got.contains(&second), "batch did not recover: {got:?}");
+}
+
+#[test]
+fn conditional_transaction_provides_atomic_idempotency_and_revision_cas() {
+    let dir = tmpdir("conditional");
+    let mut db = Database::create(&dir).unwrap();
+    db.create_table("docs", &schema()).unwrap();
+    let values = row([0.0, 0.0], "event-1", vec![], 1)
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect::<Vec<_>>();
+
+    let first = db
+        .transact_conditional(
+            vec![TransactionPrecondition::Absent {
+                table: "docs".into(),
+                equals: vec![("body".into(), Value::Utf8("event-1".into()))],
+            }],
+            vec![TransactionMutation::Insert { table: "docs".into(), values }],
+        )
+        .unwrap();
+    assert!(first.applied);
+    let id = match first.transaction.unwrap().results[0] {
+        TransactionMutationResult::Inserted { row_id } => row_id,
+        _ => panic!("expected inserted row"),
+    };
+
+    let duplicate = db
+        .transact_conditional(
+            vec![TransactionPrecondition::Absent {
+                table: "docs".into(),
+                equals: vec![("body".into(), Value::Utf8("event-1".into()))],
+            }],
+            vec![TransactionMutation::Insert {
+                table: "docs".into(),
+                values: row([1.0, 1.0], "event-1", vec![], 1)
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect(),
+            }],
+        )
+        .unwrap();
+    assert!(!duplicate.applied, "duplicate claim must append no rows");
+
+    let updated = db
+        .transact_conditional(
+            vec![TransactionPrecondition::RowMatches {
+                table: "docs".into(),
+                row_id: id,
+                equals: vec![("score".into(), Value::I64(1))],
+            }],
+            vec![TransactionMutation::Update {
+                table: "docs".into(),
+                row_id: id,
+                values: vec![("score".into(), Value::I64(2))],
+            }],
+        )
+        .unwrap();
+    assert!(updated.applied);
+
+    let stale = db
+        .transact_conditional(
+            vec![TransactionPrecondition::RowMatches {
+                table: "docs".into(),
+                row_id: id,
+                equals: vec![("score".into(), Value::I64(1))],
+            }],
+            vec![TransactionMutation::Delete { table: "docs".into(), row_id: id }],
+        )
+        .unwrap();
+    assert!(!stale.applied, "a stale revision must not delete the row");
+}
+
+#[test]
+fn additive_columns_allow_existing_rows_and_persist_across_reopen() {
+    let dir = tmpdir("add_columns");
+    let row_id = {
+        let mut db = Database::create(&dir).unwrap();
+        db.create_table("events", &[("key", ColumnKind::Utf8)]).unwrap();
+        let row_id = db.insert("events", &[("key", Value::Utf8("e1".into()))]).unwrap();
+        db.add_columns("events", &[("attempts", ColumnKind::I64)]).unwrap();
+        db.update("events", row_id, &[("attempts", Value::I64(1))]).unwrap();
+        row_id
+    };
+    let db = Database::open(&dir).unwrap();
+    assert_eq!(db.columns("events").unwrap().len(), 2);
+    let row = db.get_row_values("events", row_id).unwrap().unwrap();
+    assert!(row.iter().any(|(name, value)| name == "attempts" && value == &Value::I64(1)));
 }
 
 #[test]

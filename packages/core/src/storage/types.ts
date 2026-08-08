@@ -13,7 +13,21 @@ export type SunjetTableNames = {
   harnessSuspensions: string;
   harnessLedger: string;
   harnessTraces: string;
+  // Aelio Stateful Runtime tables
+  runtimeEvents: string;
+  runtimeSnapshots: string;
+  runtimeLedger: string;
+  runtimeOutbox: string;
+  runtimeContinuations: string;
+  scheduledEvents: string;
+  workflowArtifacts: string;
+  workflowInstances: string;
+  promptArtifacts: string;
+  promptLedger: string;
 };
+
+/** Preferred product name; `SunjetTableNames` remains a migration compatibility alias. */
+export type AelioStorageTableNames = SunjetTableNames;
 
 export type SunjetStorageConfig = {
   client: SunjetClient;

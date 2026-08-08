@@ -18,4 +18,5 @@ export type {
   MessageStoreHistoryRow,
   SunjetStorageConfig,
   SunjetTableNames,
+  AelioStorageTableNames,
 } from './types.js';

@@ -11,4 +11,7 @@ export type {
   ScanResponse,
   SchemaResponse,
   SunjetClientOptions,
+  TransactionMutation,
+  TransactionPrecondition,
+  TransactionResponse,
 } from './types.js';

@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { resolvePublicDir } from '../paths.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 import { buildTurnInput } from '../turn-options.js';
+import { processAelioRuntimeMessage } from '../aelio-runtime.js';
 import { z } from 'zod';
 import { MAX_WS_FRAME_BYTES } from '@aelio/protocol';
 
@@ -185,14 +186,39 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
         socket.send(JSON.stringify({ type: 'typing', active: true }));
 
         try {
-          const { reply, turnId, awaitingConfirmation } = await processTurn(
-            buildTurnInput(deps, {
-              customerExternalId: customerId,
-              channel: 'web',
-              channelAddress,
-              message: message.content,
-            }),
-          );
+          const runtimeResult = deps.runtimeStore
+            ? await processAelioRuntimeMessage(deps, {
+                tenantId: deps.config.name,
+                subjectId: customerId,
+                idempotencyKey: `web:${randomUUID()}`,
+                message: message.content,
+                channel: 'web',
+              })
+            : null;
+          if (runtimeResult && runtimeResult.status !== 'committed') {
+            // A duplicate frame is already answered; a conflict means a concurrent turn for this
+            // subject won the commit. Neither may be answered with a fabricated reply.
+            socket.send(
+              JSON.stringify({
+                type: 'error',
+                code: runtimeResult.status,
+                message:
+                  runtimeResult.status === 'duplicate'
+                    ? 'That message was already processed.'
+                    : 'Another message for this conversation is still being processed. Please resend.',
+              }),
+            );
+            return;
+          }
+          const legacyResult = runtimeResult
+            ? null
+            : await processTurn(buildTurnInput(deps, {
+                customerExternalId: customerId, channel: 'web', channelAddress, message: message.content,
+              }));
+          const reply = runtimeResult?.reply ?? legacyResult?.reply ?? 'Please try again.';
+          const turnId = runtimeResult?.eventId ?? legacyResult?.turnId ?? randomUUID();
+          const awaitingConfirmation =
+            runtimeResult?.awaitingConfirmation ?? legacyResult?.awaitingConfirmation;
 
           const isConfirmation =
             awaitingConfirmation ||

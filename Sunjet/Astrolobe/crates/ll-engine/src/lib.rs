@@ -14,6 +14,6 @@ mod engine;
 mod memtable;
 mod value;
 
-pub use engine::{Engine, SYS_XMAX_COL, SYS_XMIN_COL};
+pub use engine::{Engine, WriteOp, SYS_XMAX_COL, SYS_XMIN_COL};
 pub use memtable::{Memtable, Op, Row, INF};
 pub use value::Value;

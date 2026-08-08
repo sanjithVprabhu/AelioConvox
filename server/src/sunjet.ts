@@ -1,6 +1,10 @@
 import {
+  AelioMemoryStore,
+  AelioRuntimeStore,
+  AelioSuspensionStore,
   bootstrapSunjetTables,
   createConvoxMessageStore,
+  DEFAULT_RUNTIME_ARTIFACTS,
   type ConvoxMessageStore,
 } from '@aelio/core';
 import type { SunjetTableNames } from '@aelio/core';
@@ -12,6 +16,9 @@ export type SunjetRuntime = {
   messageStore: ConvoxMessageStore;
   tables: SunjetTableNames;
   embedDim: number;
+  runtimeStore: AelioRuntimeStore;
+  runtimeSuspensionStore: AelioSuspensionStore;
+  runtimeMemory: AelioMemoryStore;
 };
 
 export async function initSunjet(config: AelioConfig): Promise<SunjetRuntime | null> {
@@ -40,9 +47,26 @@ export async function initSunjet(config: AelioConfig): Promise<SunjetRuntime | n
     harnessSuspensions: sunjet.tables.harness_suspensions,
     harnessLedger: sunjet.tables.harness_ledger,
     harnessTraces: sunjet.tables.harness_traces,
+    runtimeEvents: sunjet.tables.runtime_events,
+    runtimeSnapshots: sunjet.tables.runtime_snapshots,
+    runtimeLedger: sunjet.tables.runtime_ledger,
+    runtimeOutbox: sunjet.tables.runtime_outbox,
+    runtimeContinuations: sunjet.tables.runtime_continuations,
+    scheduledEvents: sunjet.tables.scheduled_events,
+    workflowArtifacts: sunjet.tables.workflow_artifacts,
+    workflowInstances: sunjet.tables.workflow_instances,
+    promptArtifacts: sunjet.tables.prompt_artifacts,
+    promptLedger: sunjet.tables.prompt_ledger,
   };
 
   await bootstrapSunjetTables(client, tables, sunjet.embed_dim);
+
+  // Built-ins are ordinary approved runtime artifacts. Reinstalling is idempotent and lets a
+  // fresh Aelio DB boot with a useful, auditable baseline catalog.
+  const runtimeStore = new AelioRuntimeStore(client, tables);
+  for (const artifact of DEFAULT_RUNTIME_ARTIFACTS) {
+    await runtimeStore.installArtifact(artifact);
+  }
 
   const messageStore = createConvoxMessageStore({
     client,
@@ -52,5 +76,13 @@ export async function initSunjet(config: AelioConfig): Promise<SunjetRuntime | n
     fallbackSqliteOnError: sunjet.fallback_sqlite_on_error,
   });
 
-  return { client, messageStore, tables, embedDim: sunjet.embed_dim };
+  return {
+    client,
+    messageStore,
+    tables,
+    embedDim: sunjet.embed_dim,
+    runtimeStore,
+    runtimeSuspensionStore: new AelioSuspensionStore(client, tables, config.name),
+    runtimeMemory: new AelioMemoryStore(client, tables, sunjet.embed_dim),
+  };
 }

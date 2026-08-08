@@ -59,7 +59,7 @@ import { runToolLoop } from './tool-loop.js';
 import { runHarness } from '../harness/index.js';
 import type { HarnessBindingConfig, HarnessBudgets } from '../harness/schema.js';
 import type { HarnessTracer } from '../harness/traces.js';
-import type { SuspensionStore } from '../harness/suspension.js';
+import type { SuspensionStorePort } from '../harness/suspension.js';
 import type { LighthouseService } from '../lighthouse/index.js';
 import { runWithTurnContext } from '../telemetry/turn-calls.js';
 
@@ -100,7 +100,7 @@ export type ProcessTurnInput = {
   };
   lighthouse?: LighthouseService;
   tracer?: HarnessTracer;
-  suspensionStore?: SuspensionStore;
+  suspensionStore?: SuspensionStorePort;
 };
 
 type PersistMessageInput = {

@@ -12,7 +12,6 @@ const migrationsFolder = join(
   '../packages/db/drizzle',
 );
 
-import WebSocket from 'ws';
 import { aelioWsUrl } from './lib/aelio-port.mjs';
 
 const serverUrl = (process.env.AELIO_WS_URL ?? aelioWsUrl()).replace(/^http/, 'ws');

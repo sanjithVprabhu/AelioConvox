@@ -21,7 +21,10 @@ mod file_source;
 mod source;
 mod util;
 
-pub use database::{Database, HybridQuery};
+pub use database::{
+    ConditionalTransactionResult, Database, HybridQuery, TransactionMutation,
+    TransactionMutationResult, TransactionPrecondition, TransactionResult,
+};
 pub use exec::{execute, explain_plan, GraphConstraint, PredOp, Predicate, Query};
 pub use file_source::FileSource;
 pub use source::Source;

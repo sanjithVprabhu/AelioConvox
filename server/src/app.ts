@@ -21,6 +21,7 @@ import { registerTestRoutes } from './routes/test.js';
 import { registerWidgetRoutes } from './routes/widget.js';
 import { registerProactiveRoutes } from './routes/proactive.js';
 import { registerTelemetryRoutes } from './routes/telemetry.js';
+import { registerRuntimeRoutes } from './routes/runtime.js';
 import type { RuntimeDeps } from './runtime-deps.js';
 import { ServerSdkBridge } from './sdk-bridge.js';
 import { initSunjet } from './sunjet.js';
@@ -28,6 +29,8 @@ import { startBackupWorker } from './workers/backup.js';
 import { startDaemonWorker } from './workers/daemon.js';
 import { startInboundWorker } from './workers/inbound.js';
 import { startOutboundWorker } from './workers/outbound.js';
+import { startRuntimeOutboxWorker } from './workers/runtime-outbox.js';
+import { startRuntimeSchedulerWorker } from './workers/runtime-scheduler.js';
 
 /** Providers that don't need an API key (they run locally / are test doubles). */
 const KEYLESS_PROVIDERS = new Set(['mock', 'ollama']);
@@ -180,6 +183,9 @@ export async function createApp(config: AelioConfig) {
     suspensionStore,
     whatsappSender,
     sunjetClient: sunjet?.client ?? null,
+    runtimeStore: sunjet?.runtimeStore ?? null,
+    runtimeSuspensionStore: sunjet?.runtimeSuspensionStore ?? null,
+    runtimeMemory: sunjet?.runtimeMemory ?? null,
     messageStore: sunjet?.messageStore ?? null,
   };
 
@@ -219,6 +225,7 @@ export async function createApp(config: AelioConfig) {
   await registerWhatsAppRoutes(app, deps);
   await registerProactiveRoutes(app, deps);
   await registerTelemetryRoutes(app, deps);
+  await registerRuntimeRoutes(app, deps);
   await registerTestRoutes(app, sdkBridge);
   await app.register(fastifyStatic, {
     root: publicDir,
@@ -228,12 +235,16 @@ export async function createApp(config: AelioConfig) {
 
   const stopInbound = startInboundWorker(deps);
   const stopOutbound = startOutboundWorker(deps);
+  const stopRuntimeOutbox = startRuntimeOutboxWorker(deps);
+  const stopRuntimeScheduler = startRuntimeSchedulerWorker(deps);
   const stopBackup = startBackupWorker(deps);
   const stopDaemon = startDaemonWorker(deps);
 
   app.addHook('onClose', async () => {
     stopInbound();
     stopOutbound();
+    stopRuntimeOutbox();
+    stopRuntimeScheduler();
     stopBackup();
     stopDaemon();
     sdkBridge.shutdown();

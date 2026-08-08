@@ -13,3 +13,8 @@ lldata/
 secrets.md
 *.pem
 *.key
+
+# Build-artifact trees that must never be committed.
+aelio-os/
+target/
+__pycache__/

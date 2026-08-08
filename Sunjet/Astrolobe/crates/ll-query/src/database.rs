@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ll_catalog::{Catalog, ColumnKind};
-use ll_engine::{Engine, Memtable, Op, Row, Value};
+use ll_engine::{Engine, Memtable, Op, Row, Value, WriteOp};
 use ll_format::read_file;
 
 use crate::exec::{execute, explain_plan, PredOp, Query};
@@ -116,6 +116,66 @@ pub struct HybridQuery {
     pub text: Option<(String, String)>,
     pub filters: Vec<(String, PredOp, Value)>,
     pub graph: Option<(String, Vec<u64>, usize)>,
+}
+
+/// One validated mutation submitted to [`Database::transact`]. Values are owned so the write
+/// set can be prepared before it reaches the WAL. A batch intentionally rejects multiple
+/// mutations of the same existing row: higher-level compare-and-swap/lease semantics will make
+/// such ordering explicit rather than accidentally depending on request order.
+#[derive(Debug, Clone)]
+pub enum TransactionMutation {
+    Insert {
+        table: String,
+        values: Vec<(String, Value)>,
+    },
+    Update {
+        table: String,
+        row_id: u64,
+        values: Vec<(String, Value)>,
+    },
+    Delete {
+        table: String,
+        row_id: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransactionMutationResult {
+    Inserted { row_id: u64 },
+    Updated { row_id: u64 },
+    Deleted { row_id: u64 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionResult {
+    pub commit_lsn: u64,
+    pub results: Vec<TransactionMutationResult>,
+}
+
+/// A condition evaluated under the database writer lock immediately before an atomic batch is
+/// appended to the WAL. It is deliberately data-oriented rather than an arbitrary predicate so
+/// callers can persist and audit the exact idempotency/CAS rule they relied upon.
+#[derive(Debug, Clone)]
+pub enum TransactionPrecondition {
+    /// No live row in `table` may match every supplied scalar value. Runtime ingress uses this
+    /// for a tenant-scoped delivery key before creating an event/state/outbox transition.
+    Absent {
+        table: String,
+        equals: Vec<(String, Value)>,
+    },
+    /// The row must still contain every expected value. Runtime snapshots use an explicit
+    /// `revision` column here for optimistic compare-and-swap.
+    RowMatches {
+        table: String,
+        row_id: u64,
+        equals: Vec<(String, Value)>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConditionalTransactionResult {
+    pub applied: bool,
+    pub transaction: Option<TransactionResult>,
 }
 
 impl HybridQuery {
@@ -232,6 +292,15 @@ impl Database {
         Ok(id)
     }
 
+    /// Add nullable columns to an existing table and persist the catalog atomically. Existing
+    /// rows retain their prior shape; absent values are represented as `NULL` on reads.
+    pub fn add_columns(&mut self, table: &str, columns: &[(&str, ColumnKind)]) -> io::Result<()> {
+        self.catalog
+            .add_columns(table, columns)
+            .map_err(|e| io::Error::other(format!("{e:?}")))?;
+        self.catalog.save(self.dir.join(CATALOG_NAME))
+    }
+
     /// The user-defined columns of `table` as `(name, kind)`, or `None` if the table doesn't
     /// exist. Used to describe a table to clients (and to ground the NL query compiler in the
     /// real schema).
@@ -239,6 +308,143 @@ impl Database {
         self.catalog
             .table(table)
             .map(|t| t.columns.iter().map(|c| (c.name.clone(), c.kind)).collect())
+    }
+
+    /// Atomically apply a prepared batch of inserts, updates, and deletes. Validation and row
+    /// reconstruction happen before the WAL is touched; the engine then writes one transaction
+    /// and exposes the whole batch at one commit point. This is the first storage building block
+    /// for Aelio's event/state/ledger/outbox transaction protocol.
+    pub fn transact(&mut self, mutations: Vec<TransactionMutation>) -> io::Result<TransactionResult> {
+        if mutations.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "transaction requires at least one mutation"));
+        }
+
+        let mut next_row_id = self.next_row_id;
+        let mut touched = BTreeSet::new();
+        let mut ops = Vec::with_capacity(mutations.len());
+        let mut results = Vec::with_capacity(mutations.len());
+
+        for mutation in mutations {
+            match mutation {
+                TransactionMutation::Insert { table, values } => {
+                    let t = self
+                        .catalog
+                        .table(&table)
+                        .ok_or_else(|| io::Error::other(format!("no such table: {table}")))?;
+                    let mut row = Row::new();
+                    for (name, value) in values {
+                        let col = t
+                            .column(&name)
+                            .ok_or_else(|| io::Error::other(format!("no such column: {table}.{name}")))?;
+                        row.insert(col.column_id, value);
+                    }
+                    row.insert(SYS_TABLE_COL, Value::I64(t.table_id as i64));
+                    let row_id = next_row_id;
+                    next_row_id += 1;
+                    ops.push(WriteOp::Insert { row_id, row });
+                    results.push(TransactionMutationResult::Inserted { row_id });
+                }
+                TransactionMutation::Update { table, row_id, values } => {
+                    if !touched.insert(row_id) {
+                        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("row {row_id} is mutated more than once in one transaction")));
+                    }
+                    let t = self
+                        .catalog
+                        .table(&table)
+                        .ok_or_else(|| io::Error::other(format!("no such table: {table}")))?;
+                    let Some(src_idx) = self.resolve_live(row_id) else {
+                        return Err(io::Error::new(io::ErrorKind::NotFound, format!("no live row {row_id} in {table}")));
+                    };
+                    if self.row_table_id(src_idx, row_id) != Some(t.table_id) {
+                        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("row {row_id} does not belong to {table}")));
+                    }
+                    let Some(mut row) = self.reconstruct_row(src_idx, row_id, t.table_id) else {
+                        return Err(io::Error::new(io::ErrorKind::NotFound, format!("no reconstructable row {row_id}")));
+                    };
+                    for (name, value) in values {
+                        let col = t
+                            .column(&name)
+                            .ok_or_else(|| io::Error::other(format!("no such column: {table}.{name}")))?;
+                        row.insert(col.column_id, value);
+                    }
+                    ops.push(WriteOp::Put { row_id, row });
+                    results.push(TransactionMutationResult::Updated { row_id });
+                }
+                TransactionMutation::Delete { table, row_id } => {
+                    if !touched.insert(row_id) {
+                        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("row {row_id} is mutated more than once in one transaction")));
+                    }
+                    let table_id = self
+                        .catalog
+                        .table(&table)
+                        .ok_or_else(|| io::Error::other(format!("no such table: {table}")))?
+                        .table_id;
+                    let Some(src_idx) = self.resolve_live(row_id) else {
+                        return Err(io::Error::new(io::ErrorKind::NotFound, format!("no live row {row_id} in {table}")));
+                    };
+                    if self.row_table_id(src_idx, row_id) != Some(table_id) {
+                        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("row {row_id} does not belong to {table}")));
+                    }
+                    ops.push(WriteOp::Delete { row_id });
+                    results.push(TransactionMutationResult::Deleted { row_id });
+                }
+            }
+        }
+
+        let commit_lsn = self.engine.transact(ops)?;
+        self.next_row_id = next_row_id;
+        Ok(TransactionResult { commit_lsn, results })
+    }
+
+    /// Apply `mutations` only if all preconditions still hold under the same exclusive writer
+    /// lock. A false condition produces no WAL record and no partial write; a true condition
+    /// delegates to [`transact`](Self::transact), preserving its one-commit atomicity.
+    pub fn transact_conditional(
+        &mut self,
+        preconditions: Vec<TransactionPrecondition>,
+        mutations: Vec<TransactionMutation>,
+    ) -> io::Result<ConditionalTransactionResult> {
+        if preconditions.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "conditional transaction requires at least one precondition"));
+        }
+        for condition in &preconditions {
+            let holds = match condition {
+                TransactionPrecondition::Absent { table, equals } => !self.has_row_with_values(table, equals)?,
+                TransactionPrecondition::RowMatches { table, row_id, equals } => self.row_matches_values(table, *row_id, equals)?,
+            };
+            if !holds {
+                return Ok(ConditionalTransactionResult { applied: false, transaction: None });
+            }
+        }
+        let transaction = self.transact(mutations)?;
+        Ok(ConditionalTransactionResult { applied: true, transaction: Some(transaction) })
+    }
+
+    fn has_row_with_values(&self, table: &str, equals: &[(String, Value)]) -> io::Result<bool> {
+        if equals.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "absent precondition requires at least one equality value"));
+        }
+        let mut q = HybridQuery::new(1);
+        for (name, value) in equals {
+            q = q.filter(name, PredOp::Eq, value.clone());
+        }
+        Ok(!self.query(table, &q)?.is_empty())
+    }
+
+    fn row_matches_values(&self, table: &str, row_id: u64, equals: &[(String, Value)]) -> io::Result<bool> {
+        if equals.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "row-match precondition requires at least one equality value"));
+        }
+        let Some(values) = self.get_row_values(table, row_id)? else {
+            return Ok(false);
+        };
+        for (name, expected) in equals {
+            let actual = values.iter().find(|(column, _)| column == name).map(|(_, value)| value);
+            if actual != Some(expected) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Insert a row into `table` (values by column name). Returns the assigned row id.

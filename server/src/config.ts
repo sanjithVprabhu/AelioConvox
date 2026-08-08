@@ -241,6 +241,16 @@ export const ConfigSchema = z.object({
           harness_suspensions: z.string().min(1).default('harness_suspensions'),
           harness_ledger: z.string().min(1).default('harness_ledger'),
           harness_traces: z.string().min(1).default('harness_traces'),
+          runtime_events: z.string().min(1).default('aelio_runtime_events'),
+          runtime_snapshots: z.string().min(1).default('aelio_runtime_snapshots'),
+          runtime_ledger: z.string().min(1).default('aelio_runtime_ledger'),
+          runtime_outbox: z.string().min(1).default('aelio_runtime_outbox'),
+          runtime_continuations: z.string().min(1).default('aelio_runtime_continuations'),
+          scheduled_events: z.string().min(1).default('aelio_scheduled_events'),
+          workflow_artifacts: z.string().min(1).default('aelio_workflow_artifacts'),
+          workflow_instances: z.string().min(1).default('aelio_workflow_instances'),
+          prompt_artifacts: z.string().min(1).default('aelio_prompt_artifacts'),
+          prompt_ledger: z.string().min(1).default('aelio_prompt_ledger'),
         })
         .default({}),
     })

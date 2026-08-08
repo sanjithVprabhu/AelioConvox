@@ -25,7 +25,9 @@ export type TurnApiCallPurpose =
   | 'replan'
   | 'bind'
   | 'synthesis'
-  | 'recoil_extract';
+  | 'recoil_extract'
+  | 'immediate_context_compaction'
+  | 'aspect_discovery';
 
 export type TurnContext = {
   turnId: string;

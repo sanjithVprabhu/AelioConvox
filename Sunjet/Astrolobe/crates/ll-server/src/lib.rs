@@ -25,7 +25,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use tokio::sync::RwLock;
 
-use ll_query::{ColumnKind, Database, Value};
+use ll_query::{
+    ColumnKind, Database, TransactionMutation, TransactionMutationResult, TransactionPrecondition,
+    Value,
+};
 
 use crate::dto::*;
 use crate::embed::Embedder;
@@ -122,6 +125,8 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/v1/tables", post(create_table))
+        .route("/v1/tables/{table}/columns", post(add_columns))
+        .route("/v1/transactions", post(transact))
         .route("/v1/tables/{table}/rows", post(insert_row))
         .route(
             "/v1/tables/{table}/rows/{id}",
@@ -178,6 +183,24 @@ async fn create_table(
     Ok(Json(CreateTableResponse { table_id }))
 }
 
+async fn add_columns(
+    State(state): State<AppState>,
+    Path(table): Path<String>,
+    Json(body): Json<AddColumnsRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mut named: Vec<(String, ColumnKind)> = Vec::with_capacity(body.columns.len());
+    for column in &body.columns {
+        named.push((column.name.clone(), column.to_kind().map_err(AppError::BadRequest)?));
+    }
+    if named.is_empty() {
+        return Err(AppError::BadRequest("at least one column is required".into()));
+    }
+    let columns: Vec<(&str, ColumnKind)> = named.iter().map(|(name, kind)| (name.as_str(), *kind)).collect();
+    let mut db = state.db.write().await;
+    db.add_columns(&table, &columns)?;
+    Ok(Json(serde_json::json!({ "applied": true })))
+}
+
 async fn insert_row(
     State(state): State<AppState>,
     Path(table): Path<String>,
@@ -189,6 +212,78 @@ async fn insert_row(
     let mut db = state.db.write().await;
     let row_id = db.insert(&table, &vals)?;
     Ok(Json(InsertResponse { row_id }))
+}
+
+/// Resolve any input embeddings, prepare every mutation, then submit the entire group through
+/// Aelio DB's one-WAL-transaction boundary. We intentionally do all network work before taking
+/// the database write lock, so slow embedding calls cannot stall readers or another writer.
+async fn transact(
+    State(state): State<AppState>,
+    Json(body): Json<TransactionRequest>,
+) -> Result<Json<TransactionResponse>, AppError> {
+    let mut preconditions = Vec::with_capacity(body.preconditions.len());
+    for condition in body.preconditions {
+        match condition {
+            TransactionPreconditionRequest::Absent { table, equals } => {
+                preconditions.push(TransactionPrecondition::Absent {
+                    table,
+                    equals: condition_values(equals)?,
+                });
+            }
+            TransactionPreconditionRequest::RowMatches { table, row_id, equals } => {
+                preconditions.push(TransactionPrecondition::RowMatches {
+                    table,
+                    row_id,
+                    equals: condition_values(equals)?,
+                });
+            }
+        }
+    }
+
+    let mut mutations = Vec::with_capacity(body.mutations.len());
+    for request in body.mutations {
+        match request {
+            TransactionMutationRequest::Insert { table, mut values } => {
+                resolve_row_embeds(&state, &table, &mut values).await?;
+                mutations.push(TransactionMutation::Insert {
+                    table,
+                    values: values.into_iter().map(|(name, value)| (name, value.into())).collect(),
+                });
+            }
+            TransactionMutationRequest::Update { table, row_id, mut values } => {
+                resolve_row_embeds(&state, &table, &mut values).await?;
+                mutations.push(TransactionMutation::Update {
+                    table,
+                    row_id,
+                    values: values.into_iter().map(|(name, value)| (name, value.into())).collect(),
+                });
+            }
+            TransactionMutationRequest::Delete { table, row_id } => {
+                mutations.push(TransactionMutation::Delete { table, row_id });
+            }
+        }
+    }
+
+    let conditional = !preconditions.is_empty();
+    let result = if conditional {
+        state.db.write().await.transact_conditional(preconditions, mutations)?
+    } else {
+        let transaction = state.db.write().await.transact(mutations)?;
+        ll_query::ConditionalTransactionResult { applied: true, transaction: Some(transaction) }
+    };
+    let Some(transaction) = result.transaction else {
+        return Ok(Json(TransactionResponse { applied: false, commit_lsn: None, results: Vec::new() }));
+    };
+    let results = transaction
+        .results
+        .into_iter()
+        .map(|result| match result {
+            TransactionMutationResult::Inserted { row_id } => TransactionMutationResponse { op: "insert", row_id },
+            TransactionMutationResult::Updated { row_id } => TransactionMutationResponse { op: "update", row_id },
+            TransactionMutationResult::Deleted { row_id } => TransactionMutationResponse { op: "delete", row_id },
+        })
+        .collect();
+    Ok(Json(TransactionResponse { applied: true, commit_lsn: Some(transaction.commit_lsn), results }))
 }
 
 async fn update_row(
@@ -431,4 +526,17 @@ async fn compact(State(state): State<AppState>) -> Result<Json<serde_json::Value
 /// engine's `&[(&str, Value)]` signature.
 fn to_value_pairs(body: RowRequest) -> Vec<(String, Value)> {
     body.values.into_iter().map(|(name, v)| (name, v.into())).collect()
+}
+
+/// `embed` would perform a network call, which is intentionally not valid for a conditional
+/// predicate. Conditions must be exact, already-materialised values so their outcome is stable
+/// and auditable.
+fn condition_values(values: std::collections::HashMap<String, ApiValue>) -> Result<Vec<(String, Value)>, AppError> {
+    values
+        .into_iter()
+        .map(|(name, value)| match value {
+            ApiValue::Embed(_) => Err(AppError::BadRequest("transaction preconditions cannot use `embed` values".into())),
+            other => Ok((name, other.into())),
+        })
+        .collect()
 }

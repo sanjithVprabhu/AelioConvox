@@ -173,6 +173,87 @@ async fn table_row_lifecycle_and_hybrid_query() {
 }
 
 #[tokio::test]
+async fn additive_column_endpoint_updates_the_catalog() {
+    let app = app_with_keys("add_columns", vec![]);
+    call(&app, "POST", "/v1/tables", None, Some(json!({"name":"outbox","columns":[{"name":"effect_id","kind":"utf8"}]}))).await;
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/tables/outbox/columns",
+        None,
+        Some(json!({"columns":[{"name":"attempts","kind":"i64"},{"name":"lease_token","kind":"utf8"}]})),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "add columns: {body}");
+    let (status, schema) = call(&app, "GET", "/v1/tables/outbox/schema", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(schema["columns"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn transaction_commits_related_runtime_rows_as_one_unit() {
+    let app = app_with_keys("transaction", vec![]);
+    call(
+        &app,
+        "POST",
+        "/v1/tables",
+        None,
+        Some(json!({"name":"runtime_records","columns":[{"name":"kind","kind":"utf8"},{"name":"payload","kind":"utf8"}]})),
+    )
+    .await;
+
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/transactions",
+        None,
+        Some(json!({"mutations":[
+            {"op":"insert","table":"runtime_records","values":{"kind":{"type":"utf8","value":"event"},"payload":{"type":"utf8","value":"claimed"}}},
+            {"op":"insert","table":"runtime_records","values":{"kind":{"type":"utf8","value":"outbox"},"payload":{"type":"utf8","value":"pending"}}}
+        ]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "transaction: {body}");
+    assert_eq!(body["applied"], true);
+    assert!(body["commit_lsn"].as_u64().is_some());
+    assert_eq!(body["results"].as_array().unwrap().len(), 2);
+
+    let (status, rows) = call(
+        &app,
+        "POST",
+        "/v1/tables/runtime_records/scan",
+        None,
+        Some(json!({"k":10})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "scan: {rows}");
+    assert_eq!(rows["rows"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn conditional_transaction_deduplicates_runtime_event_claims() {
+    let app = app_with_keys("conditional_transaction", vec![]);
+    call(
+        &app,
+        "POST",
+        "/v1/tables",
+        None,
+        Some(json!({"name":"events","columns":[{"name":"dedupe_key","kind":"utf8"},{"name":"status","kind":"utf8"}]})),
+    )
+    .await;
+    let request = json!({
+        "preconditions":[{"kind":"absent","table":"events","equals":{"dedupe_key":{"type":"utf8","value":"provider:msg-1"}}}],
+        "mutations":[{"op":"insert","table":"events","values":{"dedupe_key":{"type":"utf8","value":"provider:msg-1"},"status":{"type":"utf8","value":"claimed"}}}]
+    });
+    let (first_status, first) = call(&app, "POST", "/v1/transactions", None, Some(request.clone())).await;
+    assert_eq!(first_status, StatusCode::OK, "first claim: {first}");
+    assert_eq!(first["applied"], true);
+    let (duplicate_status, duplicate) = call(&app, "POST", "/v1/transactions", None, Some(request)).await;
+    assert_eq!(duplicate_status, StatusCode::OK, "duplicate claim: {duplicate}");
+    assert_eq!(duplicate["applied"], false);
+    assert!(duplicate.get("commit_lsn").is_none());
+}
+
+#[tokio::test]
 async fn nl_endpoint_compiles_and_runs_a_query() {
     // The mock "model" translates English into this structured query.
     let mock = json!({

@@ -28,6 +28,21 @@ export type SuspendedPlanRecord = {
   expiresAt: number;
 };
 
+/**
+ * What the harness actually needs from a parked-plan store. Naming the port lets the Aelio DB
+ * runtime own suspension durably (see `runtime/aelio-suspension-store.ts`) while the legacy
+ * SQLite path keeps working unchanged — the harness never learns which store it is talking to.
+ */
+export type SuspensionStorePort = {
+  get(sessionId: string): Promise<SuspendedPlanRecord | null>;
+  suspend(
+    sessionId: string,
+    reason: SuspensionReason,
+    payload: SuspendedPlanPayload,
+  ): Promise<SuspendedPlanRecord>;
+  clear(sessionId: string): Promise<void>;
+};
+
 const DEFAULT_TTL_MINUTES = 24 * 60;
 
 function utf8(value: string): ApiValue {

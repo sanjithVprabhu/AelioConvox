@@ -6,12 +6,41 @@ import {
   SDK_REGISTER_TIMEOUT_MS,
   SdkToServerMessageSchema,
 } from '@aelio/protocol';
-import { enqueueJob, upsertCustomerFlowProgress, upsertCustomerLifecycleState } from '@aelio/core';
+import {
+  enqueueJob,
+  readSubjectState,
+  resolveWhatsAppIdentity,
+  upsertCustomerFlowProgress,
+  upsertCustomerLifecycleState,
+  type JsonValue,
+} from '@aelio/core';
 import type { WebSocket } from '@fastify/websocket';
 import type { FastifyInstance } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { secretsMatch } from '../auth.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
+
+/**
+ * Merge one flow's progress into the durable subject snapshot without clobbering the others.
+ * Read-modify-write is safe here: `patchSubjectState` does the merge under CAS with retry.
+ */
+async function patchRuntimeFlowProgress(
+  deps: RuntimeDeps,
+  customerId: string,
+  flowId: string,
+  stepIndex: number,
+  completedSteps: string[] | undefined,
+): Promise<void> {
+  if (!deps.runtimeStore) return;
+  const snapshot = await deps.runtimeStore.loadSnapshot(deps.config.name, customerId);
+  const state = readSubjectState(snapshot?.state);
+  await deps.runtimeStore.patchSubjectState(deps.config.name, customerId, {
+    flowProgress: {
+      ...state.flowProgress,
+      [flowId]: { currentStepIndex: stepIndex, completedSteps: completedSteps ?? [] },
+    } as unknown as JsonValue,
+  });
+}
 
 function ingestDedupKey(channel: string, from: string, text: string, messageId?: string): string {
   if (messageId) {
@@ -158,12 +187,16 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
       }
 
       if (message.type === 'set_state') {
-        void upsertCustomerLifecycleState(
-          database.db,
-          message.customerId,
-          message.stateId,
-          message.reason,
-        )
+        // The tenant's backend is the authority on lifecycle, so the push has to land in BOTH
+        // stores while they coexist: SQLite for the legacy turn, and the Aelio DB snapshot the
+        // runtime conductor reads on the very next event.
+        void Promise.all([
+          upsertCustomerLifecycleState(database.db, message.customerId, message.stateId, message.reason),
+          deps.runtimeStore?.patchSubjectState(config.name, message.customerId, {
+            lifecycleState: message.stateId,
+            lifecycleReason: message.reason ?? 'sdk push',
+          }) ?? Promise.resolve(),
+        ])
           .then(() => {
             socket.send(JSON.stringify({ type: 'ack', op: 'set_state' }));
           })
@@ -180,13 +213,16 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
       }
 
       if (message.type === 'set_flow_progress') {
-        void upsertCustomerFlowProgress(
-          database.db,
-          message.customerId,
-          message.flowId,
-          message.stepIndex,
-          message.completedSteps,
-        )
+        void Promise.all([
+          upsertCustomerFlowProgress(
+            database.db,
+            message.customerId,
+            message.flowId,
+            message.stepIndex,
+            message.completedSteps,
+          ),
+          patchRuntimeFlowProgress(deps, message.customerId, message.flowId, message.stepIndex, message.completedSteps),
+        ])
           .then(() => {
             socket.send(JSON.stringify({ type: 'ack', op: 'set_flow_progress' }));
           })
@@ -219,6 +255,35 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           message.text,
           message.messageId,
         );
+        if (deps.runtimeStore) {
+          // Aelio DB is the durable inbox. The schedule row is written before the ack, so a
+          // crash after acking cannot lose the message, and the leased scheduler — not this
+          // socket handler — owns the model/tool work.
+          const identity = resolveWhatsAppIdentity(message.from);
+          void deps.runtimeStore
+            .scheduleEvent({
+              scheduleId: `sdk:${dedupKey}`,
+              tenantId: config.name,
+              subjectId: message.channel === 'whatsapp' ? identity.externalId : message.from,
+              dueAt: Date.now(),
+              payload: {
+                message: message.text,
+                channel: 'sdk',
+                delivery: { channel: message.channel, to: message.from },
+              },
+            })
+            .then((scheduled) => {
+              if (!scheduled) app.log.info({ connectionId, dedupKey }, 'Duplicate SDK ingest dropped');
+              socket.send(JSON.stringify({ type: 'ack', op: 'ingest' }));
+            })
+            .catch((error: unknown) => {
+              app.log.error({ err: error, connectionId, dedupKey }, 'SDK ingest could not be persisted');
+              socket.send(
+                JSON.stringify({ type: 'error', code: 'ingest_unavailable', message: 'Message was not accepted; retry.' }),
+              );
+            });
+          return;
+        }
         if (!database.claimInboundMessage(dedupKey)) {
           app.log.info({ connectionId, dedupKey }, 'Duplicate ingest dropped');
           socket.send(JSON.stringify({ type: 'ack', op: 'ingest' }));

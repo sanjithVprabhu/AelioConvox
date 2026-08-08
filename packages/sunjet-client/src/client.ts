@@ -6,6 +6,9 @@ import type {
   ScanResponse,
   SchemaResponse,
   SunjetClientOptions,
+  TransactionMutation,
+  TransactionPrecondition,
+  TransactionResponse,
 } from './types.js';
 
 export class SunjetHttpError extends Error {
@@ -42,9 +45,28 @@ export class SunjetClient {
     return this.request('GET', `/v1/tables/${encodeURIComponent(table)}/schema`);
   }
 
+  async addColumns(table: string, columns: ColumnSpec[]): Promise<{ applied: boolean }> {
+    return this.request('POST', `/v1/tables/${encodeURIComponent(table)}/columns`, { columns });
+  }
+
   async ensureTable(name: string, columns: ColumnSpec[]): Promise<void> {
     try {
-      await this.getSchema(name);
+      const existing = await this.getSchema(name);
+      const actual = new Map(existing.columns.map((column) => [column.name, column]));
+      const missingOrIncompatible = columns.filter((expected) => {
+        const found = actual.get(expected.name);
+        return !found || found.kind !== expected.kind || (expected.kind === 'vector' && found.dim !== expected.dim);
+      });
+      const incompatible = missingOrIncompatible.filter((expected) => actual.has(expected.name));
+      if (incompatible.length > 0) {
+        throw new Error(
+          `Aelio DB table '${name}' does not match the required schema: ` +
+          incompatible.map((column) => `${column.name}:${column.kind}${column.dim ? `(${column.dim})` : ''}`).join(', ') +
+          '. Apply an explicit Aelio DB catalog migration before starting this runtime.',
+        );
+      }
+      const missing = missingOrIncompatible.filter((expected) => !actual.has(expected.name));
+      if (missing.length > 0) await this.addColumns(name, missing);
     } catch (error) {
       if (error instanceof SunjetHttpError && error.status === 404) {
         await this.createTable(name, columns);
@@ -56,6 +78,18 @@ export class SunjetClient {
 
   async insertRow(table: string, values: RowValues): Promise<{ row_id: number }> {
     return this.request('POST', `/v1/tables/${encodeURIComponent(table)}/rows`, { values });
+  }
+
+  /**
+   * Commit all mutations together, or commit none. Use this for runtime event claims and the
+   * corresponding state, ledger, and outbox writes; do not split that transition into several
+   * single-row requests.
+   */
+  async transact(
+    mutations: TransactionMutation[],
+    preconditions: TransactionPrecondition[] = [],
+  ): Promise<TransactionResponse> {
+    return this.request('POST', '/v1/transactions', { preconditions, mutations });
   }
 
   async updateRow(

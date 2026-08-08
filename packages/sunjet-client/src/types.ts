@@ -26,6 +26,24 @@ export type ApiValue =
 
 export type RowValues = Record<string, ApiValue>;
 
+/** One member of an atomic Aelio DB write transaction. */
+export type TransactionMutation =
+  | { op: 'insert'; table: string; values: RowValues }
+  | { op: 'update'; table: string; row_id: number; values: RowValues }
+  | { op: 'delete'; table: string; row_id: number };
+
+export type TransactionPrecondition =
+  | { kind: 'absent'; table: string; equals: RowValues }
+  | { kind: 'row_matches'; table: string; row_id: number; equals: RowValues };
+
+export type TransactionResponse = {
+  /** False means a condition failed and Aelio DB appended no transaction. */
+  applied: boolean;
+  /** Durable WAL commit position shared by every mutation when `applied` is true. */
+  commit_lsn?: number;
+  results: Array<{ op: 'insert' | 'update' | 'delete'; row_id: number }>;
+};
+
 export type FilterClause = {
   col: string;
   op: 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le';

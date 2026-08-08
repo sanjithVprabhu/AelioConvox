@@ -18,6 +18,7 @@ const VERSION: u16 = 1;
 pub enum CatalogError {
     TableExists(String),
     NotFound(String),
+    ColumnExists { table: String, column: String },
 }
 
 impl fmt::Display for CatalogError {
@@ -25,6 +26,7 @@ impl fmt::Display for CatalogError {
         match self {
             CatalogError::TableExists(n) => write!(f, "table '{n}' already exists"),
             CatalogError::NotFound(n) => write!(f, "not found: {n}"),
+            CatalogError::ColumnExists { table, column } => write!(f, "column '{table}.{column}' already exists"),
         }
     }
 }
@@ -85,6 +87,30 @@ impl Catalog {
     }
     pub fn table_by_id(&self, id: u32) -> Option<&TableDef> {
         self.tables.get(&id)
+    }
+
+    /// Append new nullable columns to an existing table. Column ids are never reused; existing
+    /// rows simply have no value for the new field until updated, which reads as `NULL`.
+    pub fn add_columns(
+        &mut self,
+        table: &str,
+        columns: &[(&str, ColumnKind)],
+    ) -> Result<(), CatalogError> {
+        let definition = self
+            .tables
+            .get_mut(self.name_to_id.get(table).ok_or_else(|| CatalogError::NotFound(table.to_string()))?)
+            .ok_or_else(|| CatalogError::NotFound(table.to_string()))?;
+        for (name, _) in columns {
+            if definition.column(name).is_some() {
+                return Err(CatalogError::ColumnExists { table: table.to_string(), column: (*name).to_string() });
+            }
+        }
+        let mut next_id = definition.columns.iter().map(|column| column.column_id).max().unwrap_or(0) + 1;
+        for (name, kind) in columns {
+            definition.columns.push(ColumnDef { column_id: next_id, name: (*name).to_string(), kind: *kind });
+            next_id += 1;
+        }
+        Ok(())
     }
     pub fn tables(&self) -> impl Iterator<Item = &TableDef> {
         self.tables.values()

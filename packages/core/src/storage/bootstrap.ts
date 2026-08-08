@@ -170,6 +170,91 @@ function harnessTracesTableSchema(embedDim: number): ColumnSpec[] {
   ];
 }
 
+// ---- Stateful runtime tables ---------------------------------------------------------------
+
+function runtimeEventsTableSchema(): ColumnSpec[] {
+  return [
+    { name: 'event_id', kind: 'utf8' }, { name: 'tenant_id', kind: 'utf8' },
+    { name: 'subject_id', kind: 'utf8' }, { name: 'idempotency_key', kind: 'utf8' },
+    { name: 'kind', kind: 'utf8' }, { name: 'payload_json', kind: 'text' }, { name: 'received_at', kind: 'i64' },
+  ];
+}
+
+function runtimeSnapshotsTableSchema(): ColumnSpec[] {
+  return [
+    { name: 'tenant_id', kind: 'utf8' }, { name: 'subject_id', kind: 'utf8' },
+    { name: 'snapshot_key', kind: 'utf8' }, { name: 'revision', kind: 'i64' },
+    { name: 'payload_json', kind: 'text' }, { name: 'updated_at', kind: 'i64' },
+  ];
+}
+
+function runtimeLedgerTableSchema(): ColumnSpec[] {
+  return [
+    { name: 'record_id', kind: 'utf8' }, { name: 'tenant_id', kind: 'utf8' }, { name: 'subject_id', kind: 'utf8' },
+    { name: 'event_id', kind: 'utf8' }, { name: 'instance_id', kind: 'utf8' }, { name: 'kind', kind: 'utf8' },
+    { name: 'payload_json', kind: 'text' }, { name: 'created_at', kind: 'i64' },
+  ];
+}
+
+function runtimeOutboxTableSchema(): ColumnSpec[] {
+  return [
+    { name: 'effect_id', kind: 'utf8' }, { name: 'tenant_id', kind: 'utf8' }, { name: 'subject_id', kind: 'utf8' },
+    { name: 'event_id', kind: 'utf8' }, { name: 'idempotency_key', kind: 'utf8' }, { name: 'kind', kind: 'utf8' },
+    { name: 'status', kind: 'utf8' }, { name: 'payload_json', kind: 'text' }, { name: 'attempts', kind: 'i64' },
+    { name: 'available_at', kind: 'i64' }, { name: 'lease_token', kind: 'utf8' }, { name: 'lease_expires_at', kind: 'i64' },
+    { name: 'last_error', kind: 'text' }, { name: 'revision', kind: 'i64' }, { name: 'created_at', kind: 'i64' }, { name: 'updated_at', kind: 'i64' },
+  ];
+}
+
+function runtimeContinuationsTableSchema(): ColumnSpec[] {
+  return [
+    { name: 'token', kind: 'utf8' }, { name: 'tenant_id', kind: 'utf8' }, { name: 'subject_id', kind: 'utf8' },
+    { name: 'instance_id', kind: 'utf8' }, { name: 'status', kind: 'utf8' }, { name: 'prompt', kind: 'text' },
+    { name: 'payload_json', kind: 'text' }, { name: 'expires_at', kind: 'i64' }, { name: 'revision', kind: 'i64' },
+    { name: 'updated_at', kind: 'i64' },
+  ];
+}
+
+function scheduledEventsTableSchema(): ColumnSpec[] {
+  return [
+    { name: 'schedule_id', kind: 'utf8' }, { name: 'tenant_id', kind: 'utf8' }, { name: 'subject_id', kind: 'utf8' },
+    { name: 'due_at', kind: 'i64' }, { name: 'status', kind: 'utf8' }, { name: 'payload_json', kind: 'text' },
+    { name: 'lease_token', kind: 'utf8' }, { name: 'lease_expires_at', kind: 'i64' }, { name: 'revision', kind: 'i64' },
+  ];
+}
+
+function workflowArtifactsTableSchema(): ColumnSpec[] {
+  return [
+    { name: 'artifact_id', kind: 'utf8' }, { name: 'version', kind: 'utf8' }, { name: 'digest', kind: 'utf8' },
+    { name: 'status', kind: 'utf8' }, { name: 'definition_json', kind: 'text' }, { name: 'created_at', kind: 'i64' },
+  ];
+}
+
+function workflowInstancesTableSchema(): ColumnSpec[] {
+  return [
+    { name: 'instance_id', kind: 'utf8' }, { name: 'tenant_id', kind: 'utf8' }, { name: 'subject_id', kind: 'utf8' },
+    { name: 'artifact_id', kind: 'utf8' }, { name: 'artifact_version', kind: 'utf8' }, { name: 'parent_instance_id', kind: 'utf8' },
+    { name: 'status', kind: 'utf8' }, { name: 'state_json', kind: 'text' }, { name: 'revision', kind: 'i64' },
+    { name: 'updated_at', kind: 'i64' },
+  ];
+}
+
+function promptArtifactsTableSchema(): ColumnSpec[] {
+  return [
+    { name: 'prompt_id', kind: 'utf8' }, { name: 'version', kind: 'utf8' }, { name: 'digest', kind: 'utf8' },
+    { name: 'status', kind: 'utf8' }, { name: 'purpose', kind: 'utf8' }, { name: 'template_json', kind: 'text' },
+    { name: 'created_at', kind: 'i64' },
+  ];
+}
+
+function promptLedgerTableSchema(): ColumnSpec[] {
+  return [
+    { name: 'ledger_id', kind: 'utf8' }, { name: 'tenant_id', kind: 'utf8' }, { name: 'event_id', kind: 'utf8' },
+    { name: 'prompt_id', kind: 'utf8' }, { name: 'prompt_version', kind: 'utf8' }, { name: 'input_digest', kind: 'utf8' },
+    { name: 'output_digest', kind: 'utf8' }, { name: 'created_at', kind: 'i64' },
+  ];
+}
+
 export async function bootstrapSunjetTables(
   client: SunjetClient,
   tables: SunjetTableNames,
@@ -186,4 +271,14 @@ export async function bootstrapSunjetTables(
   await client.ensureTable(tables.harnessSuspensions, harnessSuspensionsTableSchema());
   await client.ensureTable(tables.harnessLedger, harnessLedgerTableSchema());
   await client.ensureTable(tables.harnessTraces, harnessTracesTableSchema(embedDim));
+  await client.ensureTable(tables.runtimeEvents, runtimeEventsTableSchema());
+  await client.ensureTable(tables.runtimeSnapshots, runtimeSnapshotsTableSchema());
+  await client.ensureTable(tables.runtimeLedger, runtimeLedgerTableSchema());
+  await client.ensureTable(tables.runtimeOutbox, runtimeOutboxTableSchema());
+  await client.ensureTable(tables.runtimeContinuations, runtimeContinuationsTableSchema());
+  await client.ensureTable(tables.scheduledEvents, scheduledEventsTableSchema());
+  await client.ensureTable(tables.workflowArtifacts, workflowArtifactsTableSchema());
+  await client.ensureTable(tables.workflowInstances, workflowInstancesTableSchema());
+  await client.ensureTable(tables.promptArtifacts, promptArtifactsTableSchema());
+  await client.ensureTable(tables.promptLedger, promptLedgerTableSchema());
 }

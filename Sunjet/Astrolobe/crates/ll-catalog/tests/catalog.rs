@@ -80,3 +80,19 @@ fn persistence_roundtrip() {
     let id = loaded.create_table("third", &[("a", ColumnKind::Bool)]).unwrap();
     assert_eq!(id, 3);
 }
+
+#[test]
+fn additive_columns_preserve_ids_and_survive_reload() {
+    let tmp = Tmp::new();
+    let mut cat = Catalog::new();
+    cat.create_table("events", &[("event_id", ColumnKind::Utf8)]).unwrap();
+    cat.add_columns("events", &[("revision", ColumnKind::I64), ("lease", ColumnKind::Utf8)]).unwrap();
+    let table = cat.table("events").unwrap();
+    assert_eq!(table.column("event_id").unwrap().column_id, 1);
+    assert_eq!(table.column("revision").unwrap().column_id, 2);
+    assert_eq!(table.column("lease").unwrap().column_id, 3);
+    cat.save(&tmp.0).unwrap();
+    let mut loaded = Catalog::load(&tmp.0).unwrap();
+    assert_eq!(loaded.table("events").unwrap().columns.len(), 3);
+    assert!(loaded.add_columns("events", &[("lease", ColumnKind::Utf8)]).is_err());
+}

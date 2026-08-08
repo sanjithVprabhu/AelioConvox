@@ -1,4 +1,12 @@
-import type { ConvoxMessageStore, HarnessTracer, LighthouseService, SuspensionStore } from '@aelio/core';
+import type {
+  AelioMemoryStore,
+  AelioRuntimeStore,
+  AelioSuspensionStore,
+  ConvoxMessageStore,
+  HarnessTracer,
+  LighthouseService,
+  SuspensionStore,
+} from '@aelio/core';
 import type { AelioDatabase } from '@aelio/db';
 import type { LLMProvider } from '@aelio/llm';
 import type { WhatsAppSender } from '@aelio/channels';
@@ -16,5 +24,10 @@ export type RuntimeDeps = {
   suspensionStore: SuspensionStore;
   whatsappSender: WhatsAppSender | null;
   sunjetClient: SunjetClient | null;
+  runtimeStore: AelioRuntimeStore | null;
+  /** Aelio DB parked plans — the runtime's own park/resume record, independent of SQLite. */
+  runtimeSuspensionStore: AelioSuspensionStore | null;
+  /** Aelio DB subject memory used for runtime recall/write. */
+  runtimeMemory: AelioMemoryStore | null;
   messageStore: ConvoxMessageStore | null;
 };

@@ -14,7 +14,7 @@ import { runSynthesis } from './synthesis.js';
 import { rehydrateSuspension, toSuspensionPayload } from './resume.js';
 import { applyStateTransition } from './transitions.js';
 import { isConfirmationMessage, isDenialMessage } from '../safety/confirmations.js';
-import type { SuspensionStore } from './suspension.js';
+import type { SuspensionStorePort } from './suspension.js';
 import type { HarnessTracer, TraceKind } from './traces.js';
 import {
   DEFAULT_BINDING,
@@ -54,10 +54,16 @@ export type HarnessRunInput = {
   presentFields?: Set<string>;
   lighthouse?: LighthouseService;
   tracer?: HarnessTracer;
-  suspensionStore?: SuspensionStore;
+  suspensionStore?: SuspensionStorePort;
   budgets?: HarnessBudgets;
   binding?: HarnessBindingConfig;
   turnId?: string;
+  /**
+   * Called after each successful tool call. The Aelio DB runtime supplies this to apply
+   * declarative lifecycle transitions into its own durable snapshot; when it is absent and a
+   * SQLite database is present, the legacy Drizzle transition writer is used instead.
+   */
+  onToolSuccess?: (toolName: string) => Promise<void>;
 };
 
 /**
@@ -194,7 +200,7 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
  */
 async function resumeSuspended(
   input: HarnessRunInput,
-  suspended: NonNullable<Awaited<ReturnType<SuspensionStore['get']>>>,
+  suspended: NonNullable<Awaited<ReturnType<SuspensionStorePort['get']>>>,
   budgets: BudgetMeter,
   trace: (kind: TraceKind, payload: unknown) => void,
 ): Promise<ToolLoopResult | null> {
@@ -305,9 +311,25 @@ function buildExecutorDeps(
     ...(input.internalCustomerId ? { internalCustomerId: input.internalCustomerId } : {}),
     ...(input.turnId ? { turnId: input.turnId } : {}),
     trace: (kind: 'wave' | 'gate' | 'repair', payload: unknown) => trace(kind, payload),
+    // An explicit hook owns transitions when the caller supplies one (the Aelio DB runtime does);
+    // it is wrapped identically so a transition write can never reject the executor's wave.
+    ...(input.onToolSuccess
+      ? {
+          onToolSuccess: async (toolName: string) => {
+            try {
+              await input.onToolSuccess!(toolName);
+            } catch (error) {
+              console.error(
+                '[aelio] state transition failed (tool already ran):',
+                error instanceof Error ? error.message : String(error),
+              );
+            }
+          },
+        }
+      : {}),
     // Declarative lifecycle transitions on tool success. context.customerId is
     // the external id (what upsertCustomerLifecycleState keys on).
-    ...(input.database && input.state?.transitions?.length
+    ...(!input.onToolSuccess && input.database && input.state?.transitions?.length
       ? {
           onToolSuccess: async (toolName: string) => {
             // Best-effort: a transition write must never reject the executor's

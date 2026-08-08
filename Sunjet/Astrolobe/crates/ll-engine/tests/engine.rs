@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ll_engine::{Engine, Row, Value};
+use ll_engine::{Engine, Row, Value, WriteOp};
 use ll_format::{read_file, ColumnValues};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -58,6 +58,70 @@ fn writes_survive_recovery() {
         let e = Engine::recover(&wal.0).unwrap();
         assert_eq!(e.live_count(), 3);
         assert_eq!(e.get(40).unwrap().get(&1), Some(&Value::Utf8("dave".into())));
+    }
+}
+
+#[test]
+fn committed_batch_is_visible_and_recovers_atomically() {
+    let wal = Tmp::new("batch.log");
+    {
+        let mut e = Engine::create(&wal.0, 1).unwrap();
+        let commit = e
+            .transact(vec![
+                WriteOp::Put { row_id: 10, row: row("alice", 100) },
+                WriteOp::Put { row_id: 20, row: row("bob", 200) },
+            ])
+            .unwrap();
+        assert!(commit > 0);
+        assert_eq!(e.live_count(), 2);
+    }
+    let recovered = Engine::recover(&wal.0).unwrap();
+    assert_eq!(recovered.live_count(), 2);
+    assert_eq!(recovered.get(10).unwrap().get(&1), Some(&Value::Utf8("alice".into())));
+    assert_eq!(recovered.get(20).unwrap().get(&2), Some(&Value::I64(200)));
+}
+
+/// A batch must appear at exactly one LSN. Stamping each row with its own record LSN would let a
+/// reader whose snapshot falls between two records of the same transaction observe half of it —
+/// and would make the LSN `transact` returns unusable as a read-your-writes snapshot.
+#[test]
+fn a_batch_is_invisible_at_every_snapshot_before_its_commit() {
+    let wal = Tmp::new("atomic.log");
+    let mut e = Engine::create(&wal.0, 1).unwrap();
+
+    let first = e.transact(vec![WriteOp::Put { row_id: 1, row: row("seed", 1) }]).unwrap();
+    let commit = e
+        .transact(vec![
+            WriteOp::Put { row_id: 10, row: row("alice", 100) },
+            WriteOp::Put { row_id: 20, row: row("bob", 200) },
+            WriteOp::Put { row_id: 30, row: row("carol", 300) },
+        ])
+        .unwrap();
+    assert!(commit > first + 1, "the batch must span more than one WAL record");
+
+    let mem = e.memtable();
+    // Every snapshot strictly before the commit sees none of the batch, including snapshots that
+    // sit between the batch's individual record LSNs.
+    for snapshot in first..commit {
+        for row_id in [10u64, 20, 30] {
+            assert!(
+                mem.get(row_id, snapshot).is_none(),
+                "row {row_id} leaked at snapshot {snapshot} (commit was {commit})",
+            );
+        }
+    }
+    // At the commit LSN the whole batch is visible at once.
+    for row_id in [10u64, 20, 30] {
+        assert!(mem.get(row_id, commit).is_some(), "row {row_id} missing at the commit snapshot");
+    }
+
+    // Recovery must reproduce exactly the same visibility boundary.
+    drop(e);
+    let recovered = Engine::recover(&wal.0).unwrap();
+    let mem = recovered.memtable();
+    for row_id in [10u64, 20, 30] {
+        assert!(mem.get(row_id, commit - 1).is_none(), "row {row_id} leaked after recovery");
+        assert!(mem.get(row_id, commit).is_some(), "row {row_id} missing after recovery");
     }
 }
 

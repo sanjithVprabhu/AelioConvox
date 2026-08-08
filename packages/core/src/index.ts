@@ -5,6 +5,59 @@ export {
 } from './runtime/turn.js';
 export { withSessionLock } from './runtime/session-lock.js';
 export {
+  AelioRuntimeStore,
+  type RuntimeContinuation,
+  type RuntimePromptArtifact,
+  type RuntimePromptTemplate,
+  type RuntimeInstanceRecord,
+  type RuntimeInstanceTransition,
+  type RuntimeOutboxEffect,
+  type RuntimeScheduledEvent,
+} from './runtime/aelio-runtime-store.js';
+export {
+  assertRuntimeArtifact,
+  assertRuntimeEvent,
+  type JsonValue,
+  type RuntimeArtifactV1,
+  type RuntimeDecisionV1,
+  type RuntimeEffectV1,
+  type RuntimeEventKind,
+  type RuntimeEventV1,
+  type RuntimeLedgerRecordV1,
+  type RuntimeInstanceV1,
+  type RuntimeNodeV1,
+  type RuntimeSnapshotV1,
+} from './runtime/contracts.js';
+export { runConductorEvent, type Conductor, type ConductorResult } from './runtime/conductor.js';
+export {
+  createAelioConductor,
+  readSubjectState,
+  type AelioConductorConfig,
+  type AelioSubjectState,
+  type AelioTurnDelivery,
+  type RuntimeEffectJournal,
+} from './runtime/aelio-conductor.js';
+export { AelioSuspensionStore } from './runtime/aelio-suspension-store.js';
+export { AelioMemoryStore, type AelioMemoryRecord } from './runtime/aelio-memory.js';
+export {
+  DEFAULT_MAX_ARTIFACT_STEPS,
+  executeRuntimeArtifact,
+  startArtifactCursor,
+  stepRuntimeArtifact,
+  type ArtifactCursor,
+  type ArtifactExecutionResult,
+  type ArtifactNodeContext,
+  type ArtifactStepResult,
+  type RuntimeArtifactHost,
+} from './runtime/artifact-executor.js';
+export { DEFAULT_RUNTIME_ARTIFACTS, findDefaultRuntimeArtifact } from './runtime/default-artifacts.js';
+export {
+  dispatchPendingEffects,
+  INTERNAL_EFFECT_KINDS,
+  type RedeliverySafetyPolicy,
+  type RuntimeEffectHandler,
+} from './runtime/outbox.js';
+export {
   buildLlmPromptSummary,
   createInstrumentedLlm,
   getTurnContext,
@@ -73,6 +126,7 @@ export {
   type MessageStoreHistoryRow,
   type SunjetStorageConfig,
   type SunjetTableNames,
+  type AelioStorageTableNames,
 } from './storage/index.js';
 export { loadSessionSummary, maybeSummarizeSession } from './session/summary.js';
 export {
@@ -180,7 +234,12 @@ export {
   type HarnessBudgets,
   type HarnessBindingConfig,
 } from './harness/schema.js';
-export { SuspensionStore, type SuspendedPlanRecord, type SuspensionStoreConfig } from './harness/suspension.js';
+export {
+  SuspensionStore,
+  type SuspendedPlanRecord,
+  type SuspensionStoreConfig,
+  type SuspensionStorePort,
+} from './harness/suspension.js';
 export { HarnessTracer, type TraceKind, type HarnessTracerConfig } from './harness/traces.js';
 export {
   runHarness,
