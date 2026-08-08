@@ -92,6 +92,24 @@ export type RuntimeScheduledEvent = {
 };
 
 const MAX_CHILD_SCAN = 256;
+const HEALTH_SCAN_CAP = 256;
+
+/** One immutable ledger record, as the replay/inspection surface returns it. */
+export type RuntimeLedgerEntry = {
+  recordId: string;
+  instanceId: string;
+  subjectId: string;
+  kind: RuntimeLedgerRecordV1['kind'];
+  payload: JsonValue;
+  createdAt: number;
+};
+
+export type RuntimeHealth = {
+  outbox: { pending: number; dispatching: number; failed: number; unknown: number; oldestPendingAgeMs: number };
+  scheduler: { due: number; leased: number };
+  instances: { running: number; waiting: number; failed: number };
+  truncatedAt: number;
+};
 
 const utf8 = (value: string): ApiValue => ({ type: 'utf8', value });
 const i64 = (value: number): ApiValue => ({ type: 'i64', value });
@@ -596,6 +614,101 @@ export class AelioRuntimeStore {
     return { requeued, unknown };
   }
 
+  /**
+   * The ledger chain for one event, in commit order — the replay surface.
+   *
+   * Ordering is by `created_at` then record id: `created_at` alone is not a total order because a
+   * single transaction stamps every record with the same millisecond.
+   */
+  async listLedgerForEvent(tenantId: string, eventId: string, limit = 512): Promise<RuntimeLedgerEntry[]> {
+    const rows = await this.client.scanRows(this.tables.runtimeLedger, {
+      k: Math.min(Math.max(limit, 1), 1024),
+      filters: [
+        { col: 'tenant_id', op: 'eq', value: utf8(tenantId) },
+        { col: 'event_id', op: 'eq', value: utf8(eventId) },
+      ],
+    });
+    return rows.rows
+      .map((row) => ({
+        recordId: readUtf8(row.values, 'record_id'),
+        instanceId: readUtf8(row.values, 'instance_id'),
+        subjectId: readUtf8(row.values, 'subject_id'),
+        kind: readUtf8(row.values, 'kind') as RuntimeLedgerRecordV1['kind'],
+        payload: parseJson(readUtf8(row.values, 'payload_json')),
+        createdAt: readI64(row.values, 'created_at'),
+      }))
+      .sort((a, b) => a.createdAt - b.createdAt || (a.recordId < b.recordId ? -1 : 1));
+  }
+
+  /** Instances for a subject, newest first. The operator view for "what is this subject doing?". */
+  async listSubjectInstances(tenantId: string, subjectId: string, limit = 64): Promise<RuntimeInstanceRecord[]> {
+    const rows = await this.client.scanRows(this.tables.workflowInstances, {
+      k: Math.min(Math.max(limit, 1), 256),
+      filters: [
+        { col: 'tenant_id', op: 'eq', value: utf8(tenantId) },
+        { col: 'subject_id', op: 'eq', value: utf8(subjectId) },
+      ],
+    });
+    return rows.rows.map((row) => parseInstance(row.row_id, row.values)).sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /**
+   * Operator cancel. Only a live instance may be cancelled, under CAS, so it cannot race a worker
+   * that is mid-step — the worker's own transition will simply lose and hand the work back.
+   */
+  async cancelInstance(tenantId: string, instanceId: string, reason: string): Promise<'cancelled' | 'not_found' | 'already_terminal' | 'conflict'> {
+    const instance = await this.loadInstance(tenantId, instanceId);
+    if (!instance) return 'not_found';
+    if (instance.status === 'completed' || instance.status === 'failed' || instance.status === 'cancelled') {
+      return 'already_terminal';
+    }
+    const applied = await this.commitInstanceTransition({
+      instance,
+      eventId: `admin:cancel:${instance.instanceId}`,
+      status: 'cancelled',
+      state: { ...asStateObject(instance.state), cancelledReason: reason.slice(0, 500) },
+      ledger: [{
+        recordId: randomUUID(), instanceId: instance.instanceId, kind: 'decision',
+        payload: { admin: 'cancel', reason: reason.slice(0, 500) },
+      }],
+    });
+    return applied ? 'cancelled' : 'conflict';
+  }
+
+  /** Queue depths and ages an operator needs to tell "busy" from "wedged". */
+  async health(now = Date.now()): Promise<RuntimeHealth> {
+    const count = async (table: string, status: string): Promise<number> => {
+      const rows = await this.client.scanRows(table, {
+        k: HEALTH_SCAN_CAP, filters: [{ col: 'status', op: 'eq', value: utf8(status) }],
+      });
+      return rows.rows.length;
+    };
+    const pending = await this.listPendingEffects(HEALTH_SCAN_CAP, now);
+    const unknown = await this.listUnknownEffects(HEALTH_SCAN_CAP);
+    const dueSchedules = await this.listDueScheduledEvents(now, HEALTH_SCAN_CAP);
+    const oldestPendingAgeMs = pending.reduce((oldest, effect) => Math.max(oldest, now - effect.availableAt), 0);
+    return {
+      outbox: {
+        pending: pending.length,
+        dispatching: await count(this.tables.runtimeOutbox, 'dispatching'),
+        failed: await count(this.tables.runtimeOutbox, 'failed'),
+        unknown: unknown.length,
+        oldestPendingAgeMs,
+      },
+      scheduler: {
+        due: dueSchedules.length,
+        leased: await count(this.tables.scheduledEvents, 'leased'),
+      },
+      instances: {
+        running: await count(this.tables.workflowInstances, 'running'),
+        waiting: await count(this.tables.workflowInstances, 'waiting'),
+        failed: await count(this.tables.workflowInstances, 'failed'),
+      },
+      /** Truncation means the real number is at least this; the cap keeps health cheap. */
+      truncatedAt: HEALTH_SCAN_CAP,
+    };
+  }
+
   /** Effects whose external outcome could not be determined. An operator or a reconcile job owns these. */
   async listUnknownEffects(limit = 32): Promise<RuntimeOutboxEffect[]> {
     const rows = await this.client.scanRows(this.tables.runtimeOutbox, {
@@ -735,6 +848,10 @@ export class AelioRuntimeStore {
     });
     return rows.rows.length > 0;
   }
+}
+
+function asStateObject(value: JsonValue): Record<string, JsonValue> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
 function scopedEventKey(event: RuntimeEventV1): string {

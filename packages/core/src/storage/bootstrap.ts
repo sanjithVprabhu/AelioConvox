@@ -1,5 +1,11 @@
 import type { ColumnSpec, SunjetClient } from '@aelio/sunjet-client';
 import type { SunjetTableNames } from './types.js';
+import {
+  AelioMigrationRunner,
+  migrationsTableSchema,
+  type AelioMigration,
+  type MigrationOutcome,
+} from './migrations.js';
 
 function vectorColumn(name: string, dim: number): ColumnSpec {
   return { name, kind: 'vector', dim };
@@ -255,11 +261,91 @@ function promptLedgerTableSchema(): ColumnSpec[] {
   ];
 }
 
+/**
+ * Every schema change this build knows about, in order.
+ *
+ * Append here; never edit an entry that has shipped. The runner records each by id and refuses to
+ * proceed if an applied migration's definition has changed underneath it, so an accidental edit
+ * surfaces at boot rather than as corrupt rows later.
+ */
+export function aelioSchemaMigrations(embedDim: number): AelioMigration[] {
+  return [
+    {
+      id: '0001-conversation-core',
+      version: 1,
+      description: 'Messages, conversations, memories, compactions, and runtime key/value state.',
+      kind: 'additive',
+      apply: async (client, tables) => {
+        await client.ensureTable(tables.messages, messagesTableSchema(embedDim));
+        await client.ensureTable(tables.conversations, conversationsTableSchema(embedDim));
+        await client.ensureTable(tables.memories, memoriesTableSchema(embedDim));
+        await client.ensureTable(tables.compactions, compactionsTableSchema(embedDim));
+        await client.ensureTable(tables.runtimeState, runtimeStateTableSchema());
+      },
+    },
+    {
+      id: '0002-harness-catalog',
+      version: 2,
+      description: 'Lighthouse tool/capability mirrors, binding cache, suspensions, ledger, traces.',
+      kind: 'additive',
+      apply: async (client, tables) => {
+        await client.ensureTable(tables.harnessTools, harnessToolsTableSchema(embedDim));
+        await client.ensureTable(tables.harnessCapabilities, harnessCapabilitiesTableSchema(embedDim));
+        await client.ensureTable(tables.harnessBindings, harnessBindingsTableSchema(embedDim));
+        await client.ensureTable(tables.harnessSuspensions, harnessSuspensionsTableSchema());
+        await client.ensureTable(tables.harnessLedger, harnessLedgerTableSchema());
+        await client.ensureTable(tables.harnessTraces, harnessTracesTableSchema(embedDim));
+      },
+    },
+    {
+      id: '0003-stateful-runtime',
+      version: 3,
+      description: 'Event inbox, subject snapshots, ledger, outbox, continuations, schedules, artifacts, instances, prompts.',
+      kind: 'additive',
+      apply: async (client, tables) => {
+        await client.ensureTable(tables.runtimeEvents, runtimeEventsTableSchema());
+        await client.ensureTable(tables.runtimeSnapshots, runtimeSnapshotsTableSchema());
+        await client.ensureTable(tables.runtimeLedger, runtimeLedgerTableSchema());
+        await client.ensureTable(tables.runtimeOutbox, runtimeOutboxTableSchema());
+        await client.ensureTable(tables.runtimeContinuations, runtimeContinuationsTableSchema());
+        await client.ensureTable(tables.scheduledEvents, scheduledEventsTableSchema());
+        await client.ensureTable(tables.workflowArtifacts, workflowArtifactsTableSchema());
+        await client.ensureTable(tables.workflowInstances, workflowInstancesTableSchema());
+        await client.ensureTable(tables.promptArtifacts, promptArtifactsTableSchema());
+        await client.ensureTable(tables.promptLedger, promptLedgerTableSchema());
+      },
+    },
+  ];
+}
+
+/**
+ * Bring an Aelio DB up to the schema this build requires, under the migration lock.
+ *
+ * `ensureTable` is additive and idempotent, so re-running is safe; the ledger exists so the
+ * deployment can *prove* which schema a database is on, refuse an older binary against a newer
+ * schema, and serialize concurrent replicas booting together.
+ */
+export async function migrateAelioStorage(
+  client: SunjetClient,
+  tables: SunjetTableNames,
+  embedDim: number,
+  options: { allowDestructive?: boolean } = {},
+): Promise<MigrationOutcome> {
+  await client.ensureTable(tables.migrations, migrationsTableSchema());
+  const runner = new AelioMigrationRunner(client, tables);
+  return runner.migrate(aelioSchemaMigrations(embedDim), options);
+}
+
+/**
+ * Direct table creation without the migration ledger. Retained for tests and tooling that want a
+ * scratch database; production boot goes through `migrateAelioStorage`.
+ */
 export async function bootstrapSunjetTables(
   client: SunjetClient,
   tables: SunjetTableNames,
   embedDim: number,
 ): Promise<void> {
+  await client.ensureTable(tables.migrations, migrationsTableSchema());
   await client.ensureTable(tables.messages, messagesTableSchema(embedDim));
   await client.ensureTable(tables.conversations, conversationsTableSchema(embedDim));
   await client.ensureTable(tables.memories, memoriesTableSchema(embedDim));

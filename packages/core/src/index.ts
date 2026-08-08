@@ -9,8 +9,10 @@ export {
   type RuntimeContinuation,
   type RuntimePromptArtifact,
   type RuntimePromptTemplate,
+  type RuntimeHealth,
   type RuntimeInstanceRecord,
   type RuntimeInstanceTransition,
+  type RuntimeLedgerEntry,
   type RuntimeOutboxEffect,
   type RuntimeScheduledEvent,
 } from './runtime/aelio-runtime-store.js';
@@ -114,8 +116,16 @@ export {
   touchSessionActivity,
 } from './session/lifecycle.js';
 export {
+  aelioSchemaMigrations,
+  AelioMigrationRunner,
   appendConversationRecord,
   bootstrapSunjetTables,
+  migrateAelioStorage,
+  MigrationLockedError,
+  migrationChecksum,
+  type AelioMigration,
+  type MigrationOutcome,
+  type MigrationRecord,
   buildConversationContext,
   ConvoxMessageStore,
   createConvoxMessageStore,

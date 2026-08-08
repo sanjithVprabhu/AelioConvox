@@ -13,6 +13,11 @@
  *   F. artifact crash between nodes — resumes at the next node, never re-runs a completed one
  *   G. detached child spawn + join — parent parks, child wakes it, output arrives
  *   H. Aelio DB restart — WAL recovery preserves state, ledger, outbox, and idempotency exactly
+ *   I. schema migrations — applied once, locked against concurrent migrators, fail closed on a
+ *      newer schema or an edited migration, and refuse destructive steps by default
+ *   J. cross-channel continuity — one subject over web, WhatsApp, and SDK shares durable state
+ *   K. tenant isolation — no read, resume, or inference across tenants
+ *   L. restore drill — flush to segments, hard restart, and every runtime row hashes identically
  *
  * Usage: node scripts/test-aelio-runtime-faults.mjs
  */
@@ -22,13 +27,17 @@ import { mkdtempSync, rmSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
+  AelioMigrationRunner,
   AelioRuntimeStore,
   AelioSuspensionStore,
+  aelioSchemaMigrations,
   bootstrapSunjetTables,
   createAelioConductor,
   dispatchPendingEffects,
+  migrateAelioStorage,
+  MigrationLockedError,
   runConductorEvent,
 } from '@aelio/core';
 import { SunjetClient } from '@aelio/sunjet-client';
@@ -128,6 +137,7 @@ function tableNames(suffix) {
     runtimeContinuations: name('runtime_continuations'), scheduledEvents: name('scheduled_events'),
     workflowArtifacts: name('workflow_artifacts'), workflowInstances: name('workflow_instances'),
     promptArtifacts: name('prompt_artifacts'), promptLedger: name('prompt_ledger'),
+    migrations: name('schema_migrations'),
   };
 }
 
@@ -220,10 +230,45 @@ const event = (subjectId, message, idempotencyKey, extra = {}) => ({
   kind: 'user_message', payload: { message, channel: 'web', ...extra }, receivedAt: Date.now(),
 });
 
+const object = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
+
 const cancelPlan = () => ({
   mode: 'plan', goal: 'Cancel order 42',
   instructions: [{ id: 'a', capability: 'cancel an order', tool: 'cancel_order', args_hint: { order_id: '42' } }],
 });
+
+/**
+ * Content hash of every runtime table, row by row. Sorting the per-row hashes makes the digest
+ * independent of scan order, so a difference means the DATA changed, not the ordering.
+ */
+async function hashRuntimeTables(client, tables) {
+  const runtimeTables = [
+    tables.runtimeEvents, tables.runtimeSnapshots, tables.runtimeLedger, tables.runtimeOutbox,
+    tables.runtimeContinuations, tables.scheduledEvents, tables.workflowArtifacts, tables.workflowInstances,
+  ];
+  const byTable = {};
+  let total = 0;
+  for (const table of runtimeTables) {
+    const rows = await client.scanRows(table, { k: 1024 });
+    const perRow = rows.rows
+      .map((row) => createHash('sha256').update(JSON.stringify(canonicalRow(row.values))).digest('hex'))
+      .sort();
+    total += perRow.length;
+    byTable[table] = createHash('sha256').update(perRow.join('|')).digest('hex').slice(0, 32);
+  }
+  return { byTable, total };
+}
+
+/** Key-sorted so two encodings of the same row hash the same. Vectors are reduced to a length. */
+function canonicalRow(values) {
+  return Object.keys(values)
+    .sort()
+    .map((key) => {
+      const value = values[key];
+      if (value?.type === 'vector') return [key, `vector(${value.value.length})`];
+      return [key, value];
+    });
+}
 
 /** The narrow slice of RuntimeDeps the artifact runner needs for compute-only artifacts. */
 function artifactDeps(store) {
@@ -565,6 +610,207 @@ async function main() {
       // A redelivered wake must not re-drive a finished parent.
       const wakes = (await store.listPendingEffects(64, Date.now() + 60_000)).filter((e) => e.kind === 'harness.resume');
       check(wakes.length === 0, 'no wake effect was left pending after the join resolved');
+    }
+
+    // ---- I. Schema migrations -------------------------------------------------------------------
+    section('I. Schema migration ledger and lock');
+    {
+      // A fresh namespace so migration state is not shared with the bootstrapped tables above.
+      const migTables = tableNames(`mig${String(Date.now()).slice(-6)}`);
+      const first = await migrateAelioStorage(client, migTables, EMBED_DIM);
+      check(first.applied.length === 3, `first boot applied all 3 migrations (got ${first.applied.length})`);
+      check(first.schemaVersion === 3, 'schema version is 3 after first boot');
+
+      const second = await migrateAelioStorage(client, migTables, EMBED_DIM);
+      check(second.applied.length === 0, 'a second boot applies nothing');
+      check(second.skipped.length === 3, 'a second boot recognises all 3 as already applied');
+
+      const runner = new AelioMigrationRunner(client, migTables, 'owner-a');
+      check((await runner.schemaVersion()) === 3, 'the recorded schema version is readable');
+
+      // An older binary must refuse to boot against a schema it does not know.
+      let refusedFuture = false;
+      try {
+        await runner.migrate(aelioSchemaMigrations(EMBED_DIM).slice(0, 2));
+      } catch (error) {
+        refusedFuture = /does not know about/.test(String(error));
+      }
+      check(refusedFuture, 'an older build refuses to boot against a newer schema');
+
+      // An applied migration whose definition changed must be caught, not silently ignored.
+      const edited = aelioSchemaMigrations(EMBED_DIM).map((migration) =>
+        migration.id === '0002-harness-catalog' ? { ...migration, description: 'edited after shipping' } : migration);
+      let refusedEdit = false;
+      try {
+        await runner.migrate(edited);
+      } catch (error) {
+        refusedEdit = /different definition/.test(String(error));
+      }
+      check(refusedEdit, 'an edited already-applied migration is refused');
+
+      // Destructive steps are refused unless explicitly enabled.
+      let destructiveRan = false;
+      const destructive = [
+        ...aelioSchemaMigrations(EMBED_DIM),
+        {
+          id: '0004-drop-something', version: 4, kind: 'destructive',
+          description: 'A non-additive change.',
+          apply: async () => { destructiveRan = true; },
+        },
+      ];
+      let refusedDestructive = false;
+      try {
+        await runner.migrate(destructive);
+      } catch (error) {
+        refusedDestructive = /destructive/.test(String(error));
+      }
+      check(refusedDestructive, 'a destructive migration is refused by default');
+      check(!destructiveRan, 'the refused destructive migration did not run');
+
+      const allowed = await runner.migrate(destructive, { allowDestructive: true });
+      check(destructiveRan, 'the destructive migration runs when explicitly allowed');
+      check(allowed.schemaVersion === 4, 'schema version advanced to 4');
+
+      // Two migrators cannot hold the lock at once; the loser is told who holds it.
+      const lockTables = tableNames(`lock${String(Date.now()).slice(-6)}`);
+      await client.ensureTable(lockTables.migrations, [
+        { name: 'migration_id', kind: 'utf8' }, { name: 'version', kind: 'i64' }, { name: 'status', kind: 'utf8' },
+        { name: 'checksum', kind: 'utf8' }, { name: 'applied_at', kind: 'i64' }, { name: 'lease_owner', kind: 'utf8' },
+        { name: 'lease_expires_at', kind: 'i64' }, { name: 'revision', kind: 'i64' }, { name: 'description', kind: 'utf8' },
+      ]);
+      const slow = new AelioMigrationRunner(client, lockTables, 'owner-slow');
+      let held = null;
+      const blocker = slow.migrate([{
+        id: 'lock-test', version: 1, kind: 'additive', description: 'holds the lock',
+        apply: async () => { held = new Promise((done) => setTimeout(done, 700)); await held; },
+      }]);
+      await sleep(150);
+      let lockRefused = false;
+      try {
+        await new AelioMigrationRunner(client, lockTables, 'owner-fast').migrate([{
+          id: 'lock-test-2', version: 2, kind: 'additive', description: 'wants the lock',
+          apply: async () => {},
+        }]);
+      } catch (error) {
+        lockRefused = error instanceof MigrationLockedError;
+      }
+      await blocker;
+      check(lockRefused, 'a second migrator is refused while the lock is held');
+
+      // Once released, the lock is takeable again.
+      const after = await new AelioMigrationRunner(client, lockTables, 'owner-fast').migrate([
+        { id: 'lock-test', version: 1, kind: 'additive', description: 'holds the lock', apply: async () => {} },
+        { id: 'lock-test-2', version: 2, kind: 'additive', description: 'wants the lock', apply: async () => {} },
+      ]);
+      check(after.applied.length === 1 && after.applied[0].id === 'lock-test-2', 'the released lock lets the next migrator finish the job');
+    }
+
+    // ---- J. Cross-channel continuity --------------------------------------------------------------
+    section('J. Cross-channel subject continuity');
+    {
+      const subject = `subject-${randomUUID()}`;
+      const sdk = stubSdk();
+      const conductor = createAelioConductor(conductorConfig({
+        llm: scriptedLlm({ plan: () => ({ mode: 'reply', text: 'noted' }), synthesis: () => '' }),
+        sdk, suspensionStore, effectJournal: store,
+      }));
+
+      // The same subject arrives on three channels. Web is synchronous; the other two ask for
+      // durable delivery.
+      const web = await runConductorEvent(store, conductor, event(subject, 'from the website', `k-${randomUUID()}`));
+      const wa = await runConductorEvent(store, conductor, event(subject, 'now from whatsapp', `k-${randomUUID()}`, {
+        channel: 'whatsapp', delivery: { channel: 'whatsapp', to: '+15550100' },
+      }));
+      const sdkTurn = await runConductorEvent(store, conductor, event(subject, 'and from the sdk', `k-${randomUUID()}`, {
+        channel: 'sdk', delivery: { channel: 'slack', to: 'U123' },
+      }));
+      check([web, wa, sdkTurn].every((result) => result.status === 'committed'), 'all three channel turns committed');
+
+      const snapshot = await store.loadSnapshot(TENANT, subject);
+      check(snapshot?.revision === 3, 'one subject, one state, three revisions');
+      check(snapshot?.state.turns === 3, 'the turn counter is shared across channels');
+      const contents = (snapshot?.state.history ?? []).map((entry) => entry.content);
+      check(
+        contents.includes('from the website') && contents.includes('now from whatsapp') && contents.includes('and from the sdk'),
+        'history from every channel is in the one shared subject state',
+      );
+      check(snapshot?.state.lastChannel === 'sdk', 'the snapshot records the channel of the latest turn');
+
+      // Rendering stays channel-specific: web replies synchronously, the others go via the outbox.
+      const queued = (await store.listPendingEffects(64, Date.now() + 60_000)).filter((effect) => effect.subjectId === subject);
+      const channels = queued.map((effect) => object(effect.payload).channel).sort();
+      check(queued.length === 2, `only the two asynchronous channels queued a delivery (got ${queued.length})`);
+      check(JSON.stringify(channels) === JSON.stringify(['slack', 'whatsapp']), 'each queued delivery targets its own channel');
+    }
+
+    // ---- K. Tenant isolation -----------------------------------------------------------------------
+    section('K. Tenant isolation');
+    {
+      const subject = `shared-${randomUUID()}`;
+      const other = 'aelio-other-tenant';
+      const conductor = createAelioConductor(conductorConfig({
+        llm: scriptedLlm({ plan: () => ({ mode: 'reply', text: 'tenant a secret' }), synthesis: () => '' }),
+        sdk: stubSdk(), suspensionStore, effectJournal: store,
+      }));
+      await runConductorEvent(store, conductor, event(subject, 'tenant A private message', `k-${randomUUID()}`));
+
+      // Deliberately the SAME subject id under a different tenant: isolation must not depend on
+      // subject ids happening to be unique.
+      check((await store.loadSnapshot(other, subject)) === null, 'tenant B cannot read tenant A\'s subject snapshot');
+      check((await store.loadInstance(other, subject)) === null, 'tenant B cannot read tenant A\'s instances');
+      check((await store.listSubjectInstances(other, subject)).length === 0, 'tenant B lists no instances for the shared subject id');
+      check((await store.listLedgerForEvent(other, 'any-event')).length === 0, 'tenant B reads none of tenant A\'s ledger');
+
+      const token = `wake-${randomUUID()}`;
+      await store.createContinuation({
+        token, tenantId: TENANT, subjectId: subject, instanceId: randomUUID(),
+        prompt: 'tenant A question', payload: {}, expiresAt: Date.now() + 60_000,
+      });
+      check((await store.consumeContinuation(other, token)) === null, 'tenant B cannot consume tenant A\'s continuation');
+      check((await store.consumeContinuation(TENANT, token)) !== null, 'tenant A still can');
+
+      const otherSuspension = new AelioSuspensionStore(client, tables, other);
+      check((await otherSuspension.get(`${TENANT}:${subject}`)) === null, 'a parked plan is not visible to another tenant');
+
+      // The same idempotency key is a different logical event for a different tenant.
+      const sharedKey = `k-shared-${randomUUID()}`;
+      const a = await store.commit({ event: event(subject, 'A', sharedKey), state: {}, instanceId: randomUUID(), ledger: [] });
+      const b = await store.commit({
+        event: { ...event(subject, 'B', sharedKey), tenantId: other }, state: {}, instanceId: randomUUID(), ledger: [],
+      });
+      check(a.applied && b.applied, 'the same idempotency key is scoped per tenant, not global');
+      check((await store.loadSnapshot(other, subject))?.revision === 1, 'tenant B built its own independent snapshot');
+    }
+
+    // ---- L. Restore drill --------------------------------------------------------------------------
+    section('L. Restore drill: flush to segments, hard restart, compare every runtime row');
+    {
+      const subjects = [];
+      const conductor = createAelioConductor(conductorConfig({
+        llm: scriptedLlm({ plan: () => ({ mode: 'reply', text: 'durable' }), synthesis: () => '' }),
+        sdk: stubSdk(), suspensionStore, effectJournal: store,
+      }));
+      for (let index = 0; index < 8; index += 1) {
+        const subject = `restore-${randomUUID()}`;
+        subjects.push(subject);
+        await runConductorEvent(store, conductor, event(subject, `message ${index}`, `k-${randomUUID()}`));
+      }
+      // Force the memtable into an immutable segment so recovery must read segments AND the WAL.
+      await client.flush();
+      const before = await hashRuntimeTables(client, tables);
+
+      await db.hardRestart();
+      const restored = new SunjetClient({ baseUrl: db.url });
+      const after = await hashRuntimeTables(restored, tables);
+
+      check(before.total > 0, `there was runtime data to lose (${before.total} rows)`);
+      const mismatched = Object.keys(before.byTable).filter((table) => before.byTable[table] !== after.byTable[table]);
+      check(mismatched.length === 0, `every runtime table hashes identically after restore (${mismatched.join(', ') || 'none differ'})`);
+      check(after.total === before.total, `row count is unchanged (${before.total} → ${after.total})`);
+
+      const restoredStore = new AelioRuntimeStore(restored, tables);
+      const sampled = await restoredStore.loadSnapshot(TENANT, subjects[0]);
+      check(sampled?.state.history?.length === 2, 'a sampled subject still has its full turn after restore');
     }
 
     // ---- H. Aelio DB hard restart --------------------------------------------------------------

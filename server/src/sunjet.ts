@@ -2,8 +2,8 @@ import {
   AelioMemoryStore,
   AelioRuntimeStore,
   AelioSuspensionStore,
-  bootstrapSunjetTables,
   createConvoxMessageStore,
+  migrateAelioStorage,
   DEFAULT_RUNTIME_ARTIFACTS,
   type ConvoxMessageStore,
 } from '@aelio/core';
@@ -57,9 +57,21 @@ export async function initSunjet(config: AelioConfig): Promise<SunjetRuntime | n
     workflowInstances: sunjet.tables.workflow_instances,
     promptArtifacts: sunjet.tables.prompt_artifacts,
     promptLedger: sunjet.tables.prompt_ledger,
+    migrations: sunjet.tables.migrations,
   };
 
-  await bootstrapSunjetTables(client, tables, sunjet.embed_dim);
+  // Boot through the versioned migration ledger, under a lease: replicas starting together
+  // serialize, an applied migration never re-runs, and an older binary refuses to start against a
+  // newer schema instead of writing rows it would misread.
+  const outcome = await migrateAelioStorage(client, tables, sunjet.embed_dim, {
+    allowDestructive: sunjet.allow_destructive_migrations,
+  });
+  if (outcome.applied.length > 0) {
+    console.log(
+      `[aelio] applied ${outcome.applied.length} Aelio DB migration(s) → schema v${outcome.schemaVersion}: ` +
+        outcome.applied.map((migration) => migration.id).join(', '),
+    );
+  }
 
   // Built-ins are ordinary approved runtime artifacts. Reinstalling is idempotent and lets a
   // fresh Aelio DB boot with a useful, auditable baseline catalog.

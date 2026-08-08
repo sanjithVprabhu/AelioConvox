@@ -9,5 +9,5 @@
 mod catalog;
 mod schema;
 
-pub use catalog::{Catalog, CatalogError};
+pub use catalog::{column_id_for, Catalog, CatalogError, COLUMNS_PER_TABLE, MAX_TABLE_COLUMN_ID};
 pub use schema::{ColumnDef, ColumnKind, FileRef, TableDef};

@@ -24,6 +24,8 @@ export type SunjetTableNames = {
   workflowInstances: string;
   promptArtifacts: string;
   promptLedger: string;
+  /** Versioned record of every schema migration applied to this database, plus the migration lock. */
+  migrations: string;
 };
 
 /** Preferred product name; `SunjetTableNames` remains a migration compatibility alias. */

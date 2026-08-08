@@ -1,4 +1,4 @@
-export { bootstrapSunjetTables } from './bootstrap.js';
+export { aelioSchemaMigrations, bootstrapSunjetTables, migrateAelioStorage } from './bootstrap.js';
 export {
   buildConversationContext,
   resolveActiveFlowContext,
@@ -20,3 +20,12 @@ export type {
   SunjetTableNames,
   AelioStorageTableNames,
 } from './types.js';
+export {
+  AelioMigrationRunner,
+  MigrationLockedError,
+  migrationChecksum,
+  migrationsTableSchema,
+  type AelioMigration,
+  type MigrationOutcome,
+  type MigrationRecord,
+} from './migrations.js';

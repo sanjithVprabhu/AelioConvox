@@ -13,12 +13,43 @@ use crate::schema::{ColumnDef, ColumnKind, FileRef, TableDef};
 const MAGIC: u32 = u32::from_le_bytes(*b"VCAT");
 const VERSION: u16 = 1;
 
+/// Size of each table's slice of the column-id space.
+///
+/// Column ids must be globally unique, not per-table. Every table shares one memtable and one
+/// flushed segment, and a segment column is keyed by column id alone — so if two tables both used
+/// id 4 with different types, the flush would type that id from whichever row it saw first and
+/// silently drop every value of the other type. Partitioning the id space by table makes that
+/// impossible by construction, at the cost of a fixed column ceiling per table.
+pub const COLUMNS_PER_TABLE: u32 = 1024;
+
+/// Highest column id available to tables. The engine reserves the top of the range for its own
+/// system columns (`xmin`, `xmax`, and the table discriminator).
+pub const MAX_TABLE_COLUMN_ID: u32 = u32::MAX - 16;
+
+/// The globally unique id for a table's nth column.
+///
+/// Table ids start at 1, so table 1 owns ids `1..=1024`, table 2 owns `1025..=2048`, and so on.
+/// Ids start at 1 so 0 stays available as "unset".
+pub fn column_id_for(table_id: u32, ordinal: u32) -> Result<u32, CatalogError> {
+    if ordinal >= COLUMNS_PER_TABLE {
+        return Err(CatalogError::TooManyColumns { table: format!("table {table_id}"), limit: COLUMNS_PER_TABLE as usize });
+    }
+    let base = (table_id.saturating_sub(1) as u64) * (COLUMNS_PER_TABLE as u64);
+    let id = base + ordinal as u64 + 1;
+    if id > MAX_TABLE_COLUMN_ID as u64 {
+        return Err(CatalogError::ColumnIdSpaceExhausted { table_id });
+    }
+    Ok(id as u32)
+}
+
 /// Catalog operation errors.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CatalogError {
     TableExists(String),
     NotFound(String),
     ColumnExists { table: String, column: String },
+    TooManyColumns { table: String, limit: usize },
+    ColumnIdSpaceExhausted { table_id: u32 },
 }
 
 impl fmt::Display for CatalogError {
@@ -27,6 +58,12 @@ impl fmt::Display for CatalogError {
             CatalogError::TableExists(n) => write!(f, "table '{n}' already exists"),
             CatalogError::NotFound(n) => write!(f, "not found: {n}"),
             CatalogError::ColumnExists { table, column } => write!(f, "column '{table}.{column}' already exists"),
+            CatalogError::TooManyColumns { table, limit } => {
+                write!(f, "table '{table}' would exceed the {limit}-column limit")
+            }
+            CatalogError::ColumnIdSpaceExhausted { table_id } => {
+                write!(f, "column id space exhausted at table {table_id}")
+            }
         }
     }
 }
@@ -49,7 +86,7 @@ impl Catalog {
         }
     }
 
-    /// Create a table. Column ids are assigned `1..=n` in declaration order.
+    /// Create a table. Column ids come from the global id space (see [`column_id_for`]).
     pub fn create_table(
         &mut self,
         name: &str,
@@ -58,17 +95,23 @@ impl Catalog {
         if self.name_to_id.contains_key(name) {
             return Err(CatalogError::TableExists(name.to_string()));
         }
+        if columns.len() > COLUMNS_PER_TABLE as usize {
+            return Err(CatalogError::TooManyColumns {
+                table: name.to_string(),
+                limit: COLUMNS_PER_TABLE as usize,
+            });
+        }
         let table_id = self.next_table_id;
         self.next_table_id += 1;
-        let columns = columns
-            .iter()
-            .enumerate()
-            .map(|(i, (n, k))| ColumnDef {
-                column_id: (i + 1) as u32,
+        let mut assigned = Vec::with_capacity(columns.len());
+        for (ordinal, (n, k)) in columns.iter().enumerate() {
+            assigned.push(ColumnDef {
+                column_id: column_id_for(table_id, ordinal as u32)?,
                 name: (*n).to_string(),
                 kind: *k,
-            })
-            .collect();
+            });
+        }
+        let columns = assigned;
         self.tables.insert(
             table_id,
             TableDef {
@@ -105,10 +148,23 @@ impl Catalog {
                 return Err(CatalogError::ColumnExists { table: table.to_string(), column: (*name).to_string() });
             }
         }
-        let mut next_id = definition.columns.iter().map(|column| column.column_id).max().unwrap_or(0) + 1;
+        // Continue this table's own slice of the global id space, so an added column can never
+        // collide with another table's column and get mistyped when the memtable is flushed.
+        let table_id = definition.table_id;
+        let mut ordinal = definition.columns.len() as u32;
+        if ordinal + columns.len() as u32 > COLUMNS_PER_TABLE {
+            return Err(CatalogError::TooManyColumns {
+                table: table.to_string(),
+                limit: COLUMNS_PER_TABLE as usize,
+            });
+        }
         for (name, kind) in columns {
-            definition.columns.push(ColumnDef { column_id: next_id, name: (*name).to_string(), kind: *kind });
-            next_id += 1;
+            definition.columns.push(ColumnDef {
+                column_id: column_id_for(table_id, ordinal)?,
+                name: (*name).to_string(),
+                kind: *kind,
+            });
+            ordinal += 1;
         }
         Ok(())
     }

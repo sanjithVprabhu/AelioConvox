@@ -228,6 +228,12 @@ export const ConfigSchema = z.object({
       timeout_ms: z.number().int().positive().default(30_000),
       dual_write_sqlite: z.boolean().default(true),
       fallback_sqlite_on_error: z.boolean().default(true),
+      /**
+       * Destructive (non-additive) schema migrations are refused unless this is explicitly on.
+       * They cannot be undone by redeploying the previous build, so enabling it is a deliberate,
+       * operator-run step after the expand phase has been verified.
+       */
+      allow_destructive_migrations: z.boolean().default(false),
       tables: z
         .object({
           messages: z.string().min(1).default('convox_messages'),
@@ -251,6 +257,7 @@ export const ConfigSchema = z.object({
           workflow_instances: z.string().min(1).default('aelio_workflow_instances'),
           prompt_artifacts: z.string().min(1).default('aelio_prompt_artifacts'),
           prompt_ledger: z.string().min(1).default('aelio_prompt_ledger'),
+          migrations: z.string().min(1).default('aelio_schema_migrations'),
         })
         .default({}),
     })

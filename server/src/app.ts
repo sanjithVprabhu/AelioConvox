@@ -22,6 +22,7 @@ import { registerWidgetRoutes } from './routes/widget.js';
 import { registerProactiveRoutes } from './routes/proactive.js';
 import { registerTelemetryRoutes } from './routes/telemetry.js';
 import { registerRuntimeRoutes } from './routes/runtime.js';
+import { registerAdminRuntimeRoutes } from './routes/admin-runtime.js';
 import type { RuntimeDeps } from './runtime-deps.js';
 import { ServerSdkBridge } from './sdk-bridge.js';
 import { initSunjet } from './sunjet.js';
@@ -226,6 +227,7 @@ export async function createApp(config: AelioConfig) {
   await registerProactiveRoutes(app, deps);
   await registerTelemetryRoutes(app, deps);
   await registerRuntimeRoutes(app, deps);
+  await registerAdminRuntimeRoutes(app, deps);
   await registerTestRoutes(app, sdkBridge);
   await app.register(fastifyStatic, {
     root: publicDir,

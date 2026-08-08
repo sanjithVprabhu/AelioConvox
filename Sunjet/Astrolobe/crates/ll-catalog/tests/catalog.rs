@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ll_catalog::{Catalog, CatalogError, ColumnKind, FileRef};
+use ll_catalog::{Catalog, CatalogError, COLUMNS_PER_TABLE, ColumnKind, FileRef};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 struct Tmp(PathBuf);
@@ -37,7 +37,7 @@ fn create_and_inspect_table() {
     assert_eq!(t.table_id, tid);
     assert_eq!(t.columns.len(), 5);
 
-    // Column ids assigned 1..=5 in order.
+    // The first table owns the first slice of the global column-id space.
     assert_eq!(t.column("title").unwrap().column_id, 1);
     assert_eq!(t.column("embedding").unwrap().kind, ColumnKind::Vector(1536));
     assert!(t.column("body").unwrap().kind.is_indexed_modality());
@@ -95,4 +95,48 @@ fn additive_columns_preserve_ids_and_survive_reload() {
     let mut loaded = Catalog::load(&tmp.0).unwrap();
     assert_eq!(loaded.table("events").unwrap().columns.len(), 3);
     assert!(loaded.add_columns("events", &[("lease", ColumnKind::Utf8)]).is_err());
+}
+
+/// Column ids must be unique ACROSS tables, not just within one.
+///
+/// Every table shares one memtable and one flushed segment, and a segment column is keyed by
+/// column id alone. Two tables using the same id for differently-typed columns made the flush type
+/// that id from whichever row it saw first and silently drop every value of the other type — the
+/// runtime lost `revision` off its snapshots that way. This pins the invariant that prevents it.
+#[test]
+fn column_ids_are_unique_across_tables() {
+    let mut cat = Catalog::new();
+    cat.create_table("alpha", &[("a1", ColumnKind::Utf8), ("a2", ColumnKind::I64)]).unwrap();
+    cat.create_table("beta", &[("b1", ColumnKind::I64), ("b2", ColumnKind::Utf8)]).unwrap();
+    cat.add_columns("alpha", &[("a3", ColumnKind::Bool)]).unwrap();
+
+    let mut seen = std::collections::BTreeSet::new();
+    for table in ["alpha", "beta"] {
+        for column in &cat.table(table).unwrap().columns {
+            assert!(
+                seen.insert(column.column_id),
+                "column id {} is used by more than one table ({}.{})",
+                column.column_id, table, column.name,
+            );
+        }
+    }
+    assert_eq!(seen.len(), 5);
+
+    // The same ordinal in two tables must not collide, even with different types.
+    let alpha_first = cat.table("alpha").unwrap().column("a1").unwrap().column_id;
+    let beta_first = cat.table("beta").unwrap().column("b1").unwrap().column_id;
+    assert_ne!(alpha_first, beta_first);
+}
+
+/// A table cannot silently overflow its slice and start using the next table's ids.
+#[test]
+fn a_table_cannot_exceed_its_column_slice() {
+    let mut cat = Catalog::new();
+    let many: Vec<String> = (0..COLUMNS_PER_TABLE).map(|i| format!("c{i}")).collect();
+    let schema: Vec<(&str, ColumnKind)> = many.iter().map(|n| (n.as_str(), ColumnKind::I64)).collect();
+    cat.create_table("wide", &schema).unwrap();
+    assert!(matches!(
+        cat.add_columns("wide", &[("one_too_many", ColumnKind::I64)]),
+        Err(CatalogError::TooManyColumns { .. })
+    ));
 }

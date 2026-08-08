@@ -141,6 +141,7 @@ function tableNames(suffix) {
     runtimeContinuations: name('runtime_continuations'), scheduledEvents: name('scheduled_events'),
     workflowArtifacts: name('workflow_artifacts'), workflowInstances: name('workflow_instances'),
     promptArtifacts: name('prompt_artifacts'), promptLedger: name('prompt_ledger'),
+    migrations: name('schema_migrations'),
   };
 }
 
