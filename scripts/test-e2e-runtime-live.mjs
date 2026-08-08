@@ -201,8 +201,9 @@ async function main() {
     });
     await waitFor(async () => (await fetch(`${baseUrl}/health`)).ok, `Aelio server health (${logs.get('server')?.slice(-600)})`);
     check(true, `Aelio server is up on ${baseUrl}`);
+    // Version-agnostic on purpose: adding a migration must not break this test.
     check(
-      /applied 3 Aelio DB migration\(s\) → schema v3/.test(logs.get('server') ?? ''),
+      /applied \d+ Aelio DB migration\(s\) → schema v\d+/.test(logs.get('server') ?? ''),
       'the server applied the schema migration ledger at boot',
     );
 

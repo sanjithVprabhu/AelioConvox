@@ -29,6 +29,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  AelioMemoryStore,
   AelioMigrationRunner,
   AelioRuntimeStore,
   AelioSuspensionStore,
@@ -616,29 +617,36 @@ async function main() {
     section('I. Schema migration ledger and lock');
     {
       // A fresh namespace so migration state is not shared with the bootstrapped tables above.
+      // Derived from the real migration set, not hardcoded: adding a migration must not require
+      // editing this test, and a stale number here would silently weaken the assertions.
+      const shipped = aelioSchemaMigrations(EMBED_DIM);
+      const shippedCount = shipped.length;
+      const shippedVersion = Math.max(...shipped.map((migration) => migration.version));
+      const nextVersion = shippedVersion + 1;
+
       const migTables = tableNames(`mig${String(Date.now()).slice(-6)}`);
       const first = await migrateAelioStorage(client, migTables, EMBED_DIM);
-      check(first.applied.length === 3, `first boot applied all 3 migrations (got ${first.applied.length})`);
-      check(first.schemaVersion === 3, 'schema version is 3 after first boot');
+      check(first.applied.length === shippedCount, `first boot applied all ${shippedCount} migrations (got ${first.applied.length})`);
+      check(first.schemaVersion === shippedVersion, `schema version is ${shippedVersion} after first boot`);
 
       const second = await migrateAelioStorage(client, migTables, EMBED_DIM);
       check(second.applied.length === 0, 'a second boot applies nothing');
-      check(second.skipped.length === 3, 'a second boot recognises all 3 as already applied');
+      check(second.skipped.length === shippedCount, `a second boot recognises all ${shippedCount} as already applied`);
 
       const runner = new AelioMigrationRunner(client, migTables, 'owner-a');
-      check((await runner.schemaVersion()) === 3, 'the recorded schema version is readable');
+      check((await runner.schemaVersion()) === shippedVersion, 'the recorded schema version is readable');
 
       // An older binary must refuse to boot against a schema it does not know.
       let refusedFuture = false;
       try {
-        await runner.migrate(aelioSchemaMigrations(EMBED_DIM).slice(0, 2));
+        await runner.migrate(shipped.slice(0, shippedCount - 1));
       } catch (error) {
         refusedFuture = /does not know about/.test(String(error));
       }
       check(refusedFuture, 'an older build refuses to boot against a newer schema');
 
       // An applied migration whose definition changed must be caught, not silently ignored.
-      const edited = aelioSchemaMigrations(EMBED_DIM).map((migration) =>
+      const edited = shipped.map((migration) =>
         migration.id === '0002-harness-catalog' ? { ...migration, description: 'edited after shipping' } : migration);
       let refusedEdit = false;
       try {
@@ -651,9 +659,9 @@ async function main() {
       // Destructive steps are refused unless explicitly enabled.
       let destructiveRan = false;
       const destructive = [
-        ...aelioSchemaMigrations(EMBED_DIM),
+        ...shipped,
         {
-          id: '0004-drop-something', version: 4, kind: 'destructive',
+          id: 'test-drop-something', version: nextVersion, kind: 'destructive',
           description: 'A non-additive change.',
           apply: async () => { destructiveRan = true; },
         },
@@ -669,7 +677,7 @@ async function main() {
 
       const allowed = await runner.migrate(destructive, { allowDestructive: true });
       check(destructiveRan, 'the destructive migration runs when explicitly allowed');
-      check(allowed.schemaVersion === 4, 'schema version advanced to 4');
+      check(allowed.schemaVersion === nextVersion, `schema version advanced to ${nextVersion}`);
 
       // Two migrators cannot hold the lock at once; the loser is told who holds it.
       const lockTables = tableNames(`lock${String(Date.now()).slice(-6)}`);
@@ -771,6 +779,26 @@ async function main() {
 
       const otherSuspension = new AelioSuspensionStore(client, tables, other);
       check((await otherSuspension.get(`${TENANT}:${subject}`)) === null, 'a parked plan is not visible to another tenant');
+
+      // Memory was the gap that let a real cross-tenant leak through: subject ids are only unique
+      // within a tenant, and recalled memory is composed straight into a system prompt.
+      const ours = new AelioMemoryStore(client, tables, EMBED_DIM, TENANT);
+      const theirs = new AelioMemoryStore(client, tables, EMBED_DIM, other);
+      await ours.remember({ subjectId: subject, content: 'Tenant A internal note: contract renews in March', category: 'fact' });
+      const ourRecall = await ours.recall(subject, 'when does the contract renew', 5);
+      check(ourRecall.some((entry) => /renews in March/.test(entry.content)), 'a tenant recalls its own memory');
+      const theirRecall = await theirs.recall(subject, 'when does the contract renew', 5);
+      check(
+        theirRecall.length === 0,
+        `another tenant recalls nothing for the same subject id (got ${theirRecall.length}: ${JSON.stringify(theirRecall.map((e) => e.content)).slice(0, 120)})`,
+      );
+      // And a write under the other tenant must not become visible to the first.
+      await theirs.remember({ subjectId: subject, content: 'Tenant B internal note: do not disclose', category: 'fact' });
+      const afterTheirWrite = await ours.recall(subject, 'internal note', 5);
+      check(
+        afterTheirWrite.every((entry) => !/Tenant B/.test(entry.content)),
+        'a memory written by another tenant never appears in this tenant\'s recall',
+      );
 
       // The same idempotency key is a different logical event for a different tenant.
       const sharedKey = `k-shared-${randomUUID()}`;

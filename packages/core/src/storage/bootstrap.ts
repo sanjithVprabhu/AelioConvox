@@ -29,6 +29,9 @@ function messagesTableSchema(embedDim: number): ColumnSpec[] {
 function memoriesTableSchema(embedDim: number): ColumnSpec[] {
   return [
     { name: 'memory_id', kind: 'utf8' },
+    // Every operational read is scoped by tenant AND subject. `customer_id` alone is not an
+    // isolation boundary: two tenants can legitimately use the same subject id.
+    { name: 'tenant_id', kind: 'utf8' },
     { name: 'customer_id', kind: 'utf8' },
     { name: 'content', kind: 'text' },
     vectorColumn('embedding', embedDim),
@@ -313,6 +316,20 @@ export function aelioSchemaMigrations(embedDim: number): AelioMigration[] {
         await client.ensureTable(tables.workflowInstances, workflowInstancesTableSchema());
         await client.ensureTable(tables.promptArtifacts, promptArtifactsTableSchema());
         await client.ensureTable(tables.promptLedger, promptLedgerTableSchema());
+      },
+    },
+    {
+      id: '0004-memory-tenant-scope',
+      version: 4,
+      description: 'Add tenant_id to the memories table so recall can never cross a tenant boundary.',
+      kind: 'additive',
+      apply: async (client, tables) => {
+        // Additive and nullable. Pre-existing rows have no tenant, so a tenant-scoped read simply
+        // does not match them — memory degrades rather than leaking, which is the safe direction.
+        await client.ensureTable(tables.memories, [
+          ...memoriesTableSchema(embedDim),
+          { name: 'tenant_id', kind: 'utf8' },
+        ]);
       },
     },
   ];

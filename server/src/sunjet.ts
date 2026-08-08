@@ -95,6 +95,6 @@ export async function initSunjet(config: AelioConfig): Promise<SunjetRuntime | n
     embedDim: sunjet.embed_dim,
     runtimeStore,
     runtimeSuspensionStore: new AelioSuspensionStore(client, tables, config.name),
-    runtimeMemory: new AelioMemoryStore(client, tables, sunjet.embed_dim),
+    runtimeMemory: new AelioMemoryStore(client, tables, sunjet.embed_dim, config.name),
   };
 }

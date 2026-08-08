@@ -26,6 +26,11 @@ export type AelioMemoryRecord = {
  * analyst recall path: the same `memories` table, read through Aelio DB's vector index, with no
  * Drizzle dependency anywhere on a runtime turn.
  *
+ * Every read and write is scoped by tenant AND subject. Subject ids are only unique within a
+ * tenant, so filtering on the subject alone would let two deployments sharing one Aelio DB recall
+ * each other's memories — and recalled memory is composed straight into a system prompt, so that
+ * would surface one tenant's data in another tenant's answers.
+ *
  * Writes are deduplicated on exact content per subject, so a fact restated across many turns
  * stays one row instead of drowning recall in copies of itself.
  */
@@ -34,7 +39,13 @@ export class AelioMemoryStore {
     private readonly client: SunjetClient,
     private readonly tables: AelioStorageTableNames,
     private readonly embedDim: number,
-  ) {}
+    private readonly tenantId: string,
+  ) {
+    // A missing tenant used to serialize as a filter with no value, which the server rejected with
+    // an opaque 422. On a store whose entire job is tenant scoping, an absent tenant must fail here
+    // and say so, not become a malformed query later.
+    if (!tenantId?.trim()) throw new Error('AelioMemoryStore requires a tenant id');
+  }
 
   async recall(subjectId: string, query: string, limit = 5): Promise<RecalledMemory[]> {
     const trimmed = query.trim();
@@ -51,7 +62,10 @@ export class AelioMemoryStore {
     const rows = await this.client.scanRows(this.tables.memories, {
       k: Math.min(Math.max(limit, 1), 64),
       vector: { col: 'embedding', query: vector },
-      filters: [{ col: 'customer_id', op: 'eq', value: utf8(subjectId) }],
+      filters: [
+        { col: 'tenant_id', op: 'eq', value: utf8(this.tenantId) },
+        { col: 'customer_id', op: 'eq', value: utf8(subjectId) },
+      ],
     });
     return rows.rows
       .map((row) => ({
@@ -85,13 +99,17 @@ export class AelioMemoryStore {
     // equality filtering a tokenized column is not a contract Aelio DB guarantees.
     const existing = await this.client.scanRows(this.tables.memories, {
       k: DEDUPE_SCAN_CAP,
-      filters: [{ col: 'customer_id', op: 'eq', value: utf8(input.subjectId) }],
+      filters: [
+        { col: 'tenant_id', op: 'eq', value: utf8(this.tenantId) },
+        { col: 'customer_id', op: 'eq', value: utf8(input.subjectId) },
+      ],
     });
     if (existing.rows.some((row) => readUtf8Default(row.values, 'content') === content)) return null;
 
     const now = Date.now();
     const values: RowValues = {
       memory_id: utf8(randomUUID()),
+      tenant_id: utf8(this.tenantId),
       customer_id: utf8(input.subjectId),
       content: utf8(content),
       category: utf8(input.category ?? 'fact'),

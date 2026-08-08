@@ -134,6 +134,10 @@ try {
   // Boots its own Aelio DB + server + SDK with the runtime path ON. config.yaml ships with
   // sunjet disabled, so without this the Phase tests below only cover the legacy SQLite turn.
   await run('node', [join(root, 'scripts/test-e2e-runtime-live.mjs')], {});
+  await run('node', [join(root, 'scripts/test-aelio-scale-drill.mjs')], {});
+  // Skips its cross-version scenarios loudly (and still checks the newer-schema guard) unless
+  // PREV_LL_SERVER points at a previous release's binary — see that file's header.
+  await run('node', [join(root, 'scripts/test-upgrade-rollback-drill.mjs')], {});
 
   await waitForHealth(baseUrl, server, getServerLogs);
 

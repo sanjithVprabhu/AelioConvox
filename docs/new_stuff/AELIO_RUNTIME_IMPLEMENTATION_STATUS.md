@@ -73,7 +73,7 @@
 - `[x]` Cross-channel subject continuity suite green. One subject over web, WhatsApp, and SDK shares a single durable state and turn counter, while each channel keeps its own delivery path.
 - `[ ]` Prompt artifact security/schema/evaluation suite green.
 - `[x]` Aelio DB restore/replay and tenant-isolation suite green. The restore drill flushes to segments, hard-restarts, and compares a content hash of every runtime row; tenant isolation is asserted across snapshots, instances, ledger, continuations, parked plans, and idempotency keys using a deliberately shared subject id. Compaction is exercised by the Rust suite but not yet by the runtime drill.
-- `[~]` Shadow/canary comparison and production readiness gates green. A live end-to-end run of the real deployment on the runtime path is green (37 checks). Shadow comparison against the legacy path, canary rollout, and the production readiness gates are not done.
+- `[~]` Shadow/canary comparison and production readiness gates green. A live end-to-end run of the real deployment on the runtime path is green (37 checks), and upgrade/rollback plus scale drills are recorded above. Shadow comparison against the legacy path, canary rollout, and soak measurement are not done.
 
 ## Change log
 
@@ -96,6 +96,8 @@
 | 2026-08-08 | **fixed** | **Repaired an MVCC batch-atomicity regression introduced with `Engine::transact`.** Rows were stamped with their own WAL record LSN while `transact` returned the commit LSN, so a reader whose snapshot fell between two records of one transaction could observe half a batch, and the returned LSN was unusable as a read-your-writes snapshot. Rows in a batch now become visible at one shared commit LSN, in the live memtable and on recovery. | `cargo test` across the whole Astrolobe workspace (was 1 failing: `ll-query --test file_source`); new regression test `a_batch_is_invisible_at_every_snapshot_before_its_commit` |
 | 2026-08-08 | complete | Replaced the reply-only runtime conductor with the real Aelio control plane: lifecycle-scoped tools, relevance retrieval, memory recall, the full harness, confirmation gating, and Aelio DB-durable park/resume. Added `AelioSuspensionStore` and `AelioMemoryStore`, and an `onToolSuccess` hook so lifecycle transitions land in the durable snapshot instead of SQLite. | `scripts/test-aelio-runtime.mjs` against a real Aelio DB: 66 checks incl. read-tool execution, park → restart → resume-once, ambiguous-reply re-ask, denial, lifecycle transition |
 | 2026-08-08 | complete | Made artifact execution durable per node (`stepRuntimeArtifact` + per-step instance commit) and enabled the tool/prompt/memory/spawn adapters behind an intent/result/unknown effect journal. Added pinned prompt artifacts with declared slots and JSON-encoded rendering. | `scripts/test-aelio-runtime.mjs` artifact + effect-journal sections; core/server strict typechecks and builds |
+| 2026-08-08 | **fixed** | **Closed a cross-tenant memory leak found by a security pass.** `AelioMemoryStore` read and wrote the `memories` table filtered only by `customer_id`, and the table had no tenant column at all — violating the plan's own §0.4 invariant that every operational query carries `tenant_id` as a leading predicate. Two deployments sharing one Aelio DB with default table names and a colliding subject id would recall each other's memories, and recalled memory is composed straight into a system prompt. Added migration `0004-memory-tenant-scope`, made the store tenant-scoped, and made a missing tenant throw at construction instead of emitting a malformed filter. The tenant-isolation suite now covers memory — the gap that let this pass. | Fault suite §K: a tenant recalls its own memory, another tenant recalls nothing for the same subject id, and a foreign write never appears |
+| 2026-08-08 | complete | Added the upgrade/rollback drill across two real builds (`scripts/test-upgrade-rollback-drill.mjs`), the scale drill (`scripts/test-aelio-scale-drill.mjs`), and wired both into the runner. Findings are recorded below rather than asserted away. | 6 upgrade checks + 9 findings; 11 scale checks |
 | 2026-08-08 | complete | Added a live end-to-end suite (`scripts/test-e2e-runtime-live.mjs`) that boots Aelio DB, the Fastify server with `sunjet.enabled: true`, and the example SDK backend, then drives the widget like a browser. This closed a real verification gap: `config.yaml` ships with `sunjet.enabled: false`, so the Phase 2–5 suite only ever exercised the legacy SQLite turn — nothing covered the runtime through the actual routes, workers, and admin surface. | 37 live checks: migration-at-boot, read-tool reply, durable Aelio DB snapshot, write confirmation + exactly-once, ambiguous-reply re-ask, authenticated/tenant-guarded HTTP ingress + duplicate rejection, operator health/ledger/redaction, cross-connection continuity. Children are spawned detached and torn down by process group — signalling only `npx` leaves its `tsx` grandchild holding the pipe and the runner never exits. |
 | 2026-08-08 | **fixed** | **Repaired silent data loss on flush.** Column ids were assigned `1..=n` *per table*, but every table shares one memtable and flushes into one segment keyed by column id alone — so `runtime_snapshots.revision` (id 4, i64) collided with `runtime_events.idempotency_key` (id 4, utf8), the flush typed the id from whichever row it saw first, and every value of the other type was dropped. Any subject snapshot became unreadable after the first flush. Column ids now come from a global space partitioned per table. | New restore drill (§L) caught it; `cargo test` across the workspace; new `column_ids_are_unique_across_tables` and column-slice-overflow regression tests |
 | 2026-08-08 | complete | Added the versioned schema migration ledger with a CAS lease, at-most-once application, checksum guard against edited migrations, fail-closed on an unknown newer schema, and refusal of destructive steps unless explicitly enabled. | Fault suite §I (13 checks) |
@@ -111,12 +113,46 @@
 | 2026-08-08 | complete | Restored flow-progress parity on the runtime path: durable `flowProgress` in the subject snapshot, the active flow step's tool force-included past relevance filtering, and SDK `set_state`/`set_flow_progress` pushes patched into the Aelio DB snapshot (CAS with retry) as well as SQLite. | `scripts/test-aelio-runtime.mjs` SDK-push section; 71 checks total |
 | 2026-08-08 | complete | Fixed two blockers in the existing suite (a duplicated `ws` import in the Phase 5 script, and `run-tests.mjs` colliding with a developer's own server on the default port). | Full `node scripts/run-tests.mjs`: LLM wiring, harness, Aelio runtime (71), Phases 2/3/4/4/4/5 all green |
 
+## Upgrade / rollback findings (measured, not reasoned)
+
+Run: `PREV_LL_SERVER=<previous build> node scripts/test-upgrade-rollback-drill.mjs`. The drill's
+central question is whether a failure across the column-id boundary is loud or silent, because a
+loud failure is survivable and a silent one is not.
+
+| Direction | Result | Consequence |
+|---|---|---|
+| previous → previous (baseline) | `lossy` — dropped the colliding columns on flush | the pre-fix release was already losing data on its own; the upgrade did not cause it |
+| **upgrade** (previous writes, current reads) | `lossy`, never `corrupt` | an in-place upgrade is **not** viable: the data was already gone before the new build saw it. The loss is visible (a missing field the client rejects), not silently wrong values |
+| **rollback** (current writes, previous reads) | `intact` | rollback is read-safe, because column ids are persisted in the catalog file. It would still re-introduce the collision for any table it creates itself |
+| rollback → write → roll forward | `intact` both cohorts | no corruption from a revert-and-recover sequence |
+| newer schema, older binary | refused with an explanatory error | the migration ledger's guard works through the real boot path |
+
+Two limits worth stating plainly: the newer-schema guard only exists from the migration-ledger
+release onward, so rolling back to a build that predates it is unprotected — that build has nothing
+to check against. And a database created before the column-id fix must be recreated, not upgraded.
+
+## Scale drill findings
+
+Run: `node scripts/test-aelio-scale-drill.mjs`. Restore integrity at ~6,000 runtime rows through
+flush + compact + SIGKILL is exact: every table hashes identically, the row count is unchanged, and
+sampled snapshots still read back correctly rather than merely hashing the same. Single-subject
+contention behaves as designed — 40 concurrent writers produced 3 accepted commits and 37 refusals,
+with the snapshot revision equal to the number of accepted writes, which is the lost-update fix
+holding under real pressure.
+
+The throughput and latency numbers the drill prints are **not** a capacity result and must not be
+quoted as one: it runs on whatever machine invokes it, against the debug build, for seconds. A soak
+still needs hours on representative hardware.
+
 ## Remaining hard gates before a production claim or the requested final commit/push
 
 - `[x]` Runtime outbox retry has durable availability, lease expiry/fencing, error capture, exponential backoff, and terminal attempt limits. Meta WhatsApp still offers no provider-side idempotency key — that is a property of Meta's API, not something Aelio can fix — so an ambiguous send is now parked as `unknown` for reconciliation instead of being resent. This trades a possible missed message for a guaranteed absence of duplicate customer messages, which is the correct default; a tenant wanting the opposite must opt in explicitly.
 - `[x]` Prompt, memory, tool, and spawn nodes run behind per-node instance commits plus an append-only intent/result journal, and the same journal now guards harness tool calls inside a turn. A journal entry stuck in `unknown` stops the instance and reports, which is safe but still requires an operator to resolve — an automatic reconcile workflow per tool is not built.
 - `[!]` The server still boots the legacy SQLite/Drizzle services and its SDK, auth, legacy worker, migration, and data-retention routes still depend on them. Aelio DB is authoritative only on the cut-over runtime paths, not yet the sole platform store.
-- `[!]` Still not run: sustained multi-replica load and soak measurement, restore drills against a production-sized dataset, two-adjacent-release upgrade/rollback, a security review, and the production canary period. These are the §0.6 gates that need an environment and a clock, not more code.
+- `[~]` Two-adjacent-release upgrade/rollback is now measured against real builds; the findings and their two limits are recorded above.
+- `[~]` Restore/replay is verified at ~6,000 rows through flush + compact + SIGKILL. A production-sized dataset on production hardware is still untested.
+- `[~]` A security pass has run over the branch and found one real cross-tenant leak, now fixed and covered. This is not an independent review — the same person wrote and reviewed the code, which is exactly the weakness an external review exists to cover.
+- `[!]` Still not run: sustained multi-replica load and soak measurement over hours, and the production canary period. These genuinely need representative hardware, real traffic, and elapsed time.
 - `[!]` SQLite is deliberately still resident. §0.5 of the plan gates its deletion on tenant-by-tenant cutover, verified export hashes, restore drills, and an expired retention window — removing it now would violate the migration plan it belongs to, not complete it.
 - `[!]` The column-id fix changes what a column id means on disk. A database created before it must be recreated, not upgraded — there is no in-place migration, and its flushed segments already lost the mistyped columns. This is safe today only because Aelio DB is not yet the authoritative platform store.
-- `[!]` Do not present this as a certified production cutover. It is a complete runtime, verified by 178 checks — 141 against a real Aelio DB (including fault injection, migration, isolation, and restore) plus 37 against a live server, SDK, and widget on the runtime path — with the legacy SQLite platform still underneath by design.
+- `[!]` Do not present this as a certified production cutover. It is a complete runtime verified by roughly 200 checks — against a real Aelio DB (fault injection, migration, isolation, restore, scale, upgrade/rollback) and against a live server, SDK, and widget on the runtime path — with the legacy SQLite platform still underneath by design.

@@ -255,7 +255,7 @@ async function main() {
 
   const store = new AelioRuntimeStore(client, tables);
   const suspensionStore = new AelioSuspensionStore(client, tables, TENANT);
-  const memory = new AelioMemoryStore(client, tables, EMBED_DIM);
+  const memory = new AelioMemoryStore(client, tables, EMBED_DIM, TENANT);
 
   try {
     // ---- 1. Direct reply commits atomically -------------------------------------------------
