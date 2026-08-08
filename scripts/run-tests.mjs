@@ -131,6 +131,9 @@ try {
   await run('node', [join(root, 'scripts/test-aelio-runtime.mjs')], {});
   // Runs under tsx: it drives the real server-side artifact runner, not a copy of it.
   await run('npx', ['tsx', join(root, 'scripts/test-aelio-runtime-faults.mjs')], {});
+  // Boots its own Aelio DB + server + SDK with the runtime path ON. config.yaml ships with
+  // sunjet disabled, so without this the Phase tests below only cover the legacy SQLite turn.
+  await run('node', [join(root, 'scripts/test-e2e-runtime-live.mjs')], {});
 
   await waitForHealth(baseUrl, server, getServerLogs);
 
