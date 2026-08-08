@@ -25,6 +25,7 @@
     "test:runtime:faults": "tsx scripts/test-aelio-runtime-faults.mjs",
     "test:e2e:runtime": "node scripts/test-e2e-runtime-live.mjs",
     "test:scale": "node scripts/test-aelio-scale-drill.mjs",
+    "test:soak": "node scripts/test-aelio-soak.mjs",
     "test:upgrade": "node scripts/test-upgrade-rollback-drill.mjs",
     "test:llm": "node scripts/test-llm-providers.mjs",
     "test:sunjet": "node scripts/test-sunjet-integration.mjs",

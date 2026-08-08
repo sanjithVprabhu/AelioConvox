@@ -96,6 +96,7 @@
 | 2026-08-08 | **fixed** | **Repaired an MVCC batch-atomicity regression introduced with `Engine::transact`.** Rows were stamped with their own WAL record LSN while `transact` returned the commit LSN, so a reader whose snapshot fell between two records of one transaction could observe half a batch, and the returned LSN was unusable as a read-your-writes snapshot. Rows in a batch now become visible at one shared commit LSN, in the live memtable and on recovery. | `cargo test` across the whole Astrolobe workspace (was 1 failing: `ll-query --test file_source`); new regression test `a_batch_is_invisible_at_every_snapshot_before_its_commit` |
 | 2026-08-08 | complete | Replaced the reply-only runtime conductor with the real Aelio control plane: lifecycle-scoped tools, relevance retrieval, memory recall, the full harness, confirmation gating, and Aelio DB-durable park/resume. Added `AelioSuspensionStore` and `AelioMemoryStore`, and an `onToolSuccess` hook so lifecycle transitions land in the durable snapshot instead of SQLite. | `scripts/test-aelio-runtime.mjs` against a real Aelio DB: 66 checks incl. read-tool execution, park → restart → resume-once, ambiguous-reply re-ask, denial, lifecycle transition |
 | 2026-08-08 | complete | Made artifact execution durable per node (`stepRuntimeArtifact` + per-step instance commit) and enabled the tool/prompt/memory/spawn adapters behind an intent/result/unknown effect journal. Added pinned prompt artifacts with declared slots and JSON-encoded rendering. | `scripts/test-aelio-runtime.mjs` artifact + effect-journal sections; core/server strict typechecks and builds |
+| 2026-08-08 | **finding** | **Ran a 15-minute release-build soak; it found that memory grows ~2x faster than the data and is never reclaimed** (7.15 → 15.86 KiB/row; ~3 GiB resident for 147 MiB on disk). Causes: segments are read fully into memory, compaction materialises the entire dataset twice and RSS ratchets at each cycle, and the append-only runtime tables are never pruned. Correctness was unaffected — 50,176 commits, zero errors, revision equalled turn count on every sampled subject, and the database recovered from a restart. The failing assertion is deliberately left failing. | `pnpm test:soak`; 12 checks passed, 1 failed by design |
 | 2026-08-08 | **fixed** | **Closed a cross-tenant memory leak found by a security pass.** `AelioMemoryStore` read and wrote the `memories` table filtered only by `customer_id`, and the table had no tenant column at all — violating the plan's own §0.4 invariant that every operational query carries `tenant_id` as a leading predicate. Two deployments sharing one Aelio DB with default table names and a colliding subject id would recall each other's memories, and recalled memory is composed straight into a system prompt. Added migration `0004-memory-tenant-scope`, made the store tenant-scoped, and made a missing tenant throw at construction instead of emitting a malformed filter. The tenant-isolation suite now covers memory — the gap that let this pass. | Fault suite §K: a tenant recalls its own memory, another tenant recalls nothing for the same subject id, and a foreign write never appears |
 | 2026-08-08 | complete | Added the upgrade/rollback drill across two real builds (`scripts/test-upgrade-rollback-drill.mjs`), the scale drill (`scripts/test-aelio-scale-drill.mjs`), and wired both into the runner. Findings are recorded below rather than asserted away. | 6 upgrade checks + 9 findings; 11 scale checks |
 | 2026-08-08 | complete | Added a live end-to-end suite (`scripts/test-e2e-runtime-live.mjs`) that boots Aelio DB, the Fastify server with `sunjet.enabled: true`, and the example SDK backend, then drives the widget like a browser. This closed a real verification gap: `config.yaml` ships with `sunjet.enabled: false`, so the Phase 2–5 suite only ever exercised the legacy SQLite turn — nothing covered the runtime through the actual routes, workers, and admin surface. | 37 live checks: migration-at-boot, read-tool reply, durable Aelio DB snapshot, write confirmation + exactly-once, ambiguous-reply re-ask, authenticated/tenant-guarded HTTP ingress + duplicate rejection, operator health/ledger/redaction, cross-connection continuity. Children are spawned detached and torn down by process group — signalling only `npx` leaves its `tsx` grandchild holding the pipe and the runner never exits. |
@@ -144,6 +145,41 @@ The throughput and latency numbers the drill prints are **not** a capacity resul
 quoted as one: it runs on whatever machine invokes it, against the debug build, for seconds. A soak
 still needs hours on representative hardware.
 
+## Soak findings (15 minutes, release build, 2026-08-08)
+
+Run: `pnpm test:soak` (`AELIO_SOAK_MINUTES` to lengthen). 50,176 commits at ~56/s, **zero errors**,
+and correctness held throughout: `revision` equalled the turn count on every sampled subject, no
+effect ended `unknown` or `failed`, and the database recovered from a restart afterwards.
+
+| Metric | Start | End | Change |
+|---|---|---|---|
+| RSS | 377 MiB | 2,854 MiB | +657% |
+| On-disk dataset | 18 MiB | 147 MiB | +712% |
+| **Memory per stored row** | **7.15 KiB** | **15.86 KiB** | **+122%** |
+| p95 latency | 159 ms | 329 ms | +107% |
+
+**The suite fails one check, and it is left failing.** Memory per row more than doubling means RSS
+grows about twice as fast as the data — roughly 3 GiB resident for 147 MiB on disk. Relaxing the
+threshold would have made it green and hidden a real defect.
+
+Two compounding causes, both visible in the sample curve:
+
+1. **Everything is resident.** `ll_format::read_file` does `fs::read`, so every segment is held
+   fully in memory. Nothing is memory-mapped or paged.
+2. **Compaction materialises the whole dataset twice, and RSS ratchets.** `Database::compact`
+   builds a `Vec<(u64, Row)>` of every live row and then *clones* each into a synthetic memtable.
+   The jumps line up exactly: the 13:00:35 sample caught a compaction in flight (8 files, disk
+   momentarily 273 MiB against a 145 MiB steady state) and RSS rose 2,006 → 3,077 MiB in that one
+   window and never came back down.
+
+3. **Nothing is ever pruned.** `runtime_events`, `runtime_ledger`, and `runtime_outbox` are
+   append-only and no code deletes from them — confirmed by search, not assumption. So the dataset
+   grows with lifetime event volume regardless of how small the active subject set is.
+
+Together these mean a long-running deployment grows RSS until it is out of memory, and it will hit
+that wall sooner than the disk figures suggest. Throughput and latency degraded far more gently
+(p95 roughly doubled and then held), so **memory is the binding constraint, not speed.**
+
 ## Remaining hard gates before a production claim or the requested final commit/push
 
 - `[x]` Runtime outbox retry has durable availability, lease expiry/fencing, error capture, exponential backoff, and terminal attempt limits. Meta WhatsApp still offers no provider-side idempotency key — that is a property of Meta's API, not something Aelio can fix — so an ambiguous send is now parked as `unknown` for reconciliation instead of being resent. This trades a possible missed message for a guaranteed absence of duplicate customer messages, which is the correct default; a tenant wanting the opposite must opt in explicitly.
@@ -152,7 +188,8 @@ still needs hours on representative hardware.
 - `[~]` Two-adjacent-release upgrade/rollback is now measured against real builds; the findings and their two limits are recorded above.
 - `[~]` Restore/replay is verified at ~6,000 rows through flush + compact + SIGKILL. A production-sized dataset on production hardware is still untested.
 - `[~]` A security pass has run over the branch and found one real cross-tenant leak, now fixed and covered. This is not an independent review — the same person wrote and reviewed the code, which is exactly the weakness an external review exists to cover.
-- `[!]` Still not run: sustained multi-replica load and soak measurement over hours, and the production canary period. These genuinely need representative hardware, real traffic, and elapsed time.
+- `[!]` **Memory scales with lifetime data, roughly 2x faster than the data itself, and is never reclaimed.** Measured, not theorised — see the soak findings above. Fixing it needs three things: streaming compaction instead of a full in-memory materialisation, segment paging or mmap instead of `fs::read`, and a retention/pruning policy for the append-only runtime tables. This is the single largest blocker to running Aelio DB as a long-lived production store, and it is why the soak suite is left with a failing check.
+- `[!]` Still not run: sustained multi-replica load, a soak measured in hours or days rather than minutes, and the production canary period. These genuinely need representative hardware, real traffic, and elapsed time.
 - `[!]` SQLite is deliberately still resident. §0.5 of the plan gates its deletion on tenant-by-tenant cutover, verified export hashes, restore drills, and an expired retention window — removing it now would violate the migration plan it belongs to, not complete it.
 - `[!]` The column-id fix changes what a column id means on disk. A database created before it must be recreated, not upgraded — there is no in-place migration, and its flushed segments already lost the mistyped columns. This is safe today only because Aelio DB is not yet the authoritative platform store.
 - `[!]` Do not present this as a certified production cutover. It is a complete runtime verified by roughly 200 checks — against a real Aelio DB (fault injection, migration, isolation, restore, scale, upgrade/rollback) and against a live server, SDK, and widget on the runtime path — with the legacy SQLite platform still underneath by design.
