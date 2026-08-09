@@ -148,7 +148,7 @@ impl World {
             constraints: vec!["never promise a delivery date".into()],
             templates: indexmap::indexmap! {
                 "greeting_unauth".into() =>
-                    "Hey! I can help you {capabilities}.".into(),
+                    "Hey! I can help with: {capabilities}.".into(),
             },
         }];
 

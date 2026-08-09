@@ -20,7 +20,11 @@ fn app(tag: &str) -> axum::Router {
     router(AppState::new(runtime, vec!["test-key".into()]))
 }
 
-async fn post_turn(app: &axum::Router, turn_id: &str, utterance: &str) -> (StatusCode, serde_json::Value) {
+async fn post_turn(
+    app: &axum::Router,
+    turn_id: &str,
+    utterance: &str,
+) -> (StatusCode, serde_json::Value) {
     let response = app
         .clone()
         .oneshot(
@@ -107,9 +111,9 @@ fn step_detail_contains(v: &serde_json::Value, name: &str, needle: &str) -> bool
     v["steps"]
         .as_array()
         .map(|steps| {
-            steps.iter().any(|s| {
-                s["name"] == name && s["detail"].as_str().unwrap_or("").contains(needle)
-            })
+            steps
+                .iter()
+                .any(|s| s["name"] == name && s["detail"].as_str().unwrap_or("").contains(needle))
         })
         .unwrap_or(false)
 }

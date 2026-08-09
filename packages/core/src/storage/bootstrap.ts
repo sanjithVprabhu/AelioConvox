@@ -416,6 +416,20 @@ function sdkConnectionsTableSchema(): ColumnSpec[] {
   ];
 }
 
+/** Soft-delete catalog projection: tools/states/policies/flows with active flag. */
+function sdkCatalogTableSchema(): ColumnSpec[] {
+  return [
+    { name: 'tenant', kind: 'utf8' },
+    { name: 'kind', kind: 'utf8' },
+    { name: 'entity_id', kind: 'utf8' },
+    { name: 'application', kind: 'utf8' },
+    { name: 'active', kind: 'i64' },
+    { name: 'payload_json', kind: 'text' },
+    { name: 'connection_id', kind: 'utf8' },
+    { name: 'updated_at', kind: 'i64' },
+  ];
+}
+
 export async function bootstrapAelioDbTables(
   client: AelioDbClient,
   tables: AelioDbTableNames,
@@ -445,6 +459,7 @@ export async function bootstrapAelioDbTables(
   await client.ensureTable(tables.inboundDedup, inboundDedupTableSchema());
   await client.ensureTable(tables.magicLinks, magicLinksTableSchema());
   await client.ensureTable(tables.sdkConnections, sdkConnectionsTableSchema());
+  await client.ensureTable(tables.sdkCatalog, sdkCatalogTableSchema());
   await client.ensureTable(tables.archetypes, archetypesTableSchema(embedDim));
   await client.ensureTable(tables.aspects, aspectsTableSchema(embedDim));
   await client.ensureTable(tables.axisNodes, axisNodesTableSchema(embedDim));

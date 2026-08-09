@@ -93,10 +93,7 @@ pub fn run_installed_harness(
         TurnOutcome::Completed { bag, bag_hash } => Ok((bag, bag_hash)),
         TurnOutcome::Parked(p) => {
             // Return partial bag with park marker for wait_for_user style programs.
-            Ok((
-                p.bag,
-                format!("parked:{}", p.park_nid),
-            ))
+            Ok((p.bag, format!("parked:{}", p.park_nid)))
         }
     }
 }
@@ -124,14 +121,24 @@ pub fn run_send_otp(
 /// Which installed tool/memory/conversation harness (if any) should handle this utterance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolHarnessIntent {
-    SendOtp { phone: String },
-    ConfirmThenAct { confirmed: bool },
-    MemoryAttach { query: String },
+    SendOtp {
+        phone: String,
+    },
+    ConfirmThenAct {
+        confirmed: bool,
+    },
+    MemoryAttach {
+        query: String,
+    },
     RunOnce,
-    UnderstandIntent { utterance: String },
+    UnderstandIntent {
+        utterance: String,
+    },
     WaitForUser,
     /// Catch-all free-form reply (avoids cold ProposePath when installed).
-    FullReply { utterance: String },
+    FullReply {
+        utterance: String,
+    },
 }
 
 impl ToolHarnessIntent {
@@ -205,7 +212,8 @@ pub fn resolve_tool_harness_intent(utterance: &str) -> Option<ToolHarnessIntent>
     if t.is_empty() {
         return None;
     }
-    if t.contains("send otp") || t.contains("send the otp") || t.contains("otp to") {
+    // Match "send otp", "send me an otp", "send the otp", "otp to …"
+    if (t.contains("send") && t.contains("otp")) || t.contains("otp to") {
         let phone = extract_phone(utterance).unwrap_or_else(|| "unknown".into());
         return Some(ToolHarnessIntent::SendOtp { phone });
     }
@@ -248,7 +256,10 @@ pub fn resolve_tool_harness_intent(utterance: &str) -> Option<ToolHarnessIntent>
         || t.contains("i want to")
         || t.contains("i need to")
         || (t.contains('?')
-            && (t.contains("how") || t.contains("why") || t.contains("which") || t.contains("should")))
+            && (t.contains("how")
+                || t.contains("why")
+                || t.contains("which")
+                || t.contains("should")))
         || t.len() > 80
     {
         return Some(ToolHarnessIntent::UnderstandIntent {
@@ -445,6 +456,12 @@ mod tests {
         assert!(!hash.is_empty());
         let text = tool_bag_reply_text(id, &bag);
         assert!(text.contains("OTP sent"), "{text}");
+    }
+
+    #[test]
+    fn resolve_send_me_an_otp_phrasing() {
+        let intent = resolve_tool_harness_intent("can you send me an otp").unwrap();
+        assert!(matches!(intent, ToolHarnessIntent::SendOtp { .. }));
     }
 
     #[test]

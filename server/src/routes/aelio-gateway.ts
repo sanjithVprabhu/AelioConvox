@@ -3,6 +3,12 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { secretsMatch } from '../auth.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
+import {
+  AgentCompletionRequestSchema,
+  AgentCompletionResponseSchema,
+  AgentGatewayCapabilitiesSchema,
+  agentRequestToLlmOptions,
+} from './agent-gateway-contract.js';
 
 const CompletionRequestSchema = z.object({
   request_id: z.string().min(1),
@@ -30,6 +36,13 @@ const EmbedRequestSchema = z.object({
   input: z.array(z.string().max(32_768)).min(1).max(128),
 }).strict();
 
+const MemorySearchRequestSchema = z.object({
+  tenant_id: z.string().min(1).max(192),
+  subject_id: z.string().min(1).max(256),
+  query: z.string().min(1).max(8_192),
+  limit: z.number().int().min(1).max(8).default(5),
+}).strict();
+
 function authorized(request: FastifyRequest, secret: string): boolean {
   const header = request.headers.authorization;
   const candidate = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
@@ -40,6 +53,19 @@ function authorized(request: FastifyRequest, secret: string): boolean {
 export async function registerAelioGatewayRoutes(app: FastifyInstance, deps: RuntimeDeps) {
   const token = process.env.AELIO_HOST_TOKEN;
   if (!token) return;
+
+  app.get('/internal/aelio/llm/agent/capabilities', async (request, reply) => {
+    if (!authorized(request, token)) return reply.code(401).send({ error: 'unauthorized' });
+    return AgentGatewayCapabilitiesSchema.parse({
+      protocol_version: 2,
+      provider: deps.config.llm.provider,
+      model: deps.config.llm.model,
+      native_tools: true,
+      prompt_caching: ['anthropic', 'openai'].includes(deps.config.llm.provider),
+      streaming: false,
+      max_output_tokens: deps.config.llm.max_tokens,
+    });
+  });
 
   app.post('/internal/aelio/llm/complete', async (request, reply) => {
     if (!authorized(request, token)) return reply.code(401).send({ error: 'unauthorized' });
@@ -100,6 +126,82 @@ export async function registerAelioGatewayRoutes(app: FastifyInstance, deps: Run
         input_tokens: result.usage?.inputTokens ?? 0,
         output_tokens: result.usage?.outputTokens ?? 0,
       },
+    };
+  });
+
+  app.post('/internal/aelio/llm/agent', async (request, reply) => {
+    if (!authorized(request, token)) return reply.code(401).send({ error: 'unauthorized' });
+    const parsed = AgentCompletionRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'shape', detail: parsed.error.message });
+    }
+    const call = parsed.data;
+    const result = await deps.llm.complete(agentRequestToLlmOptions({
+      ...call,
+      model: call.model.startsWith('tier:') ? deps.config.llm.model : call.model,
+    }));
+    const response = {
+      protocol_version: 2 as const,
+      request_id: call.request_id,
+      attempt_id: call.attempt_id,
+      response: {
+        id: `${call.request_id}:response`,
+        content: [
+          ...(result.text.trim() ? [{ type: 'text' as const, text: result.text }] : []),
+          ...result.toolCalls.map((toolCall) => ({
+            type: 'tool_call' as const,
+            call: {
+              id: toolCall.id,
+              name: toolCall.name,
+              arguments: toolCall.args,
+            },
+          })),
+        ],
+        stop_reason:
+          result.stopReason === 'tool_use'
+            ? 'tool_use' as const
+            : result.stopReason === 'length'
+              ? 'max_output_tokens' as const
+              : result.stopReason === 'stop'
+                ? 'end_turn' as const
+                : 'other' as const,
+        usage: {
+          input_tokens: result.usage?.inputTokens ?? 0,
+          cached_input_tokens: 0,
+          output_tokens: result.usage?.outputTokens ?? 0,
+        },
+      },
+    };
+    const checked = AgentCompletionResponseSchema.safeParse(response);
+    if (!checked.success) {
+      request.log.error({ error: checked.error }, 'agent gateway produced an invalid response');
+      return reply.code(502).send({ error: 'invalid_provider_response' });
+    }
+    return checked.data;
+  });
+
+  app.post('/internal/aelio/memory/search', async (request, reply) => {
+    if (!authorized(request, token)) return reply.code(401).send({ error: 'unauthorized' });
+    const parsed = MemorySearchRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'shape', detail: parsed.error.message });
+    }
+    if (parsed.data.tenant_id !== deps.config.name) {
+      return reply.code(403).send({ error: 'tenant_scope' });
+    }
+    const matches = await deps.memoryStore.recall(
+      parsed.data.subject_id,
+      parsed.data.query,
+      parsed.data.limit,
+    );
+    return {
+      results: matches.map((match) => ({
+        id: match.id,
+        content: match.content.slice(0, 1_600),
+        category: match.category,
+        score: match.score,
+      })),
+      truncated: matches.length >= parsed.data.limit,
     };
   });
 

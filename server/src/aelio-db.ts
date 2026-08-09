@@ -12,6 +12,7 @@ import {
   createConvoxInboundDedupStore,
   createConvoxMagicLinkStore,
   createConvoxSdkConnectionStore,
+  createConvoxCatalogEntityStore,
   createConvoxArchetypeStore,
   createConvoxAspectStore,
   createConvoxAxisStore,
@@ -27,6 +28,7 @@ import {
   type ConvoxInboundDedupStore,
   type ConvoxMagicLinkStore,
   type ConvoxSdkConnectionStore,
+  type ConvoxCatalogEntityStore,
   type ConvoxArchetypeStore,
   type ConvoxAspectStore,
   type ConvoxAxisStore,
@@ -49,6 +51,7 @@ export type AelioDbStores = {
   inboundDedupStore: ConvoxInboundDedupStore;
   magicLinkStore: ConvoxMagicLinkStore;
   sdkConnectionStore: ConvoxSdkConnectionStore;
+  catalogEntityStore: ConvoxCatalogEntityStore;
   archetypeStore: ConvoxArchetypeStore;
   aspectStore: ConvoxAspectStore;
   axisStore: ConvoxAxisStore;
@@ -100,6 +103,7 @@ export async function initAelioDb(config: AelioConfig): Promise<AelioDbRuntime> 
     inboundDedup: aelioDb.tables.inbound_dedup,
     magicLinks: aelioDb.tables.magic_links,
     sdkConnections: aelioDb.tables.sdk_connections,
+    sdkCatalog: aelioDb.tables.sdk_catalog,
     archetypes: aelioDb.tables.archetypes,
     aspects: aelioDb.tables.aspects,
     axisNodes: aelioDb.tables.axis_nodes,
@@ -130,6 +134,7 @@ export async function initAelioDb(config: AelioConfig): Promise<AelioDbRuntime> 
     inboundDedupStore: createConvoxInboundDedupStore(storageConfig),
     magicLinkStore: createConvoxMagicLinkStore(storageConfig),
     sdkConnectionStore: createConvoxSdkConnectionStore(storageConfig),
+    catalogEntityStore: createConvoxCatalogEntityStore(storageConfig),
     archetypeStore: createConvoxArchetypeStore(storageConfig),
     aspectStore: createConvoxAspectStore(storageConfig),
     axisStore: createConvoxAxisStore(storageConfig),

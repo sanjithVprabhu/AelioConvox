@@ -64,6 +64,14 @@ export {
   type SdkConnectionUpsertInput,
 } from './kv.js';
 export {
+  ConvoxCatalogEntityStore,
+  createConvoxCatalogEntityStore,
+  type CatalogEntityKind,
+  type CatalogEntityRecord,
+  type CatalogSyncInput,
+  type CatalogSyncResult,
+} from './catalog.js';
+export {
   ConvoxArchetypeStore,
   createConvoxArchetypeStore,
   archetypeSignature,

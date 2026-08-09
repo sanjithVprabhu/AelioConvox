@@ -114,6 +114,8 @@ fn build_application() -> Result<(SocketAddr, axum::Router), Box<dyn std::error:
         api_tokens.clone(),
         runtime.clone(),
     );
+    // Artifact runtime is installed — print which harness authority is active (toggle via env).
+    aelio_agent_api::log_harness_mode_banner(true);
     let state = if allow_insecure {
         ServerState::new(runtime, vec![], true)?
     } else {

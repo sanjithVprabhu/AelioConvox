@@ -241,6 +241,8 @@ export const RegisterMessageSchema = z.object({
   type: z.literal('register'),
   sdkVersion: z.string().min(1),
   language: SdkLanguageSchema,
+  /** Human-readable employer/app name shown in Aelio connect logs. */
+  application: z.string().min(1).max(128).optional(),
   functions: z.array(FunctionDefinitionSchema),
   states: z.array(StateDefinitionSchema).optional(),
   policies: z.array(PolicyDefinitionSchema).optional(),
@@ -352,12 +354,44 @@ export const AckMessageSchema = z.object({
 });
 export type AckMessage = z.infer<typeof AckMessageSchema>;
 
+/** Server confirms catalog admission — printed on both Aelio and employer SDK terminals. */
+export const RegisteredMessageSchema = z.object({
+  type: z.literal('registered'),
+  application: z.string().min(1),
+  tenant: z.string().min(1),
+  connectionId: z.string().min(1),
+  tools: z.array(z.string().min(1)),
+  states: z.array(z.string().min(1)),
+  flows: z.array(z.string().min(1)),
+  policies: z.array(z.string().min(1)),
+  /** First connect vs live catalog refresh after tools/states/flows/policies change. */
+  reason: z.enum(['connect', 'catalog_update']).default('connect'),
+  added: z
+    .object({
+      tools: z.array(z.string()).default([]),
+      states: z.array(z.string()).default([]),
+      flows: z.array(z.string()).default([]),
+      policies: z.array(z.string()).default([]),
+    })
+    .optional(),
+  removed: z
+    .object({
+      tools: z.array(z.string()).default([]),
+      states: z.array(z.string()).default([]),
+      flows: z.array(z.string()).default([]),
+      policies: z.array(z.string()).default([]),
+    })
+    .optional(),
+});
+export type RegisteredMessage = z.infer<typeof RegisteredMessageSchema>;
+
 export const ServerToSdkMessageSchema = z.discriminatedUnion('type', [
   InvokeMessageSchema,
   SendInvokeMessageSchema,
   PingMessageSchema,
   ServerErrorMessageSchema,
   AckMessageSchema,
+  RegisteredMessageSchema,
 ]);
 export type ServerToSdkMessage = z.infer<typeof ServerToSdkMessageSchema>;
 

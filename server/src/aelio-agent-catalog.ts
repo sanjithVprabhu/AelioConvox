@@ -14,6 +14,9 @@ export function buildAgentCatalog(
   options: { memoryEnabled?: boolean } = {},
 ): Json {
   const tools = registration.functions.map(toAgentTool);
+  if (options.memoryEnabled === true) {
+    tools.push(toMemorySearchTool());
+  }
   const toolIds = new Set<string>();
   for (const tool of tools) {
     if (toolIds.has(tool.id)) {
@@ -97,6 +100,56 @@ export function buildAgentCatalog(
     flows,
     flow_artifacts: {},
     attributes: [],
+  };
+}
+
+function toMemorySearchTool(): ReturnType<typeof toAgentTool> {
+  return {
+    id: 'memory_search',
+    name: 'memory_search',
+    version: '1',
+    capability_tags: ['memory.search'],
+    contract: {
+      effect_class: 'read',
+      completeness: { kind: 'unknown' },
+      returns_entity: 'data',
+      pushdown: [],
+      max_result_rows: null,
+      row_scoped: true,
+    },
+    effect: 'read',
+    effectful: false,
+    idempotent: true,
+    dry_run_available: false,
+    params: [
+      {
+        name: 'query',
+        type_name: 'str',
+        required: true,
+        constraint: null,
+        source: { kind: 'user' },
+        repair: null,
+        prompt_hint: 'Words describing the past preference or conversation fact to retrieve.',
+        sensitivity: 'none',
+        default: null,
+        depends_on: [],
+      },
+      {
+        name: 'limit',
+        type_name: 'int',
+        required: false,
+        constraint: null,
+        source: { kind: 'user' },
+        repair: null,
+        prompt_hint: 'Maximum number of matching memories, from one through eight.',
+        sensitivity: 'none',
+        default: null,
+        depends_on: [],
+      },
+    ],
+    output_semantics: { fields: {}, role_hint: 'data' },
+    continuations: [],
+    errors: [],
   };
 }
 

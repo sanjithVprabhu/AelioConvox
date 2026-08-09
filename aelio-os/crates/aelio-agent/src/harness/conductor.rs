@@ -50,7 +50,10 @@ impl StarterHarness {
 /// Catalog entries Conductor may choose among (excluding escalate in listings for prompts).
 pub fn starter_catalog() -> &'static [(StarterHarness, &'static str)] {
     &[
-        (StarterHarness::QuickReply, "Answer briefly in one or two sentences from current context"),
+        (
+            StarterHarness::QuickReply,
+            "Answer briefly in one or two sentences from current context",
+        ),
         (
             StarterHarness::UnderstandIntent,
             "Clarify what the user wants; suggest the next harness; may ask one question",
@@ -140,7 +143,9 @@ pub fn select_starter_harness(utterance: &str, session: &HarnessSession) -> Star
         "my orders",
         "my order",
     ];
-    if TOOL_INTENT_HINTS.iter().any(|h| text.contains(h)) {
+    if TOOL_INTENT_HINTS.iter().any(|h| text.contains(h))
+        || (text.contains("send") && text.contains("otp"))
+    {
         return StarterHarness::Escalate;
     }
     // Ambiguous / deep task → understand first.
@@ -158,9 +163,19 @@ pub fn select_starter_harness(utterance: &str, session: &HarnessSession) -> Star
     }
     // Greetings / tiny chat → quick reply.
     if text.split_whitespace().count() <= 4
-        || ["hi", "hello", "hey", "thanks", "thank you", "ok", "okay", "yes", "no"]
-            .iter()
-            .any(|w| text == *w || text.starts_with(&format!("{w} ")))
+        || [
+            "hi",
+            "hello",
+            "hey",
+            "thanks",
+            "thank you",
+            "ok",
+            "okay",
+            "yes",
+            "no",
+        ]
+        .iter()
+        .any(|w| text == *w || text.starts_with(&format!("{w} ")))
     {
         return StarterHarness::QuickReply;
     }
@@ -220,7 +235,10 @@ mod tests {
     #[test]
     fn selects_understand_for_help_me() {
         assert_eq!(
-            select_starter_harness("help me figure out what to do next", &HarnessSession::default()),
+            select_starter_harness(
+                "help me figure out what to do next",
+                &HarnessSession::default()
+            ),
             StarterHarness::UnderstandIntent
         );
     }

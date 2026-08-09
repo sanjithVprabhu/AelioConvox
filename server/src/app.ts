@@ -30,6 +30,7 @@ import { startOutboundWorker } from './workers/outbound.js';
 import { AelioRuntimeClient } from './aelio-runtime-client.js';
 import { buildAgentCatalog } from './aelio-agent-catalog.js';
 import { createQuietLoggerStream } from './turn-pipeline-log.js';
+import { hydrateCatalogBagFromStore } from './catalog-bag.js';
 
 /** Providers that don't need an API key (they run locally / are test doubles). */
 const KEYLESS_PROVIDERS = new Set(['mock', 'ollama']);
@@ -108,6 +109,17 @@ export async function createApp(config: AelioConfig) {
   config.aelioDb.enabled = true;
   const aelioDb = await initAelioDb(config);
 
+  // Hot catalog bag: active tools/states/policies/flows always in process memory.
+  try {
+    const bag = await hydrateCatalogBagFromStore(aelioDb.catalogEntityStore, config.name);
+    console.info(
+      `[aelio] catalog bag hydrated — tools=${bag.tools.length} states=${bag.states.length} ` +
+        `flows=${bag.flows.length} policies=${bag.policies.length}`,
+    );
+  } catch (error) {
+    console.warn('[aelio] catalog bag hydrate skipped:', error);
+  }
+
   const sdkBridge = new ServerSdkBridge(aelioDb.sdkConnectionStore);
   const runtimeUrl = process.env.AELIO_RUST_RUNTIME_URL;
   const runtimeToken = process.env.AELIO_RUNTIME_TOKEN;
@@ -160,6 +172,7 @@ export async function createApp(config: AelioConfig) {
     inboundDedupStore: aelioDb.inboundDedupStore,
     magicLinkStore: aelioDb.magicLinkStore,
     sdkConnectionStore: aelioDb.sdkConnectionStore,
+    catalogEntityStore: aelioDb.catalogEntityStore,
   };
 
   const app = Fastify({

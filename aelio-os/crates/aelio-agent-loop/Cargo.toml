@@ -1,0 +1,23 @@
+[package]
+name = "aelio-agent-loop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Provider-neutral, policy-gated agent tool loop for Aelio conversations."
+
+[dependencies]
+async-trait = "0.1"
+blake3.workspace = true
+futures-util = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+thiserror = "1"
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints.rust]
+warnings = "warn"

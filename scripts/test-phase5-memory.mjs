@@ -94,22 +94,36 @@ function waitForMessage(socket, predicate, timeoutMs = 15000) {
 
 async function testMemoryIntegration() {
   const socket = new WebSocket(`${serverUrl.replace(/\/$/, '')}/widget/ws`);
+  const otherSocket = new WebSocket(`${serverUrl.replace(/\/$/, '')}/widget/ws`);
 
-  await new Promise((resolve, reject) => {
-    socket.on('open', resolve);
-    socket.on('error', reject);
-  });
+  await Promise.all([socket, otherSocket].map((candidate) => new Promise((resolve, reject) => {
+    candidate.on('open', resolve);
+    candidate.on('error', reject);
+  })));
 
+  const ready = waitForMessage(socket, (message) => message.type === 'ready');
+  const otherReady = waitForMessage(otherSocket, (message) => message.type === 'ready');
   socket.send(JSON.stringify({ type: 'init', customerId: 'phase5-memory-user' }));
-  await waitForMessage(socket, (message) => message.type === 'ready');
+  otherSocket.send(JSON.stringify({ type: 'init', customerId: 'phase5-memory-other-user' }));
+  await Promise.all([ready, otherReady]);
 
+  const firstReply = waitForMessage(
+    socket,
+    (message) => message.type === 'message' && message.role === 'assistant',
+  );
+  const otherFirstReply = waitForMessage(
+    otherSocket,
+    (message) => message.type === 'message' && message.role === 'assistant',
+  );
   socket.send(JSON.stringify({ type: 'message', content: 'I prefer metric units' }));
-  await waitForMessage(socket, (message) => message.type === 'message' && message.role === 'assistant');
+  otherSocket.send(JSON.stringify({ type: 'message', content: 'I prefer imperial units' }));
+  await Promise.all([firstReply, otherFirstReply]);
 
   // Memory extraction runs as an async background job (spec §9, step 17), so the
   // stored fact is not guaranteed to be queryable on the very next turn. Poll the
   // recall-backed question until memory is reflected, rather than racing a fixed delay.
   let reply = null;
+  let otherReply = null;
   for (let attempt = 0; attempt < 8; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 500));
     socket.send(JSON.stringify({ type: 'message', content: 'what units do I prefer?' }));
@@ -121,14 +135,40 @@ async function testMemoryIntegration() {
       break;
     }
   }
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    otherSocket.send(JSON.stringify({ type: 'message', content: 'what units do I prefer?' }));
+    otherReply = await waitForMessage(
+      otherSocket,
+      (message) => message.type === 'message' && message.role === 'assistant',
+    );
+    if (otherReply.content.toLowerCase().includes('imperial')) {
+      break;
+    }
+  }
 
   socket.close();
+  otherSocket.close();
 
-  if (!reply || !reply.content.toLowerCase().includes('metric')) {
+  if (
+    !reply
+    || !reply.content.toLowerCase().includes('metric')
+    || reply.content.toLowerCase().includes('imperial')
+  ) {
     throw new Error(`Expected memory-informed reply, got: ${reply ? reply.content : 'no reply'}`);
+  }
+  if (
+    !otherReply
+    || !otherReply.content.toLowerCase().includes('imperial')
+    || otherReply.content.toLowerCase().includes('metric')
+  ) {
+    throw new Error(
+      `Expected isolated second-user memory, got: ${otherReply ? otherReply.content : 'no reply'}`,
+    );
   }
 
   console.log('[Phase 5] Integration reply:', reply.content);
+  console.log('[Phase 5] Isolated second-user reply:', otherReply.content);
 }
 
 try {
@@ -136,7 +176,7 @@ try {
   console.log('[Phase 5] Unit test PASSED — extract + recall (memory store contract)');
 
   await testMemoryIntegration();
-  console.log('[Phase 5] Integration PASSED — conversation memory influences reply');
+  console.log('[Phase 5] Integration PASSED — scoped conversation memory influences reply');
   console.log('[Phase 5] PASSED');
   process.exit(0);
 } catch (error) {

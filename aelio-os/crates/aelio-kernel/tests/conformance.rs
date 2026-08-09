@@ -62,6 +62,11 @@ fn load_registry(vector: &J) -> Registry {
 fn run_vector(path: &std::path::Path) {
     let text = fs::read_to_string(path).unwrap();
     let v: J = serde_json::from_str(&text).unwrap();
+    // `docs/vectors` also contains TaskGraph fixtures consumed by task_graph_vectors.rs. They do
+    // not use the Sol conformance `plan`/`expected` envelope and must not be parsed as if they do.
+    if v.get("plan").is_none() || v.get("expected").is_none() {
+        return;
+    }
     let name = v["name"].as_str().unwrap_or("?");
     let plan = v["plan"].clone();
     let plan_text = serde_json::to_string(&plan).unwrap();

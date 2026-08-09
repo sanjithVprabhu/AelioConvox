@@ -365,16 +365,27 @@ pub fn greeting_template(
         }
     }
     let caps = if capabilities.is_empty() {
-        "help with your account".into()
+        None
     } else {
-        capabilities.join(", ")
+        Some(capabilities.join(", "))
     };
     let text = if dormant {
-        format!("Welcome back! It's been a while — I can help with: {caps}.")
+        match &caps {
+            Some(c) => format!("Welcome back! It's been a while — I can help with: {c}."),
+            None => "Welcome back! It's been a while — how can I help?".into(),
+        }
     } else if returning {
-        format!("Hi again — want to pick up where you left off? I can help with: {caps}.")
+        match &caps {
+            Some(c) => {
+                format!("Hi again — want to pick up where you left off? I can help with: {c}.")
+            }
+            None => "Hi again — want to pick up where you left off?".into(),
+        }
     } else {
-        format!("Hey! I can help you {caps}.")
+        match &caps {
+            Some(c) => format!("Hey! I can help with: {c}."),
+            None => "Hey! How can I help you today?".into(),
+        }
     };
     Utterance {
         text,

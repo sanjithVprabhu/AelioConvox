@@ -41,7 +41,7 @@ const TABLES = {
   functionCalls: 'convox_function_calls', turnApiCalls: 'convox_turn_api_calls',
   reflections: 'convox_reflections', proactiveMessages: 'convox_proactive_messages',
   inboundDedup: 'convox_inbound_dedup', magicLinks: 'convox_magic_links',
-  sdkConnections: 'convox_sdk_connections', archetypes: 'convox_archetypes',
+  sdkConnections: 'convox_sdk_connections', sdkCatalog: 'convox_sdk_catalog', archetypes: 'convox_archetypes',
   aspects: 'convox_aspects', axisNodes: 'convox_axis_nodes',
 };
 

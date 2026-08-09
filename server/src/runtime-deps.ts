@@ -7,6 +7,7 @@ import type {
   ConvoxInboundDedupStore,
   ConvoxMagicLinkStore,
   ConvoxSdkConnectionStore,
+  ConvoxCatalogEntityStore,
 } from '@aelio/core/edge';
 import type { LLMProvider } from '@aelio/llm';
 import type { WhatsAppSender } from '@aelio/channels';
@@ -32,4 +33,6 @@ export type RuntimeDeps = {
   inboundDedupStore: ConvoxInboundDedupStore;
   magicLinkStore: ConvoxMagicLinkStore;
   sdkConnectionStore: ConvoxSdkConnectionStore;
+  /** Soft-delete durable catalog (tools/states/policies/flows); reads are active-only. */
+  catalogEntityStore: ConvoxCatalogEntityStore;
 };

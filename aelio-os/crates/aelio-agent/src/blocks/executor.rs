@@ -238,10 +238,10 @@ fn execute_builtin(
         }
         "Express.Synthesize" => {
             let evidence = if frame.capabilities.is_empty() {
-                "Hey! How can I help?".to_string()
+                "Hey! How can I help you today?".to_string()
             } else {
                 format!(
-                    "Hey! I can help you {}.",
+                    "Hey! I can help with: {}.",
                     capability_labels(&frame.capabilities).join(" or ")
                 )
             };

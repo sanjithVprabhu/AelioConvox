@@ -27,7 +27,8 @@ export type TurnApiCallPurpose =
   | 'replan'
   | 'bind'
   | 'synthesis'
-  | 'recoil_extract';
+  | 'recoil_extract'
+  | 'agent_loop';
 
 export type TurnApiCallsAelioDbConfig = {
   client: AelioDbClient;

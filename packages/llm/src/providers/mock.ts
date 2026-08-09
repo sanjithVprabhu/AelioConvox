@@ -77,26 +77,76 @@ export class MockProvider implements LLMProvider {
       };
     }
 
-    const hasToolResults = opts.messages.some(
+    let lastNaturalUserIndex = -1;
+    opts.messages.forEach((message, index) => {
+      if (
+        message.role === 'user'
+        && message.content.trim().length > 0
+        && !message.content.trimStart().startsWith('{"kernel_notice"')
+      ) {
+        lastNaturalUserIndex = index;
+      }
+    });
+    const currentTurnMessages = opts.messages.slice(lastNaturalUserIndex + 1);
+    const hasToolResults = currentTurnMessages.some(
       (message) => message.toolResults && message.toolResults.length > 0,
     );
+    const finishTool = opts.tools.find((tool) => tool.name === 'finish');
     if (hasToolResults) {
       // Approximate what a real LLM would say from the tools that ran — the
       // harness feeds executed tool calls in as assistant toolCalls, so the
       // synthesis reply reflects the action (e.g. a cancellation) rather than a
       // single canned string.
-      const calledTools = opts.messages
+      const calledTools = currentTurnMessages
         .flatMap((message) => message.toolCalls ?? [])
-        .map((call) => call.name.toLowerCase());
-      if (calledTools.some((name) => name.includes('cancel'))) {
+        .map((call) => call.name.toLowerCase().replace(/[^a-z0-9]/g, ''));
+      const hadToolError = currentTurnMessages
+        .flatMap((message) => message.toolResults ?? [])
+        .some((result) => {
+          try {
+            return Boolean((JSON.parse(result.content) as { error?: unknown }).error);
+          } catch {
+            return true;
+          }
+        });
+      const toolResultText = currentTurnMessages
+        .flatMap((message) => message.toolResults ?? [])
+        .map((result) => result.content)
+        .join('\n')
+        .toLowerCase();
+      const finalText = hadToolError
+        ? 'I could not complete that action safely.'
+        : calledTools.some((name) => name.includes('memorysearch'))
+          ? toolResultText.includes('metric') && toolResultText.includes('imperial')
+            ? 'I found conflicting unit preferences in the retrieved conversation history.'
+            : toolResultText.includes('metric')
+              ? 'Based on what I remember, you prefer metric units.'
+              : toolResultText.includes('imperial')
+                ? 'Based on what I remember, you prefer imperial units.'
+                : 'I could not find a matching preference in our conversation history.'
+        : calledTools.some((name) => name.includes('cancel'))
+          ? 'Your order has been cancelled. Is there anything else I can help with?'
+          : calledTools.some((name) => name.includes('listorder'))
+            ? 'You have 3 orders: A123 (shipped), B456 (pending), and C789 (shipped).'
+            : 'Your last order shipped today. Tracking: 1Z999AA10123456784';
+      if (finishTool) {
         return {
-          text: 'Your order has been cancelled. Is there anything else I can help with?',
-          toolCalls: [],
-          stopReason: 'stop',
+          text: '',
+          toolCalls: [{
+            id: 'mock_finish_after_tools',
+            name: 'finish',
+            args: {
+              message: finalText,
+              status: hadToolError ? 'blocked' : 'completed',
+              resolved_effect_ids: [],
+              unresolved_effect_ids: [],
+            },
+          }],
+          stopReason: 'tool_use',
         };
       }
       return {
-        text: 'Your last order shipped today. Tracking: 1Z999AA10123456784',
+        text: finalText,
         toolCalls: [],
         stopReason: 'stop',
       };
@@ -116,22 +166,65 @@ export class MockProvider implements LLMProvider {
       };
     }
 
-    const cancelTool = opts.tools.find((tool) => tool.name === 'cancelOrder');
+    const normalizedToolName = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const explicitOrderId = content.match(/\b[a-z]\d{3,}\b/i)?.[0]?.toUpperCase() ?? 'last';
+    const cancelTool = opts.tools.find((tool) =>
+      normalizedToolName(tool.name).includes('cancelorder')
+    );
+    const memorySearchTool = opts.tools.find((tool) =>
+      normalizedToolName(tool.name).includes('memorysearch')
+    );
+    if (
+      memorySearchTool
+      && (content.includes('what') || content.includes('remember'))
+      && (content.includes('unit') || content.includes('prefer') || content.includes('memory'))
+    ) {
+      return {
+        text: '',
+        toolCalls: [{
+          id: 'mock_tool_memory_search',
+          name: memorySearchTool.name,
+          args: { query: content, limit: 5 },
+        }],
+        stopReason: 'tool_use',
+      };
+    }
     if (cancelTool && content.includes('cancel')) {
       return {
         text: '',
         toolCalls: [
           {
             id: 'mock_tool_cancel',
-            name: 'cancelOrder',
-            args: { orderId: 'last' },
+            name: cancelTool.name,
+            args: { orderId: explicitOrderId },
           },
         ],
         stopReason: 'tool_use',
       };
     }
 
-    const orderTool = opts.tools.find((tool) => tool.name === 'getOrderStatus');
+
+    const listOrdersTool = opts.tools.find((tool) =>
+      normalizedToolName(tool.name).includes('listorders')
+    );
+    if (
+      listOrdersTool
+      && (content.includes('list') || content.includes('show') || content.includes('my orders'))
+    ) {
+      return {
+        text: '',
+        toolCalls: [{
+          id: 'mock_tool_list_orders',
+          name: listOrdersTool.name,
+          args: {},
+        }],
+        stopReason: 'tool_use',
+      };
+    }
+
+    const orderTool = opts.tools.find((tool) =>
+      normalizedToolName(tool.name).includes('getorderstatus')
+    );
     if (
       orderTool &&
       !content.includes('cancel') &&
@@ -142,18 +235,30 @@ export class MockProvider implements LLMProvider {
         toolCalls: [
           {
             id: 'mock_tool_1',
-            name: 'getOrderStatus',
-            args: { orderId: 'last' },
+            name: orderTool.name,
+            args: { orderId: explicitOrderId },
           },
         ],
         stopReason: 'tool_use',
       };
     }
 
-    return {
-      text: 'Hi! I can help you check order status. Try asking "what is my order status?"',
-      toolCalls: [],
-      stopReason: 'stop',
-    };
+    const greeting = 'Hi! I can help you check order status. Try asking "what is my order status?"';
+    return finishTool
+      ? {
+          text: '',
+          toolCalls: [{
+            id: 'mock_finish_reply',
+            name: 'finish',
+            args: {
+              message: greeting,
+              status: 'completed',
+              resolved_effect_ids: [],
+              unresolved_effect_ids: [],
+            },
+          }],
+          stopReason: 'tool_use',
+        }
+      : { text: greeting, toolCalls: [], stopReason: 'stop' };
   }
 }

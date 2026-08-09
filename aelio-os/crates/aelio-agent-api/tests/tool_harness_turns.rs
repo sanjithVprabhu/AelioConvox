@@ -20,7 +20,11 @@ fn app(tag: &str) -> axum::Router {
     router(AppState::new(runtime, vec!["test-key".into()]))
 }
 
-async fn post_turn(app: &axum::Router, turn_id: &str, utterance: &str) -> (StatusCode, serde_json::Value) {
+async fn post_turn(
+    app: &axum::Router,
+    turn_id: &str,
+    utterance: &str,
+) -> (StatusCode, serde_json::Value) {
     let response = app
         .clone()
         .oneshot(

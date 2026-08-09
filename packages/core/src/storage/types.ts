@@ -26,6 +26,7 @@ export type AelioDbTableNames = {
   inboundDedup: string;
   magicLinks: string;
   sdkConnections: string;
+  sdkCatalog: string;
   archetypes: string;
   aspects: string;
   axisNodes: string;

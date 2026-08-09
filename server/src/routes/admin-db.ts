@@ -208,6 +208,14 @@ const TABLE_META: Array<{
     writtenBy: 'ConvoxSdkConnectionStore (ServerSdkBridge)',
   },
   {
+    key: 'sdk_catalog',
+    label: 'SDK Catalog',
+    description:
+      'One durable row per tool/state/policy/flow. Soft-delete via active=1|0 on register/catalog_update; live pulls filter active only.',
+    status: 'active',
+    writtenBy: 'ConvoxCatalogEntityStore.syncSnapshot (SDK register)',
+  },
+  {
     key: 'archetypes',
     label: 'Archetypes',
     description:

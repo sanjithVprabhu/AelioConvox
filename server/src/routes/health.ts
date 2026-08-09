@@ -22,6 +22,7 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
       runtime: false,
       aelioDb: false,
       widget: false,
+      agentModelGateway: false,
     };
 
     try {
@@ -39,8 +40,16 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
     }
 
     checks.widget = existsSync(resolvePublicDir() + '/widget.js');
+    checks.agentModelGateway = Boolean(
+      deps.config.llm.provider
+      && deps.config.llm.model
+      && deps.config.llm.max_tokens >= 512,
+    );
 
-    const ready = checks.widget && checks.runtime && checks.aelioDb;
+    const ready = checks.widget
+      && checks.runtime
+      && checks.aelioDb
+      && checks.agentModelGateway;
     const isProduction = process.env.NODE_ENV === 'production';
     const authorized = secretsMatch(bearerToken(request), deps.config.secret);
     const redactCatalog = isProduction && !authorized;

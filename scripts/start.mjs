@@ -9,6 +9,7 @@
  * to customize secrets and provider keys.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { existsSync, copyFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -192,6 +193,8 @@ if (examplePort !== 8080) {
   );
 }
 
+const harnessMode = (process.env.AELIO_HARNESS_MODE ?? 'agent_loop').trim().toLowerCase()
+  || 'agent_loop';
 const childEnv = {
   ...process.env,
   AELIO_CONFIG: resolvedConfig,
@@ -206,6 +209,11 @@ const childEnv = {
   AELIO_HOST_TOKEN: internalToken,
   AELIO_LLM_GATEWAY_TOKEN: internalToken,
   AELIO_LLM_GATEWAY_URL: `http://127.0.0.1:${serverPort}/internal/aelio/llm/complete`,
+  AELIO_AGENT_LOOP_GATEWAY_URL: `http://127.0.0.1:${serverPort}/internal/aelio/llm/agent`,
+  AELIO_HARNESS_MODE: harnessMode,
+  AELIO_AGENT_LOOP_STATE_KEY:
+    process.env.AELIO_AGENT_LOOP_STATE_KEY
+    ?? createHash('sha256').update(`aelio-agent-loop:${internalToken}`).digest('base64url'),
   AELIO_LLM_EMBED_URL: `http://127.0.0.1:${serverPort}/internal/aelio/llm/embed`,
   AELIO_TENANT_ID: tenantName,
   AELIO_DATA_DIR: process.env.AELIO_DATA_DIR ?? join(root, 'data/aelio-os'),
@@ -295,6 +303,20 @@ if (skipExampleSdk) {
   await waitForSdkReady();
 }
 
+function peekLlmProvider(configFile) {
+  try {
+    const text = readFileSync(configFile, 'utf8');
+    const llmBlock = text.match(/^llm:\s*\n((?:[ \t]+.+\n?)*)/m);
+    const fromBlock = llmBlock?.[1]?.match(/^\s*provider:\s*(\S+)/m);
+    if (fromBlock) return fromBlock[1];
+    const fallback = text.match(/^\s*provider:\s*(\S+)/m);
+    if (fallback) return fallback[1];
+  } catch {
+    // banner-only helper
+  }
+  return 'unknown';
+}
+
 console.log('\n────────────────────────────────────────────────────────');
 console.log('  Aelio is running');
 console.log(`  Chat demo:    http://localhost:${serverPort}/demo.html`);
@@ -303,7 +325,15 @@ console.log(`  Ready:        http://localhost:${serverPort}/ready`);
 console.log(`  Rust runtime: ${rustUrl}`);
 console.log(`  Port:         ${serverPort} (set AELIO_PORT to change; default ${DEFAULT_AELIO_PORT})`);
 console.log('  Config:       ' + resolvedConfig);
-console.log('  LLM:          mock (edit config.yaml or .env for a real provider)');
+const llmProvider = peekLlmProvider(resolvedConfig);
+console.log(
+  llmProvider === 'mock'
+    ? '  LLM:          mock (set AELIO_CONFIG / provider for openai|anthropic|…)'
+    : `  LLM:          ${llmProvider}`,
+);
+console.log(
+  `  Harness mode: ${harnessMode} (AELIO_HARNESS_MODE=agent_loop|legacy|sol|auto — see Rust boot banner)`,
+);
 if (skipExampleSdk) {
   console.log('  SDK:          (none — start your backend, e.g. aelio-test-3 ./start.sh)');
 } else {

@@ -147,6 +147,9 @@ export class Aelio {
   private sendHandler: SendHandler | null = null;
   private personaText: string | null = null;
   private productBriefText: string | null = null;
+  private applicationName: string | null = null;
+  private catalogSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastCatalogFingerprint: string | null = null;
   private ws: WebSocket | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastPongAt = 0;
@@ -163,6 +166,16 @@ export class Aelio {
       handler: handler as ExposedHandler,
       schema,
     });
+    this.scheduleCatalogSync();
+  }
+
+  /**
+   * Name shown in Aelio server connect logs (e.g. "Develup", "ShopCo").
+   * Defaults to an unnamed SDK app if omitted.
+   */
+  application(name: string): void {
+    this.applicationName = name.trim();
+    this.scheduleCatalogSync();
   }
 
   /**
@@ -171,6 +184,7 @@ export class Aelio {
    */
   persona(text: string): void {
     this.personaText = text.trim();
+    this.scheduleCatalogSync();
   }
 
   /**
@@ -181,6 +195,7 @@ export class Aelio {
    */
   describe(text: string): void {
     this.productBriefText = text.trim();
+    this.scheduleCatalogSync();
   }
 
   /**
@@ -190,11 +205,13 @@ export class Aelio {
    */
   state(id: string, schema: StateSchema): void {
     this.states.set(id, schema);
+    this.scheduleCatalogSync();
   }
 
   /** Register a conversation policy enforced on every turn. */
   policy(id: string, schema: PolicySchema): void {
     this.policies.set(id, schema);
+    this.scheduleCatalogSync();
   }
 
   /**
@@ -203,6 +220,7 @@ export class Aelio {
    */
   flow(id: string, schema: FlowSchema): void {
     this.flows.set(id, schema);
+    this.scheduleCatalogSync();
   }
 
   /** Push the current lifecycle state for a customer (your DB is source of truth). */
@@ -367,6 +385,7 @@ export class Aelio {
       type: 'register',
       sdkVersion: this.listenOptions?.sdkVersion ?? '0.1.0',
       language: 'node',
+      ...(this.applicationName ? { application: this.applicationName } : {}),
       functions,
       ...(states.length > 0 ? { states } : {}),
       ...(policies.length > 0 ? { policies } : {}),
@@ -395,6 +414,13 @@ export class Aelio {
     const message = result.data;
     if (message.type === 'ping') {
       this.handlePing(message);
+      const app = this.applicationName ?? 'unnamed SDK app';
+      const ts = new Date().toISOString().slice(11, 19);
+      console.log(
+        `♥ [${ts}] heartbeat from Aelio — ${app} ` +
+          `(tools=${this.handlers.size} states=${this.states.size} ` +
+          `flows=${this.flows.size} policies=${this.policies.size})`,
+      );
       return;
     }
 
@@ -412,7 +438,84 @@ export class Aelio {
       // A protocol-level complaint from the server (e.g. a malformed frame we
       // sent). Surface it so integrators can see why a message had no effect.
       console.warn(`[aelio-sdk] server error [${message.code}]: ${message.message}`);
+      return;
     }
+
+    if (message.type === 'registered') {
+      const border = '════════════════════════════════════════════════════════';
+      const bullet = (label: string, items: string[]) =>
+        items.length === 0
+          ? [`  ${label} (0): (none)`]
+          : [`  ${label} (${items.length}):`, ...items.map((item) => `    • ${item}`)];
+      if (message.reason === 'catalog_update') {
+        const change = (label: string, added?: string[], removed?: string[]) => {
+          const lines: string[] = [];
+          if (added?.length) lines.push(`  + ${label}: ${added.join(', ')}`);
+          if (removed?.length) lines.push(`  − ${label}: ${removed.join(', ')}`);
+          return lines;
+        };
+        console.log(
+          [
+            border,
+            `  ↻ ${message.application} catalog updated on Aelio`,
+            `  tenant:     ${message.tenant}`,
+            '',
+            ...change('tools', message.added?.tools, message.removed?.tools),
+            ...change('states', message.added?.states, message.removed?.states),
+            ...change('flows', message.added?.flows, message.removed?.flows),
+            ...change('policies', message.added?.policies, message.removed?.policies),
+            '',
+            ...bullet('tools now', message.tools),
+            ...bullet('states now', message.states),
+            ...bullet('flows now', message.flows),
+            ...bullet('policies now', message.policies),
+            border,
+          ].join('\n'),
+        );
+      } else {
+        console.log(
+          [
+            border,
+            `  ✓ ${message.application} successfully connected to Aelio`,
+            `  tenant:     ${message.tenant}`,
+            '',
+            ...bullet('tools', message.tools),
+            ...bullet('states', message.states),
+            ...bullet('flows', message.flows),
+            ...bullet('policies', message.policies),
+            border,
+          ].join('\n'),
+        );
+      }
+      this.lastCatalogFingerprint = this.catalogFingerprint();
+    }
+  }
+
+  private catalogFingerprint(): string {
+    return JSON.stringify({
+      application: this.applicationName,
+      tools: [...this.handlers.keys()].sort(),
+      states: [...this.states.keys()].sort(),
+      flows: [...this.flows.keys()].sort(),
+      policies: [...this.policies.keys()].sort(),
+    });
+  }
+
+  private scheduleCatalogSync(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    if (this.catalogSyncTimer) {
+      clearTimeout(this.catalogSyncTimer);
+    }
+    this.catalogSyncTimer = setTimeout(() => {
+      this.catalogSyncTimer = null;
+      const next = this.catalogFingerprint();
+      if (next === this.lastCatalogFingerprint) {
+        return;
+      }
+      this.sendRegister();
+    }, 250);
   }
 
   private handlePing(message: PingMessage): void {

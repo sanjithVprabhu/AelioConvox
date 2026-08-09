@@ -33,6 +33,7 @@ export type LLMTelemetryMeta = {
     | 'immediate_context_compaction'
     | 'aspect_discovery'
     | 'plan'
+    | 'agent_loop'
     | 'replan'
     | 'bind'
     | 'synthesis'

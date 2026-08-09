@@ -1,0 +1,31 @@
+{
+  "protocol_version": 2,
+  "request_id": "agent-loop-fixture-1",
+  "attempt_id": "agent-loop-fixture-1:attempt:1",
+  "model": "fixture-model",
+  "max_tokens": 4096,
+  "temperature": 0.2,
+  "system": "You are the fixture agent.",
+  "bootstrap": "Session tenant: fixture-tenant",
+  "messages": [
+    { "role": "user", "text": "hello" }
+  ],
+  "tools": [
+    {
+      "name": "finish",
+      "version": "1",
+      "description": "Finish with an explicit customer-facing response.",
+      "input_schema": {
+        "type": "object",
+        "properties": { "message": { "type": "string" } },
+        "required": ["message"],
+        "additionalProperties": false
+      },
+      "effect_class": "read"
+    }
+  ],
+  "tool_choice": { "type": "auto" },
+  "cache": {
+    "stable_prefix_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

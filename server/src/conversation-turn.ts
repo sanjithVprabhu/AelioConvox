@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
+import { extractMemories } from '@aelio/core/edge';
 import {
   flattenToText,
   textFrame,
@@ -59,6 +60,7 @@ export async function executeConversationTurn(
     user_id: instanceId,
     utterance: input.message,
     channel: input.channel,
+    ...(input.customerId ? { memory_subject_id: input.customerId } : {}),
   });
 
   logTurnPipeline({
@@ -68,6 +70,8 @@ export async function executeConversationTurn(
     tier: typeof result.tier === 'string' ? result.tier : undefined,
     llmCalls: result.llm_calls,
     steps: result.steps ?? [],
+    suspended: Boolean(result.suspended),
+    openedLoop: Boolean((result as { opened_loop?: boolean }).opened_loop),
   });
 
   const replyText = result.reply.text.trim();
@@ -97,6 +101,16 @@ export async function executeConversationTurn(
       role: 'assistant',
       content: reply,
     });
+    if (deps.config.memory.enabled) {
+      void extractMemories({
+        memoryStore: deps.memoryStore,
+        customerId: input.customerId,
+        sessionId: input.sessionId,
+        userMessage: input.message,
+        assistantReply: reply,
+        turnId,
+      }).catch(() => {});
+    }
   }
 
   return {

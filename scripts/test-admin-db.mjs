@@ -54,6 +54,7 @@ const EXPECTED_TABLE_KEYS = [
   'inbound_dedup',
   'magic_links',
   'sdk_connections',
+  'sdk_catalog',
   'archetypes',
   'aspects',
   'axis_nodes',
@@ -343,7 +344,7 @@ async function main() {
     proactiveMessages: 'convox_proactive_messages',
     inboundDedup: 'convox_inbound_dedup',
     magicLinks: 'convox_magic_links',
-    sdkConnections: 'convox_sdk_connections',
+    sdkConnections: 'convox_sdk_connections', sdkCatalog: 'convox_sdk_catalog',
     archetypes: 'convox_archetypes', aspects: 'convox_aspects', axisNodes: 'convox_axis_nodes',
   };
 

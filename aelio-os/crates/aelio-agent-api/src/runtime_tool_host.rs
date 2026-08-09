@@ -46,8 +46,7 @@ impl CapabilityHost for RuntimeArtifactToolHost {
         //
         // Customer identity for the SDK still flows through `context.user_id`. The TS host prefers
         // that field over `instance_id` when present (`aelio-host.ts`).
-        let instance_id =
-            stable_instance_id(&self.tenant_id, &tool.id, version, idempotency_key);
+        let instance_id = stable_instance_id(&self.tenant_id, &tool.id, version, idempotency_key);
         let input = serde_json::json!({
             "args": args
                 .iter()

@@ -29,9 +29,8 @@ const SDK_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20
 
 async fn recv_json<S>(socket: &mut S) -> Value
 where
-    S: futures_util::Stream<
-            Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>,
-        > + Unpin,
+    S: futures_util::Stream<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
+        + Unpin,
 {
     let frame = tokio::time::timeout(SDK_FRAME_TIMEOUT, socket.next())
         .await
@@ -46,7 +45,6 @@ where
     serde_json::from_str(frame.into_text().unwrap().as_str())
         .expect("sdk socket frame must be JSON")
 }
-
 
 fn app(tag: &str, keys: Vec<String>) -> axum::Router {
     let path = std::env::temp_dir().join(format!("aelio_server_{tag}_{}", std::process::id()));

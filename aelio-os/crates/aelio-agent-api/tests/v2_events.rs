@@ -21,7 +21,11 @@ fn app(tag: &str) -> axum::Router {
     router(AppState::new(runtime, vec!["test-key".into()]))
 }
 
-async fn post_json(app: &axum::Router, path: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+async fn post_json(
+    app: &axum::Router,
+    path: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
     let response = app
         .clone()
         .oneshot(
@@ -37,7 +41,8 @@ async fn post_json(app: &axum::Router, path: &str, body: serde_json::Value) -> (
         .unwrap();
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(json!({ "raw": String::from_utf8_lossy(&bytes) }));
+    let v: serde_json::Value =
+        serde_json::from_slice(&bytes).unwrap_or(json!({ "raw": String::from_utf8_lossy(&bytes) }));
     (status, v)
 }
 
@@ -84,9 +89,7 @@ async fn v2_events_average_route() {
     // Prefer: tool path if matched, else conductor deterministic route.
     let route = v["conductor_route"].as_str().unwrap_or("");
     assert!(
-        route == "spawn_average"
-            || route == "understand_intent"
-            || v["tool_harness"] == true,
+        route == "spawn_average" || route == "understand_intent" || v["tool_harness"] == true,
         "unexpected route: {v}"
     );
 }

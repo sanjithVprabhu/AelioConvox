@@ -175,6 +175,7 @@ export class AelioRuntimeClient {
     user_id: string;
     utterance: string;
     channel: string;
+    memory_subject_id?: string;
   }): Promise<z.infer<typeof AgentTurnReplySchema>> {
     return this.request(
       '/agent/v1/turns',

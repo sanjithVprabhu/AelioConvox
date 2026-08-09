@@ -14,6 +14,15 @@ import { buildAgentCatalog } from '../aelio-agent-catalog.js';
 import { stableAgentUserId } from '../conversation-turn.js';
 import { secretsMatch } from '../auth.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
+import {
+  logSdkCatalogPersist,
+  logSdkCatalogUpdate,
+  logSdkDisconnected,
+  logSdkHeartbeat,
+  logSdkRegistrationSuccess,
+  diffCatalogNames,
+} from '../sdk-registration-log.js';
+import { refreshCatalogBagAfterSync } from '../catalog-bag.js';
 
 function ingestDedupKey(channel: string, from: string, text: string, messageId?: string): string {
   if (messageId) {
@@ -122,7 +131,9 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
 
       const message = result.data;
       if (message.type === 'register') {
-        if (registrationStarted) {
+        const isUpdate = registrationStarted && sdkBridge.isRegistered(connectionId);
+        if (registrationStarted && !isUpdate) {
+          // Register in flight / failed mid-way — don't accept a second concurrent attempt.
           socket.send(
             JSON.stringify({
               type: 'error',
@@ -133,7 +144,44 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           socket.close(1008, 'Duplicate registration');
           return;
         }
-        registrationStarted = true;
+        if (!registrationStarted) {
+          registrationStarted = true;
+        }
+
+        const prior = isUpdate ? sdkBridge.getConnection(connectionId) : undefined;
+        const beforeNames = {
+          tools: (prior?.functions ?? []).map((fn) => fn.name),
+          states: (prior?.states ?? []).map((s) => s.id),
+          flows: (prior?.flows ?? []).map((f) => f.id),
+          policies: (prior?.policies ?? []).map((p) => p.id),
+        };
+        const afterNames = {
+          tools: message.functions.map((fn) => fn.name),
+          states: (message.states ?? []).map((s) => s.id),
+          flows: (message.flows ?? []).map((f) => f.id),
+          policies: (message.policies ?? []).map((p) => p.id),
+        };
+        const { added, removed, changed } = diffCatalogNames(beforeNames, afterNames);
+        if (isUpdate && !changed) {
+          // No capability delta — still ack so the SDK clears its sync timer.
+          socket.send(
+            JSON.stringify({
+              type: 'registered',
+              application: prior?.application ?? config.name,
+              tenant: config.name,
+              connectionId,
+              tools: afterNames.tools,
+              states: afterNames.states,
+              flows: afterNames.flows,
+              policies: afterNames.policies,
+              reason: 'catalog_update',
+              added,
+              removed,
+            }),
+          );
+          return;
+        }
+
         if (deps.aelioRuntime) {
           try {
             await deps.aelioRuntime.pushAgentCatalog(
@@ -145,7 +193,7 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
             );
           } catch (error: unknown) {
             app.log.error(
-              { err: error, connectionId },
+              { err: error, connectionId, isUpdate },
               'SDK registration contained a flow rejected by the Rust runtime',
             );
             socket.send(
@@ -155,16 +203,25 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
                 message: error instanceof Error ? error.message : 'Rust runtime rejected flow',
               }),
             );
-            socket.close(1008, 'Aelio flow rejected');
+            if (!isUpdate) {
+              socket.close(1008, 'Aelio flow rejected');
+            }
             return;
           }
         }
         // Switch the callable host snapshot only after Rust has atomically admitted the exact
         // tools and compiled flow pins. A rejected upgrade therefore leaves the previous SDK
         // connection authoritative instead of creating a version-drift window.
+        const application =
+          message.application?.trim()
+          || message.productBrief?.split('\n').find((line) => line.trim())?.trim()?.slice(0, 128)
+          || prior?.application
+          || config.name
+          || 'unnamed SDK app';
         sdkBridge.register({
           id: connectionId,
           socket: socket as WebSocket,
+          application,
           functions: message.functions,
           states: message.states ?? [],
           policies: message.policies ?? [],
@@ -174,17 +231,100 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           sdkVersion: message.sdkVersion,
           language: message.language,
           canSend: message.canSend ?? false,
-          connectedAt: Date.now(),
+          connectedAt: prior?.connectedAt ?? Date.now(),
           lastHeartbeatAt: Date.now(),
         });
+
+        // Durable soft-delete catalog + hot bag: present → active=true; missing → active=false.
+        try {
+          const syncResult = await deps.catalogEntityStore.syncSnapshot({
+            tenant: config.name,
+            application,
+            connectionId,
+            tools: message.functions.map((fn) => ({ ...fn, name: fn.name })),
+            states: (message.states ?? []).map((s) => ({ ...s, id: s.id })),
+            policies: (message.policies ?? []).map((p) => ({ ...p, id: p.id })),
+            flows: (message.flows ?? []).map((f) => ({ ...f, id: f.id })),
+          });
+          await refreshCatalogBagAfterSync(deps.catalogEntityStore, config.name, application);
+          logSdkCatalogPersist({
+            application,
+            tenant: config.name,
+            activated: syncResult.activated,
+            deactivated: syncResult.deactivated,
+          });
+        } catch (error: unknown) {
+          app.log.error(
+            { err: error, connectionId, application },
+            'SDK catalog soft-delete persist failed',
+          );
+        }
+
+        if (isUpdate) {
+          logSdkCatalogUpdate({
+            application,
+            tenant: config.name,
+            connectionId,
+            after: afterNames,
+            added,
+            removed,
+          });
+        } else {
+          logSdkRegistrationSuccess({
+            application,
+            tenant: config.name,
+            connectionId,
+            remoteAddress,
+            sdkVersion: message.sdkVersion,
+            language: message.language,
+            tools: message.functions.map((fn) => ({
+              name: fn.name,
+              description: fn.description,
+            })),
+            states: (message.states ?? []).map((state) => ({
+              id: state.id,
+              description: state.description,
+            })),
+            flows: (message.flows ?? []).map((flow) => ({
+              id: flow.id,
+              description: flow.description,
+              state: flow.state,
+            })),
+            policies: (message.policies ?? []).map((policy) => ({
+              id: policy.id,
+              description: policy.description,
+            })),
+          });
+        }
+        socket.send(
+          JSON.stringify({
+            type: 'registered',
+            application,
+            tenant: config.name,
+            connectionId,
+            tools: afterNames.tools,
+            states: afterNames.states,
+            flows: afterNames.flows,
+            policies: afterNames.policies,
+            reason: isUpdate ? 'catalog_update' : 'connect',
+            ...(isUpdate ? { added, removed } : {}),
+          }),
+        );
         app.log.info(
           {
             connectionId,
+            application,
+            reason: isUpdate ? 'catalog_update' : 'connect',
             sdkVersion: message.sdkVersion,
             language: message.language,
-            functions: message.functions.map((fn) => fn.name),
+            functions: afterNames.tools,
+            states: afterNames.states,
+            flows: afterNames.flows,
+            policies: afterNames.policies,
           },
-          'Aelio SDK connected and registered catalog',
+          isUpdate
+            ? 'Aelio SDK catalog updated'
+            : 'Aelio SDK connected and registered catalog',
         );
         return;
       }
@@ -237,6 +377,17 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
 
       if (message.type === 'pong') {
         sdkBridge.touchHeartbeat(connectionId);
+        const connection = sdkBridge.getConnection(connectionId);
+        if (connection?.registered) {
+          logSdkHeartbeat({
+            application: connection.application,
+            connectionId,
+            tools: connection.functions.length,
+            states: connection.states.length,
+            flows: connection.flows.length,
+            policies: connection.policies.length,
+          });
+        }
         return;
       }
 
@@ -276,8 +427,13 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
     });
 
     socket.on('close', () => {
+      const prior = sdkBridge.getConnection(connectionId);
+      const application = prior?.application ?? '(unknown app)';
       sdkBridge.unregister(connectionId);
-      app.log.info({ connectionId, remoteAddress }, 'Aelio SDK disconnected');
+      if (prior?.registered) {
+        logSdkDisconnected(application, connectionId);
+      }
+      app.log.info({ connectionId, application, remoteAddress }, 'Aelio SDK disconnected');
     });
   });
 }

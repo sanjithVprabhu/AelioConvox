@@ -280,6 +280,7 @@ export const ConfigSchema = z.object({
           inbound_dedup: z.string().min(1).default('convox_inbound_dedup'),
           magic_links: z.string().min(1).default('convox_magic_links'),
           sdk_connections: z.string().min(1).default('convox_sdk_connections'),
+          sdk_catalog: z.string().min(1).default('convox_sdk_catalog'),
           archetypes: z.string().min(1).default('convox_archetypes'),
           aspects: z.string().min(1).default('convox_aspects'),
           axis_nodes: z.string().min(1).default('convox_axis_nodes'),

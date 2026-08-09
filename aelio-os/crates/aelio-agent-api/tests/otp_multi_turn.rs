@@ -20,7 +20,11 @@ fn app(tag: &str) -> axum::Router {
     router(AppState::new(runtime, vec!["test-key".into()]))
 }
 
-async fn post_turn(app: &axum::Router, turn_id: &str, utterance: &str) -> (StatusCode, serde_json::Value) {
+async fn post_turn(
+    app: &axum::Router,
+    turn_id: &str,
+    utterance: &str,
+) -> (StatusCode, serde_json::Value) {
     let response = app
         .clone()
         .oneshot(
@@ -57,7 +61,11 @@ async fn send_otp_then_code_verifies_login() {
     assert_eq!(v1["suspended"], true);
     let text1 = v1["reply"]["text"].as_str().unwrap_or("");
     assert!(text1.contains("OTP") || text1.contains("code"), "{text1}");
-    assert!(!v1["steps"].as_array().unwrap().iter().any(|s| s["name"] == "ProposePath"));
+    assert!(!v1["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["name"] == "ProposePath"));
 
     let (s2, v2) = post_turn(&app, "t2", "123456").await;
     assert_eq!(s2, StatusCode::OK, "{v2}");

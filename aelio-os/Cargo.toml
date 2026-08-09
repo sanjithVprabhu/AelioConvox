@@ -3,6 +3,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/aelio-agent-loop",
     "crates/aelio-agent",
     "crates/aelio-agent-api",
     "crates/aelio-sol",

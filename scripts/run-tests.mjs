@@ -98,6 +98,15 @@ const root = process.cwd();
 console.log('\n=== Verifying production authority graph ===');
 await run('node', ['scripts/check-production-authority.mjs']);
 
+console.log('\n=== Building TypeScript runtime dependencies ===');
+await run('pnpm', [
+  'turbo',
+  'run',
+  'build',
+  '--filter=@aelio/server^...',
+  '--filter=@aelio/sdk',
+]);
+
 console.log('\n=== Building authoritative Rust Aelio server ===');
 await run('cargo', [
   'build',
@@ -155,12 +164,15 @@ const rust = spawn(join(root, 'aelio-os/target/release/aelio-server'), [], {
     AELIO_HOST_URL: baseUrl,
     AELIO_HOST_TOKEN: internalToken,
     AELIO_LLM_GATEWAY_URL: `${baseUrl}/internal/aelio/llm/complete`,
+    AELIO_AGENT_LOOP_GATEWAY_URL: `${baseUrl}/internal/aelio/llm/agent`,
     AELIO_LLM_EMBED_URL: `${baseUrl}/internal/aelio/llm/embed`,
     AELIO_LLM_GATEWAY_TOKEN: internalToken,
     AELIO_LLM_EMBED_DIM: '1536',
     AELIO_TENANT_ID: 'aelio-local',
     AELIO_RUNTIME_TOKENS: internalToken,
     AELIO_EVENT_KEY_SECRET: internalToken,
+    AELIO_AGENT_LOOP_STATE_KEY: '5a'.repeat(32),
+    AELIO_HARNESS_MODE: process.env.AELIO_HARNESS_MODE ?? 'agent_loop',
   },
 });
 let rustOutput = '';

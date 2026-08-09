@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 type ActiveConnection = {
   id: string;
   socket: WebSocket;
+  application: string;
   functions: FunctionDefinition[];
   states: StateDefinition[];
   policies: PolicyDefinition[];
@@ -72,6 +73,7 @@ export class ServerSdkBridge implements SdkBridge {
     this.connections.set(connectionId, {
       id: connectionId,
       socket,
+      application: '(pending register)',
       functions: [],
       states: [],
       policies: [],

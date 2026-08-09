@@ -1,0 +1,29 @@
+{
+  "protocol_version": 2,
+  "request_id": "agent-loop-fixture-1",
+  "attempt_id": "agent-loop-fixture-1:attempt:1",
+  "response": {
+    "id": "fixture-response-1",
+    "content": [
+      {
+        "type": "tool_call",
+        "call": {
+          "id": "fixture-finish-1",
+          "name": "finish",
+          "arguments": {
+            "message": "Hello from the fixture.",
+            "status": "completed",
+            "resolved_effect_ids": [],
+            "unresolved_effect_ids": []
+          }
+        }
+      }
+    ],
+    "stop_reason": "tool_use",
+    "usage": {
+      "input_tokens": 12,
+      "cached_input_tokens": 8,
+      "output_tokens": 5
+    }
+  }
+}
