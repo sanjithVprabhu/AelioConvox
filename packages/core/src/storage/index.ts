@@ -10,6 +10,7 @@ export {
 export { appendConversationRecord } from './conversations.js';
 export {
   listConversationTelemetry,
+  listRuntimeConversationTelemetry,
   type ConversationTelemetryEvent,
 } from './telemetry.js';
 export { ConvoxMessageStore, createConvoxMessageStore } from './messages.js';

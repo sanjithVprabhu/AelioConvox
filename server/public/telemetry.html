@@ -520,6 +520,7 @@
     </header>
 
     <div class="toolbar">
+      <input id="filter-secret" type="password" placeholder="Server secret (AELIO_SDK_SECRET)" />
       <input id="filter-customer" type="text" placeholder="Filter by customer id (e.g. demo-user-123)" />
       <input id="filter-session" type="text" placeholder="Filter by session id" />
       <input id="filter-turn" type="text" placeholder="Filter by turn id (LLM/embed calls)" />
@@ -575,6 +576,14 @@
     </div>
 
     <script>
+      const secretInput = document.getElementById('filter-secret');
+      secretInput.value = localStorage.getItem('aelio_telemetry_secret') || '';
+
+      function authHeaders() {
+        const secret = secretInput.value.trim();
+        return secret ? { Authorization: `Bearer ${secret}` } : {};
+      }
+
       const feed = document.getElementById('feed');
       const statusPill = document.getElementById('status-pill');
       const statusText = document.getElementById('status-text');
@@ -709,9 +718,12 @@
         if (session) params.set('session_id', session);
         if (!reset && lastSeenCreatedAt > 0) params.set('since', String(lastSeenCreatedAt + 1));
 
-        const response = await fetch(`/api/v1/telemetry/events?${params}`);
+        const response = await fetch(`/api/v1/telemetry/events?${params}`, { headers: authHeaders() });
         const body = await response.json();
 
+        if (response.status === 401) {
+          throw new Error('Unauthorized — enter the server secret (AELIO_SDK_SECRET) above.');
+        }
         if (!response.ok && response.status !== 503) {
           throw new Error(body.message || `HTTP ${response.status}`);
         }
@@ -798,8 +810,11 @@
         if (turnId) params.set('turn_id', turnId);
         else if (sessionId) params.set('session_id', sessionId);
 
-        const response = await fetch(`/api/v1/telemetry/turn-calls?${params}`);
+        const response = await fetch(`/api/v1/telemetry/turn-calls?${params}`, { headers: authHeaders() });
         const body = await response.json();
+        if (response.status === 401) {
+          throw new Error('Unauthorized — enter the server secret (AELIO_SDK_SECRET) above.');
+        }
         if (!response.ok) {
           throw new Error(body.message || `HTTP ${response.status}`);
         }
@@ -833,9 +848,18 @@
 
       function startPolling() {
         if (pollTimer) clearInterval(pollTimer);
-        pollTimer = setInterval(() => fetchEvents(false), 2000);
+        pollTimer = setInterval(() => {
+          fetchEvents(false).catch((error) => {
+            setStatus('off', 'Error');
+            feed.innerHTML = `<div class="empty"><strong>Could not load telemetry</strong><br>${escapeHtml(error.message)}</div>`;
+          });
+        }, 2000);
       }
 
+      secretInput.addEventListener('change', () => {
+        localStorage.setItem('aelio_telemetry_secret', secretInput.value.trim());
+        refresh(true);
+      });
       document.getElementById('refresh-btn').addEventListener('click', () => refresh(true));
       document.getElementById('filter-customer').addEventListener('change', () => refresh(true));
       document.getElementById('filter-session').addEventListener('change', () => refresh(true));

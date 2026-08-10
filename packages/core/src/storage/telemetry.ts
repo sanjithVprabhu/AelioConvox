@@ -98,6 +98,87 @@ function mapRow(rowId: number, values: Record<string, ApiValue>): ConversationTe
   };
 }
 
+type RuntimeSnapshotHistoryEntry = {
+  role: string;
+  content: string;
+  at: number;
+};
+
+type RuntimeSnapshotPayload = {
+  history?: RuntimeSnapshotHistoryEntry[];
+  lifecycleState?: string | null;
+  lifecycleReason?: string | null;
+  flowProgress?: Record<string, { currentStepIndex: number; completedSteps: string[] }>;
+  lastChannel?: string;
+};
+
+/**
+ * Conversation telemetry sourced from the event-sourced Aelio runtime (`aelio_runtime_snapshots`)
+ * instead of the legacy `convox_conversations` table. Once Sunjet is enabled, the runtime always
+ * takes the `processAelioRuntimeMessage` path (see server/src/routes/widget.ts), which never
+ * writes `convox_conversations` — that table is only populated by the older `processTurn` path.
+ * This reads the subject snapshot's embedded history instead, which the runtime does maintain.
+ */
+export async function listRuntimeConversationTelemetry(
+  client: SunjetClient,
+  snapshotsTable: string,
+  input: {
+    limit?: number;
+    since?: number;
+    sessionId?: string;
+    customerExternalId?: string;
+  } = {},
+): Promise<ConversationTelemetryEvent[]> {
+  const limit = Math.min(Math.max(input.limit ?? 100, 1), 500);
+  const subjectId = input.customerExternalId || input.sessionId;
+  const filters: Array<{ col: string; op: 'eq'; value: ApiValue }> = [
+    { col: 'snapshot_key', op: 'eq', value: { type: 'utf8', value: 'subject' } },
+  ];
+  if (subjectId) {
+    filters.push({ col: 'subject_id', op: 'eq', value: { type: 'utf8', value: subjectId } });
+  }
+
+  const scan = await client.scanRows(snapshotsTable, {
+    k: 500,
+    filters,
+  });
+
+  const events: ConversationTelemetryEvent[] = [];
+  for (const row of scan.rows ?? []) {
+    const subject = readUtf8(row.values, 'subject_id');
+    const payloadRaw = readUtf8(row.values, 'payload_json');
+    let payload: RuntimeSnapshotPayload;
+    try {
+      payload = JSON.parse(payloadRaw) as RuntimeSnapshotPayload;
+    } catch {
+      continue;
+    }
+    for (const entry of payload.history ?? []) {
+      if (input.since !== undefined && entry.at < input.since) {
+        continue;
+      }
+      events.push({
+        rowId: row.row_id,
+        eventId: `${subject}:${entry.at}`,
+        messageId: `${subject}:${entry.at}`,
+        sessionId: subject,
+        customerId: subject,
+        customerExternalId: subject,
+        channel: payload.lastChannel ?? '',
+        channelAddress: '',
+        role: entry.role,
+        content: entry.content,
+        createdAt: entry.at,
+        lifecycleState: payload.lifecycleState ?? undefined,
+        lifecycleStateReason: payload.lifecycleReason ?? undefined,
+        pendingConfirmation: false,
+      });
+    }
+  }
+
+  return events.sort((a, b) => a.createdAt - b.createdAt).slice(-limit);
+}
+
 export async function listConversationTelemetry(
   client: SunjetClient,
   table: string,

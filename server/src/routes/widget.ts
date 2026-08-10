@@ -13,6 +13,32 @@ import { MAX_WS_FRAME_BYTES } from '@aelio/protocol';
 const WIDGET_WS_PATH = '/widget/ws';
 const MAX_MESSAGE_LENGTH = 4096;
 
+// Tools/personas can ask a multiple-choice question by ending a reply with this marker —
+// the widget renders it as tappable quick-reply buttons instead of the raw marker text.
+// Kept out of @aelio/protocol since these are plain JSON fields on an already-unvalidated
+// outbound frame, not new message types.
+const QUICK_REPLIES_PATTERN = /\[\[quick_replies:\s*([^\]]+)\]\]\s*$/i;
+// Same idea, but for a day/month/year date-of-birth picker — the widget submits the
+// selection back as an ISO "YYYY-MM-DD" message once the shopper picks all three.
+const DOB_PICKER_PATTERN = /\[\[dob_picker\]\]\s*$/i;
+
+function extractWidgetMarkers(reply: string): { content: string; options?: string[]; datePicker?: boolean } {
+  const dobMatch = reply.match(DOB_PICKER_PATTERN);
+  if (dobMatch) {
+    return { content: reply.slice(0, dobMatch.index).trim(), datePicker: true };
+  }
+  const quickReplyMatch = reply.match(QUICK_REPLIES_PATTERN);
+  if (!quickReplyMatch || !quickReplyMatch[1]) {
+    return { content: reply };
+  }
+  const options = quickReplyMatch[1]
+    .split('|')
+    .map((option) => option.trim())
+    .filter(Boolean);
+  const content = reply.slice(0, quickReplyMatch.index).trim();
+  return options.length > 0 ? { content, options } : { content };
+}
+
 const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('init'),
@@ -233,12 +259,15 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
               }),
             );
           } else {
+            const { content, options, datePicker } = extractWidgetMarkers(reply);
             socket.send(
               JSON.stringify({
                 type: 'message',
                 role: 'assistant',
-                content: reply,
+                content,
                 turnId,
+                ...(options ? { options } : {}),
+                ...(datePicker ? { datePicker } : {}),
               }),
             );
           }

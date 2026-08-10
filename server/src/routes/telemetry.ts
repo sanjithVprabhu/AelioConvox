@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { listConversationTelemetry, listTurnApiCalls, summarizeTurnApiCalls } from '@aelio/core';
+import {
+  listConversationTelemetry,
+  listRuntimeConversationTelemetry,
+  listTurnApiCalls,
+  summarizeTurnApiCalls,
+} from '@aelio/core';
 import type { FastifyInstance } from 'fastify';
 import { resolvePublicDir } from '../paths.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
@@ -40,21 +45,30 @@ export async function registerTelemetryRoutes(app: FastifyInstance, deps: Runtim
 
     const limit = query.limit ? Number.parseInt(query.limit, 10) : 100;
     const since = query.since ? Number.parseInt(query.since, 10) : undefined;
+    const opts = {
+      limit: Number.isFinite(limit) ? limit : 100,
+      since: Number.isFinite(since) ? since : undefined,
+      sessionId: query.session_id,
+      customerExternalId: query.customer_id,
+    };
 
-    const events = await listConversationTelemetry(
-      deps.sunjetClient,
-      deps.config.sunjet.tables.conversations,
-      {
-        limit: Number.isFinite(limit) ? limit : 100,
-        since: Number.isFinite(since) ? since : undefined,
-        sessionId: query.session_id,
-        customerExternalId: query.customer_id,
-      },
-    );
+    // Once Sunjet is enabled, the widget always routes through the event-sourced
+    // runtime (processAelioRuntimeMessage — see routes/widget.ts), which never
+    // writes `tables.conversations`. That table only fills up under the older
+    // processTurn path, taken when runtimeStore is absent. Read whichever one the
+    // active turn path actually writes to.
+    const usingRuntimeStore = Boolean(deps.runtimeStore);
+    const table = usingRuntimeStore
+      ? deps.config.sunjet.tables.runtime_snapshots
+      : deps.config.sunjet.tables.conversations;
+
+    const events = usingRuntimeStore
+      ? await listRuntimeConversationTelemetry(deps.sunjetClient, table, opts)
+      : await listConversationTelemetry(deps.sunjetClient, table, opts);
 
     return {
       enabled: true,
-      table: deps.config.sunjet.tables.conversations,
+      table,
       count: events.length,
       events,
     };

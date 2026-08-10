@@ -96,6 +96,22 @@ export class LighthouseService {
     return this.refresh().hash;
   }
 
+  /**
+   * refresh() schedules a Sunjet mirror resync fire-and-forget — correct for
+   * callers that don't read the mirror themselves (every SDK register/
+   * unregister), but a search that runs immediately after a resync it just
+   * triggered would race the mirror's delete-then-reinsert and could see a
+   * partially-cleared or empty table, misreporting a real, well-matched
+   * capability as unbound. Any caller that's about to read the mirror needs
+   * to wait for a sync it just caused to actually finish first.
+   */
+  private async refreshAndAwaitSync(): Promise<void> {
+    const { changed } = this.refresh();
+    if (changed && this.syncing) {
+      await this.syncing;
+    }
+  }
+
   getBrief(): string {
     this.refresh();
     return this.brief;
@@ -107,7 +123,7 @@ export class LighthouseService {
    * registry. Always returns live-registry definitions.
    */
   async searchTools(queryText: string, k: number): Promise<ToolSearchHit[]> {
-    this.refresh();
+    await this.refreshAndAwaitSync();
     const registry = this.config.bridge.getFunctions();
     if (this.mirror) {
       try {
@@ -127,7 +143,7 @@ export class LighthouseService {
    * Returns the best capability-similarity score (0 when nothing matches at all).
    */
   async probeFeasibility(queryText: string): Promise<number> {
-    this.refresh();
+    await this.refreshAndAwaitSync();
     if (this.mirror) {
       try {
         return await this.mirror.probeCapabilities(queryText);

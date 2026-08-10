@@ -4,11 +4,17 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
+  // Tappable quick-reply choices attached to this message (e.g. "Male / Female / ...").
+  // Cleared once the shopper picks one, so the buttons don't linger after being answered.
+  options?: string[];
+  // Day/month/year dropdown picker attached to this message (e.g. asking for a birth date).
+  // Cleared once submitted or skipped, same as options above.
+  datePicker?: boolean;
 };
 
 type ServerMessage =
   | { type: 'ready'; customerId: string }
-  | { type: 'message'; role: 'assistant'; content: string }
+  | { type: 'message'; role: 'assistant'; content: string; options?: string[]; datePicker?: boolean }
   | { type: 'confirmation'; prompt: string; turnId?: string }
   | { type: 'typing'; active: boolean }
   | { type: 'error'; message: string; code?: string };
@@ -21,6 +27,25 @@ const HANDSHAKE_TIMEOUT_MS = 8000;
 const MAX_MESSAGE_LENGTH = 4096;
 // Stop auto-reconnecting after this many consecutive failures.
 const MAX_RECONNECT_ATTEMPTS = 10;
+
+const DOB_MONTHS = [
+  { value: '01', label: 'January' },
+  { value: '02', label: 'February' },
+  { value: '03', label: 'March' },
+  { value: '04', label: 'April' },
+  { value: '05', label: 'May' },
+  { value: '06', label: 'June' },
+  { value: '07', label: 'July' },
+  { value: '08', label: 'August' },
+  { value: '09', label: 'September' },
+  { value: '10', label: 'October' },
+  { value: '11', label: 'November' },
+  { value: '12', label: 'December' },
+];
+const DOB_DAYS = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
+const DOB_CURRENT_YEAR = new Date().getFullYear();
+// Newest-birth-year-first (shoppers skew younger), covering roughly ages 10-100.
+const DOB_YEARS = Array.from({ length: 91 }, (_, i) => String(DOB_CURRENT_YEAR - 10 - i));
 
 export type AelioChatOptions = {
   serverUrl: string;
@@ -105,6 +130,9 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [statusDetail, setStatusDetail] = useState('');
   const [pendingConfirmationIndex, setPendingConfirmationIndex] = useState<number | null>(null);
+  const [dobDay, setDobDay] = useState('');
+  const [dobMonth, setDobMonth] = useState('');
+  const [dobYear, setDobYear] = useState('');
   const socketRef = useRef<WebSocket | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   // Set by the connection effect; the Retry button calls it to restart from scratch.
@@ -230,7 +258,10 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
         }
         if (data.type === 'message') {
           setPendingConfirmationIndex(null);
-          setMessages((prev) => [...prev, { role: 'assistant', content: data.content }]);
+          setMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: data.content, options: data.options, datePicker: data.datePicker },
+          ]);
           return;
         }
         if (data.type === 'confirmation') {
@@ -308,6 +339,38 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
     sendMessage(answer);
   };
 
+  const selectQuickReply = (index: number, choice: string) => {
+    // Clear this message's options first so the buttons disappear immediately,
+    // before the round trip that appends the shopper's reply below it.
+    setMessages((prev) =>
+      prev.map((message, i) => (i === index ? { ...message, options: undefined } : message)),
+    );
+    sendMessage(choice);
+  };
+
+  const clearDatePicker = (index: number) => {
+    setMessages((prev) =>
+      prev.map((message, i) => (i === index ? { ...message, datePicker: undefined } : message)),
+    );
+    setDobDay('');
+    setDobMonth('');
+    setDobYear('');
+  };
+
+  const submitDateOfBirth = (index: number) => {
+    if (!dobDay || !dobMonth || !dobYear) {
+      return;
+    }
+    const iso = `${dobYear}-${dobMonth}-${dobDay}`;
+    clearDatePicker(index);
+    sendMessage(iso);
+  };
+
+  const skipDateOfBirth = (index: number) => {
+    clearDatePicker(index);
+    sendMessage('prefer not to say');
+  };
+
   const statusText =
     status === 'connecting'
       ? 'Connecting…'
@@ -367,6 +430,85 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
                     </button>
                   </div>
                 ) : null}
+                {message.options && message.options.length > 0 ? (
+                  <div class="aelio-quick-replies">
+                    {message.options.map((choice) => (
+                      <button
+                        type="button"
+                        key={choice}
+                        class="aelio-quick-reply"
+                        onClick={() => selectQuickReply(index, choice)}
+                      >
+                        {choice}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {message.datePicker ? (
+                  <div class="aelio-date-picker">
+                    <div class="aelio-date-picker-row">
+                      <select
+                        aria-label="Day"
+                        value={dobDay}
+                        onChange={(event) => setDobDay((event.target as HTMLSelectElement).value)}
+                      >
+                        <option value="" disabled>
+                          Day
+                        </option>
+                        {DOB_DAYS.map((day) => (
+                          <option key={day} value={day}>
+                            {day}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        aria-label="Month"
+                        value={dobMonth}
+                        onChange={(event) => setDobMonth((event.target as HTMLSelectElement).value)}
+                      >
+                        <option value="" disabled>
+                          Month
+                        </option>
+                        {DOB_MONTHS.map((month) => (
+                          <option key={month.value} value={month.value}>
+                            {month.label}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        aria-label="Year"
+                        value={dobYear}
+                        onChange={(event) => setDobYear((event.target as HTMLSelectElement).value)}
+                      >
+                        <option value="" disabled>
+                          Year
+                        </option>
+                        {DOB_YEARS.map((year) => (
+                          <option key={year} value={year}>
+                            {year}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div class="aelio-date-picker-actions">
+                      <button
+                        type="button"
+                        class="aelio-quick-reply aelio-date-picker-submit"
+                        disabled={!dobDay || !dobMonth || !dobYear}
+                        onClick={() => submitDateOfBirth(index)}
+                      >
+                        Submit
+                      </button>
+                      <button
+                        type="button"
+                        class="aelio-quick-reply"
+                        onClick={() => skipDateOfBirth(index)}
+                      >
+                        Prefer not to say
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ))}
             {typing ? <div class="aelio-typing">Aelio is typing...</div> : null}
@@ -408,6 +550,15 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
         .aelio-confirm-yes, .aelio-confirm-no { border: none; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
         .aelio-confirm-yes { background: #111827; color: #fff; }
         .aelio-confirm-no { background: #f3f4f6; color: #374151; }
+        .aelio-quick-replies { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+        .aelio-quick-reply { border: 1px solid #d1d5db; background: #fff; color: #111827; border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
+        .aelio-quick-reply:hover { background: #f3f4f6; }
+        .aelio-quick-reply:disabled { opacity: .5; cursor: not-allowed; }
+        .aelio-date-picker { margin-top: 10px; }
+        .aelio-date-picker-row { display: flex; gap: 6px; flex-wrap: wrap; }
+        .aelio-date-picker-row select { border: 1px solid #d1d5db; border-radius: 8px; padding: 6px 8px; font-size: 13px; background: #fff; color: #111827; min-width: 0; flex: 1; }
+        .aelio-date-picker-actions { display: flex; gap: 8px; margin-top: 8px; }
+        .aelio-date-picker-submit { background: #111827; color: #fff; border-color: #111827; }
         .aelio-hint, .aelio-typing { color: #6b7280; font-size: 13px; }
         .aelio-status { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 12px; border-bottom: 1px solid #e5e7eb; }
         .aelio-status-dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }

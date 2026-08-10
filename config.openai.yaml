@@ -31,8 +31,17 @@ channels:
 
 safety:
   default_mode: full
-  require_confirmation_for: [write, destructive]
+  # Confirmation is opt-in per tool, not a blanket default for every write action.
+  # Most writes here (starting a session, setting a profile, editing a cart) are
+  # cheap and fully reversible — interrupting the shopper to confirm each one is
+  # friction with no safety benefit. Only tools with a real-world consequence
+  # (placing or cancelling an order) are listed below to require confirmation.
+  require_confirmation_for: [destructive]
   overrides:
+    checkout_cart:
+      require_confirmation: true
+    cancel_order:
+      require_confirmation: true
     cancelOrder:
       mode: write
       require_confirmation: true
@@ -49,6 +58,20 @@ session:
 memory:
   enabled: true
   recall_limit: 5
+
+sunjet:
+  enabled: true
+  url: http://127.0.0.1:8081
+  api_key: ${SUNJET_API_KEY}
+  embed_dim: 1536
+  dual_write_sqlite: true
+  fallback_sqlite_on_error: true
+  tables:
+    messages: convox_messages
+    conversations: convox_conversations
+    memories: convox_memories
+    compactions: convox_compactions
+    runtime_state: runtime_state
 
 storage:
   database_path: ./data/aelio-openai.db

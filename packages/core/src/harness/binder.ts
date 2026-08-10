@@ -29,8 +29,16 @@ export async function bindInstructions(
   const unbound: PlanInstruction[] = [];
 
   for (const instruction of instructions) {
-    // 1. Planner suggestion.
-    const suggested = instruction.tool ? byName.get(instruction.tool) : undefined;
+    // 1. Planner suggestion. The planner occasionally emits a namespaced form
+    // (e.g. "functions.start_shopping_session") even though the registry has
+    // no such prefix — likely bleed-through from other function-calling
+    // conventions seen in training data. Retry against the bare name after
+    // the last "." before falling through to semantic search; an unambiguous
+    // exact-name suggestion shouldn't have to win a similarity contest just
+    // because of a stray namespace prefix.
+    const suggested = instruction.tool
+      ? (byName.get(instruction.tool) ?? byName.get(instruction.tool.replace(/^.*\./, '')))
+      : undefined;
     if (suggested) {
       bound.push({ instruction, tool: suggested });
       continue;

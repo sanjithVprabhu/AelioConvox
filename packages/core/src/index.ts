@@ -130,6 +130,7 @@ export {
   ConvoxMessageStore,
   createConvoxMessageStore,
   listConversationTelemetry,
+  listRuntimeConversationTelemetry,
   type ConversationTelemetryEvent,
   type ConversationTurnContext,
   type MessageStoreAppendInput,
