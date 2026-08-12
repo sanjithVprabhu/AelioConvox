@@ -1,3 +1,12 @@
+use crate::child::{ChildExecutionRequest, ChildExecutor, RejectingChildExecutor};
+use crate::kernel_tools::{is_kernel_tool, kernel_name_set};
+use crate::orchestration::OrchestrationState;
+use crate::compute::{
+    compute_observation, is_compute_source, run_starlark_pipeline,
+};
+use crate::program::{parse_program, source_hash, validate_against_tools};
+use crate::tasks::{SpawnMode, SpawnRequest, TaskBoard, TaskResult, TaskStatus};
+use crate::todos::{TodoItem, TodoStatus};
 use crate::{
     AssistantBlock, Budget, BudgetLimits, Context, EffectClass, GateDecision, LoopError, LoopEvent,
     LoopOutcome, ModelRequest, ModelResponse, ProgressMonitor, ToolCall, ToolError, ToolErrorClass,
@@ -7,8 +16,9 @@ use async_trait::async_trait;
 use futures_util::future::join_all;
 use futures_util::FutureExt;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Instant;
 
 #[async_trait]
@@ -47,6 +57,8 @@ pub struct AgentLoop<M, H, G> {
     progress: ProgressMonitor,
     events: Vec<LoopEvent>,
     started: Instant,
+    orchestration: OrchestrationState,
+    child_executor: Arc<dyn ChildExecutor>,
 }
 
 impl<M, H, G> AgentLoop<M, H, G>
@@ -56,6 +68,7 @@ where
     G: EffectGate,
 {
     pub fn new(model: M, host: H, gate: G, context: Context, limits: BudgetLimits) -> Self {
+        let remaining = limits.max_total_tokens.saturating_sub(limits.reserve_tokens);
         Self {
             model,
             host,
@@ -66,7 +79,24 @@ where
             progress: ProgressMonitor::default(),
             events: Vec::new(),
             started: Instant::now(),
+            orchestration: OrchestrationState::new("root", remaining, 0),
+            child_executor: Arc::new(RejectingChildExecutor),
         }
+    }
+
+    pub fn with_orchestration(mut self, orchestration: OrchestrationState) -> Self {
+        self.orchestration = orchestration;
+        self
+    }
+
+    pub fn with_child_executor(mut self, executor: Arc<dyn ChildExecutor>) -> Self {
+        self.child_executor = executor;
+        self
+    }
+
+    pub fn with_depth(mut self, depth: u32) -> Self {
+        self.orchestration.tasks.depth = depth;
+        self
     }
 
     pub async fn run(mut self) -> Result<(LoopOutcome, Self), LoopError> {
@@ -121,6 +151,16 @@ where
             let calls = response_calls(&response);
             self.context.append_assistant(response);
             if self.host.cancelled().await {
+                for call in &calls {
+                    self.context.append_tool_result(ToolResult::error(
+                        call,
+                        ToolError {
+                            class: ToolErrorClass::Handler,
+                            retryable: false,
+                            detail: "turn cancelled before tool dispatch completed".to_string(),
+                        },
+                    ));
+                }
                 return Ok((cancelled_outcome(), self));
             }
 
@@ -153,20 +193,27 @@ where
                     continue;
                 }
                 match parse_finish(finish_calls[0]) {
-                    Ok(outcome) if completion_gate_accepts(&self.context, &outcome) => {
-                        return Ok((outcome, self));
-                    }
-                    Ok(_) => {
-                        self.context.append_tool_result(ToolResult::error(
-                            finish_calls[0],
-                            ToolError {
-                                class: ToolErrorClass::CompletionRejected,
-                                retryable: true,
-                                detail: "completed status is inconsistent with the latest failed tool result; acknowledge the unresolved action".to_string(),
-                            },
-                        ));
-                        continue;
-                    }
+                    Ok(outcome) => match self.completion_gate(&outcome) {
+                        Ok(()) => {
+                            let status = match &outcome {
+                                LoopOutcome::Finished { status, .. } => status.clone(),
+                                _ => "completed".to_string(),
+                            };
+                            self.context.append_tool_result(ToolResult::ok(
+                                finish_calls[0],
+                                json!({
+                                    "accepted": true,
+                                    "status": status,
+                                }),
+                            ));
+                            return Ok((outcome, self));
+                        }
+                        Err(error) => {
+                            self.context
+                                .append_tool_result(ToolResult::error(finish_calls[0], error));
+                            continue;
+                        }
+                    },
                     Err(error) => {
                         self.context
                             .append_tool_result(ToolResult::error(finish_calls[0], error));
@@ -205,9 +252,6 @@ where
             let mut rejected = HashMap::new();
             let mut confirmation = None;
 
-            // Required-argument validation is a kernel boundary, not a host-side accident. A
-            // missing field parks the entire response before policy, rate reservation, or SDK
-            // dispatch. The next user turn lets the model reconstruct a complete invocation.
             let mut missing_fields = BTreeSet::new();
             for call in &calls {
                 if let Some(tool) = tool_definitions.get(&call.name) {
@@ -224,6 +268,19 @@ where
                     .map(|field| field.replace(['_', '.', '-'], " "))
                     .collect::<Vec<_>>()
                     .join(", ");
+                for call in &calls {
+                    self.context.append_tool_result(ToolResult::error(
+                        call,
+                        ToolError {
+                            class: ToolErrorClass::InvalidArguments,
+                            retryable: true,
+                            detail: format!(
+                                "missing required arguments: {}",
+                                missing_fields.join(", ")
+                            ),
+                        },
+                    ));
+                }
                 self.context.append_notice(
                     "missing_tool_arguments",
                     format!("No tools were dispatched. Required values: {readable}"),
@@ -240,9 +297,6 @@ where
                 ));
             }
 
-            // Authorize the entire model response before dispatching any call. This prevents a
-            // mixed batch from partially executing before a later call asks for confirmation or
-            // fails policy.
             for call in &calls {
                 self.budget.tool_calls = self.budget.tool_calls.saturating_add(1);
                 let args = serde_json::to_vec(&call.arguments)
@@ -320,30 +374,38 @@ where
                 continue;
             }
 
-            if let Err(error) = self.host.preflight(&calls).await {
-                for call in calls {
-                    self.events.push(LoopEvent::ToolDenied {
-                        call_id: call.id.clone(),
-                        reason: error.detail.clone(),
-                    });
-                    self.context
-                        .append_tool_result(ToolResult::error(&call, error.clone()));
-                }
-                if let Some(notice) = self.progress.observe(fingerprint) {
-                    self.record_progress_notice(&notice);
-                    if notice.strike >= 3 {
-                        return Ok((no_progress_outcome(), self));
+            let host_calls: Vec<ToolCall> = prepared
+                .iter()
+                .filter(|(call, _)| !is_kernel_tool(&call.name))
+                .map(|(call, _)| call.clone())
+                .collect();
+            if !host_calls.is_empty() {
+                if let Err(error) = self.host.preflight(&host_calls).await {
+                    for call in calls {
+                        self.events.push(LoopEvent::ToolDenied {
+                            call_id: call.id.clone(),
+                            reason: error.detail.clone(),
+                        });
+                        self.context
+                            .append_tool_result(ToolResult::error(&call, error.clone()));
                     }
+                    if let Some(notice) = self.progress.observe(fingerprint) {
+                        self.record_progress_notice(&notice);
+                        if notice.strike >= 3 {
+                            return Ok((no_progress_outcome(), self));
+                        }
+                    }
+                    continue;
                 }
-                continue;
             }
 
-            // A model response containing only reads may run concurrently. Any response with a
-            // write is kept wholly sequential so model-declared order remains the effect order.
-            let results = if prepared
+            // Kernel tools mutate orchestration state and must stay sequential. Pure host reads
+            // may still run concurrently within max_parallel_reads.
+            let all_reads = prepared
                 .iter()
-                .all(|(_, class)| class == &EffectClass::Read)
-            {
+                .all(|(_, class)| class == &EffectClass::Read);
+            let has_kernel = prepared.iter().any(|(call, _)| is_kernel_tool(&call.name));
+            let results = if all_reads && !has_kernel {
                 for (call, _) in &prepared {
                     self.events.push(LoopEvent::ToolDispatched {
                         call_id: call.id.clone(),
@@ -354,7 +416,7 @@ where
                 for batch in prepared.chunks(self.limits.max_parallel_reads.max(1)) {
                     results.extend(
                         join_all(batch.iter().map(|(call, _)| {
-                            invoke_one(
+                            invoke_host(
                                 &self.host,
                                 call,
                                 self.limits.max_result_bytes,
@@ -383,20 +445,13 @@ where
                             call_id: call.id.clone(),
                             name: call.name.clone(),
                         });
-                        results.push(
-                            invoke_one(
-                                &self.host,
-                                call,
-                                self.limits.max_result_bytes,
-                                self.limits.tool_timeout,
-                            )
-                            .await,
-                        );
+                        results.push(self.dispatch_one(call).await);
                     }
                 }
                 results
             };
 
+            let mut spawned_async = Vec::new();
             for ((call, class), result) in prepared.iter().zip(results) {
                 if let Some(value) = &result.data {
                     let bytes = serde_json::to_vec(value)
@@ -408,12 +463,40 @@ where
                         fingerprint.successful_non_read_effects =
                             fingerprint.successful_non_read_effects.saturating_add(1);
                     }
+                    if call.name == "spawn_task" {
+                        if let Some(task_id) = value.get("task_id").and_then(Value::as_str) {
+                            if value.get("mode").and_then(Value::as_str) == Some("async")
+                                && value.get("status").and_then(Value::as_str) == Some("running")
+                            {
+                                spawned_async.push(task_id.to_string());
+                            }
+                        }
+                    }
                 }
+                let failed = result.error.is_some();
                 self.events.push(LoopEvent::ToolCompleted {
                     call_id: call.id.clone(),
-                    ok: result.error.is_none(),
+                    ok: !failed,
                 });
+                if let Some(error) = &result.error {
+                    self.emit_reflection_for_tool(&call.name, &error.detail);
+                }
                 self.context.append_tool_result(result);
+            }
+
+            // Drain async children spawned this turn at end of dispatch (append-only).
+            if !spawned_async.is_empty() {
+                let drained = self.execute_tasks(Some(&spawned_async)).await;
+                if !drained.is_empty() {
+                    self.context.append_notice(
+                        "pending_tasks",
+                        serde_json::to_string(&json!({
+                            "drained": drained,
+                            "pending_tasks": self.orchestration.tasks.running_ids(),
+                        }))
+                        .unwrap_or_else(|_| "pending_tasks updated".into()),
+                    );
+                }
             }
 
             if let Some(notice) = self.progress.observe(fingerprint) {
@@ -441,12 +524,440 @@ where
         &self.host
     }
 
+    pub fn orchestration(&self) -> &OrchestrationState {
+        &self.orchestration
+    }
+
+    pub fn into_orchestration(self) -> OrchestrationState {
+        self.orchestration
+    }
+
+    fn completion_gate(&self, outcome: &LoopOutcome) -> Result<(), ToolError> {
+        let LoopOutcome::Finished { status, .. } = outcome else {
+            return Ok(());
+        };
+        if self.orchestration.tasks.any_running() {
+            return Err(ToolError {
+                class: ToolErrorClass::CompletionRejected,
+                retryable: true,
+                detail: format!(
+                    "pending_tasks: {}",
+                    self.orchestration.tasks.running_ids().join(", ")
+                ),
+            });
+        }
+        if status == "completed" && self.orchestration.todos.has_open() {
+            return Err(ToolError {
+                class: ToolErrorClass::CompletionRejected,
+                retryable: true,
+                detail: format!(
+                    "open_todos: {}",
+                    self.orchestration.todos.open_ids().join(", ")
+                ),
+            });
+        }
+        if status == "completed"
+            && self
+                .context
+                .messages()
+                .iter()
+                .rev()
+                .find_map(|message| match message {
+                    crate::AgentMessage::ToolResult { result } => Some(result.error.is_some()),
+                    _ => None,
+                })
+                .unwrap_or(false)
+        {
+            return Err(ToolError {
+                class: ToolErrorClass::CompletionRejected,
+                retryable: true,
+                detail: "completed status is inconsistent with the latest failed tool result; acknowledge the unresolved action".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn dispatch_one(&mut self, call: &ToolCall) -> ToolResult {
+        if is_kernel_tool(&call.name) {
+            return match self.invoke_kernel(call).await {
+                Ok(value) => ToolResult::bounded(call, Ok(value), self.limits.max_result_bytes),
+                Err(error) => ToolResult::error(call, error),
+            };
+        }
+        invoke_host(
+            &self.host,
+            call,
+            self.limits.max_result_bytes,
+            self.limits.tool_timeout,
+        )
+        .await
+    }
+
+    async fn invoke_kernel(&mut self, call: &ToolCall) -> Result<Value, ToolError> {
+        match call.name.as_str() {
+            "write_todos" => self.kernel_write_todos(call),
+            "update_todos" => self.kernel_update_todos(call),
+            "spawn_task" => self.kernel_spawn_task(call).await,
+            "check_tasks" => Ok(self.orchestration.tasks.check()),
+            "await_tasks" => self.kernel_await_tasks(call).await,
+            "cancel_tasks" => self.kernel_cancel_tasks(call),
+            "run_program" => self.kernel_run_program(call).await,
+            other => Err(ToolError {
+                class: ToolErrorClass::UnknownTool,
+                retryable: false,
+                detail: format!("kernel tool `{other}` is not handled"),
+            }),
+        }
+    }
+
+    fn kernel_write_todos(&mut self, call: &ToolCall) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Item {
+            id: String,
+            content: String,
+            status: String,
+        }
+        #[derive(Deserialize)]
+        struct Args {
+            items: Vec<Item>,
+        }
+        let args: Args = serde_json::from_value(call.arguments.clone()).map_err(args_error)?;
+        let items = args
+            .items
+            .into_iter()
+            .map(|item| {
+                let status = TodoStatus::parse(&item.status).ok_or_else(|| ToolError {
+                    class: ToolErrorClass::InvalidArguments,
+                    retryable: true,
+                    detail: format!("invalid todo status `{}`", item.status),
+                })?;
+                Ok(TodoItem {
+                    id: item.id,
+                    content: item.content,
+                    status,
+                })
+            })
+            .collect::<Result<Vec<_>, ToolError>>()?;
+        self.orchestration
+            .todos
+            .write(items)
+            .map_err(|detail| ToolError {
+                class: ToolErrorClass::InvalidArguments,
+                retryable: true,
+                detail,
+            })
+    }
+
+    fn kernel_update_todos(&mut self, call: &ToolCall) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Update {
+            id: String,
+            status: String,
+        }
+        #[derive(Deserialize)]
+        struct Args {
+            updates: Vec<Update>,
+        }
+        let args: Args = serde_json::from_value(call.arguments.clone()).map_err(args_error)?;
+        let updates = args
+            .updates
+            .into_iter()
+            .map(|item| {
+                let status = TodoStatus::parse(&item.status).ok_or_else(|| ToolError {
+                    class: ToolErrorClass::InvalidArguments,
+                    retryable: true,
+                    detail: format!("invalid todo status `{}`", item.status),
+                })?;
+                Ok((item.id, status))
+            })
+            .collect::<Result<Vec<_>, ToolError>>()?;
+        self.orchestration
+            .todos
+            .update(updates)
+            .map_err(|detail| ToolError {
+                class: ToolErrorClass::InvalidArguments,
+                retryable: true,
+                detail,
+            })
+    }
+
+    async fn kernel_spawn_task(&mut self, call: &ToolCall) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            goal: String,
+            tools: Vec<String>,
+            budget_tokens: u64,
+            max_turns: u32,
+            mode: String,
+            #[serde(default)]
+            parallel_ok: bool,
+            #[serde(default)]
+            resource_keys: Vec<String>,
+            #[serde(default)]
+            return_schema: Option<Value>,
+        }
+        let args: Args = serde_json::from_value(call.arguments.clone()).map_err(args_error)?;
+        let mode = SpawnMode::parse(&args.mode).ok_or_else(|| ToolError {
+            class: ToolErrorClass::InvalidArguments,
+            retryable: true,
+            detail: "mode must be sync or async".into(),
+        })?;
+        let request = SpawnRequest {
+            goal: args.goal.clone(),
+            tool_allowlist: args.tools,
+            budget_tokens: args.budget_tokens,
+            max_turns: args.max_turns,
+            mode,
+            parallel_ok: args.parallel_ok,
+            return_schema: args.return_schema,
+            resource_keys: args.resource_keys,
+        };
+        let names = kernel_name_set();
+        let (task_id, mode, parallel_ok) = self
+            .orchestration
+            .tasks
+            .spawn(request, self.context.tools(), &names)
+            .map_err(|detail| ToolError {
+                class: ToolErrorClass::NotAuthorized,
+                retryable: false,
+                detail,
+            })?;
+        self.orchestration
+            .todos
+            .ensure_for_spawn(&task_id, &args.goal);
+        if mode == SpawnMode::Sync {
+            let results = self.execute_tasks(Some(&[task_id.clone()])).await;
+            let result = results.into_iter().next().unwrap_or(json!({
+                "task_id": task_id,
+                "status": "failed",
+                "summary": "sync child produced no result",
+            }));
+            return Ok(result);
+        }
+        Ok(json!({
+            "task_id": task_id,
+            "status": "running",
+            "mode": "async",
+            "parallel_ok": parallel_ok,
+            "pending_tasks": self.orchestration.tasks.running_ids(),
+        }))
+    }
+
+    async fn kernel_await_tasks(&mut self, call: &ToolCall) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            ids: Vec<String>,
+        }
+        let args: Args = serde_json::from_value(call.arguments.clone()).map_err(args_error)?;
+        if args.ids.is_empty() {
+            return Err(ToolError {
+                class: ToolErrorClass::InvalidArguments,
+                retryable: true,
+                detail: "await_tasks requires at least one id".into(),
+            });
+        }
+        let drained = self.execute_tasks(Some(&args.ids)).await;
+        Ok(json!({
+            "results": drained,
+            "pending_tasks": self.orchestration.tasks.running_ids(),
+            "todos": self.orchestration.todos.snapshot(),
+        }))
+    }
+
+    fn kernel_cancel_tasks(&mut self, call: &ToolCall) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            ids: Vec<String>,
+        }
+        let args: Args = serde_json::from_value(call.arguments.clone()).map_err(args_error)?;
+        let value = self.orchestration.tasks.cancel_subtree(&args.ids);
+        for id in &args.ids {
+            self.orchestration.todos.mark(id, TodoStatus::Cancelled);
+        }
+        Ok(value)
+    }
+
+    async fn kernel_run_program(&mut self, call: &ToolCall) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            source: Value,
+            rationale: String,
+        }
+        let args: Args = serde_json::from_value(call.arguments.clone()).map_err(args_error)?;
+        let source = match args.source {
+            Value::String(text) => text,
+            other => other.to_string(),
+        };
+        if args.rationale.trim().is_empty() {
+            return Err(ToolError {
+                class: ToolErrorClass::InvalidArguments,
+                retryable: true,
+                detail: "rationale must be a non-empty string".to_string(),
+            });
+        }
+
+        // Starlark-surface A-12 spike: parse → analyze → authorize → execute → store.
+        if is_compute_source(&source) {
+            let (program, run) = run_starlark_pipeline(&source, &args.rationale)?;
+            let hash = program.ast_hash.clone();
+            let stored = self
+                .orchestration
+                .programs
+                .store_compute(program.clone(), hash.clone());
+            return Ok(compute_observation(
+                &program,
+                &hash,
+                &stored.program_id,
+                &run,
+            ));
+        }
+
+        let program = parse_program(&source, &args.rationale)?;
+        let names = kernel_name_set();
+        let steps = validate_against_tools(&program, self.context.tools(), &names)?;
+        // Program steps are host tools; they must be reserved like a normal batch or
+        // RuntimeToolHost rejects with "not durably reserved before dispatch".
+        if let Err(error) = self.host.preflight(&steps).await {
+            return Err(error);
+        }
+        let hash = source_hash(&source);
+        let mut step_results = Vec::new();
+        let mut effects = Vec::new();
+        for step in steps {
+            match self.gate.decide(
+                &step,
+                &self
+                    .context
+                    .tools()
+                    .iter()
+                    .find(|tool| tool.name == step.name)
+                    .map(|tool| tool.effect_class.clone())
+                    .unwrap_or(EffectClass::Read),
+            ) {
+                GateDecision::Allow => {}
+                GateDecision::Deny { reason } | GateDecision::Confirm { reason } => {
+                    return Err(ToolError {
+                        class: ToolErrorClass::NotAuthorized,
+                        retryable: false,
+                        detail: format!(
+                            "run_program step `{}` was not authorized: {reason}",
+                            step.name
+                        ),
+                    });
+                }
+            }
+            let result = invoke_host(
+                &self.host,
+                &step,
+                self.limits.max_result_bytes,
+                self.limits.tool_timeout,
+            )
+            .await;
+            if let Some(error) = result.error {
+                return Err(error);
+            }
+            effects.push(json!({
+                "tool": step.name,
+                "call_id": step.id,
+            }));
+            step_results.push(result.data.unwrap_or(Value::Null));
+        }
+        let stored = self.orchestration.programs.store(program, hash);
+        Ok(json!({
+            "kind": "sol",
+            "program_id": stored.program_id,
+            "source_hash": stored.source_hash,
+            "steps": step_results,
+            "effects_performed": effects,
+            "stored": true,
+            "reusable": true,
+        }))
+    }
+
+    async fn execute_tasks(&mut self, ids: Option<&[String]>) -> Vec<Value> {
+        let running = self.orchestration.tasks.take_running(ids);
+        if running.is_empty() {
+            return Vec::new();
+        }
+        let (parallel, serial) = TaskBoard::schedule_wave(&running);
+        let mut out = Vec::new();
+        if !parallel.is_empty() {
+            let executor = Arc::clone(&self.child_executor);
+            let futures = parallel.into_iter().map(|task| {
+                let executor = Arc::clone(&executor);
+                async move {
+                    executor
+                        .execute(ChildExecutionRequest { task })
+                        .await
+                }
+            });
+            for result in join_all(futures).await {
+                out.push(self.commit_task_result(result));
+            }
+        }
+        for task in serial {
+            let result = self
+                .child_executor
+                .execute(ChildExecutionRequest { task })
+                .await;
+            out.push(self.commit_task_result(result));
+        }
+        out
+    }
+
+    fn commit_task_result(&mut self, result: TaskResult) -> Value {
+        let task_id = result.task_id.clone();
+        let status = result.status;
+        let value = json!({
+            "task_id": result.task_id,
+            "status": status,
+            "summary": result.summary,
+            "data": result.data,
+            "effects_performed": result.effects_performed,
+            "tokens_used": result.tokens_used,
+        });
+        let _ = self.orchestration.tasks.complete(result);
+        let todo_status = match status {
+            TaskStatus::Completed => TodoStatus::Completed,
+            TaskStatus::Cancelled => TodoStatus::Cancelled,
+            TaskStatus::Failed | TaskStatus::Exhausted => TodoStatus::Cancelled,
+            TaskStatus::Running => TodoStatus::InProgress,
+        };
+        self.orchestration.todos.mark(&task_id, todo_status);
+        value
+    }
+
+    fn emit_reflection_for_tool(&mut self, tool: &str, detail: &str) {
+        let hash = context_messages_hash(&self.context);
+        if let Some(payload) = self
+            .orchestration
+            .reflections
+            .maybe_reflect_tool_error(tool, detail, &hash)
+        {
+            self.context.append_notice(
+                "reflection",
+                serde_json::to_string(&payload).unwrap_or_else(|_| payload.to_string()),
+            );
+        }
+    }
+
     fn record_progress_notice(&mut self, notice: &crate::ProgressNotice) {
         self.events.push(LoopEvent::ProgressNotice {
             kind: format!("{:?}", notice.kind),
         });
         self.context
             .append_notice("progress_stall", notice.detail.clone());
+        let hash = context_messages_hash(&self.context);
+        if let Some(payload) = self.orchestration.reflections.maybe_reflect_stall(
+            &format!("{:?}", notice.kind),
+            &notice.detail,
+            &hash,
+        ) {
+            self.context.append_notice(
+                "reflection",
+                serde_json::to_string(&payload).unwrap_or_else(|_| payload.to_string()),
+            );
+        }
     }
 
     fn hard_terminator(&self) -> Option<LoopOutcome> {
@@ -474,6 +985,12 @@ where
                 .to_string(),
         })
     }
+}
+
+fn context_messages_hash(context: &Context) -> String {
+    serde_json::to_vec(context.messages())
+        .map(|bytes| blake3::hash(&bytes).to_hex().to_string())
+        .unwrap_or_else(|_| "unhashable".into())
 }
 
 fn missing_required_arguments(schema: &Value, arguments: &Value) -> Vec<String> {
@@ -519,7 +1036,7 @@ fn cancelled_outcome() -> LoopOutcome {
     }
 }
 
-async fn invoke_one<H: ToolHost>(
+async fn invoke_host<H: ToolHost>(
     host: &H,
     call: &ToolCall,
     max_result_bytes: usize,
@@ -559,21 +1076,6 @@ fn no_progress_outcome() -> LoopOutcome {
     }
 }
 
-fn completion_gate_accepts(context: &Context, outcome: &LoopOutcome) -> bool {
-    if !matches!(outcome, LoopOutcome::Finished { status, .. } if status == "completed") {
-        return true;
-    }
-    !context
-        .messages()
-        .iter()
-        .rev()
-        .find_map(|message| match message {
-            crate::AgentMessage::ToolResult { result } => Some(result.error.is_some()),
-            _ => None,
-        })
-        .unwrap_or(false)
-}
-
 fn response_calls(response: &ModelResponse) -> Vec<ToolCall> {
     response
         .content
@@ -583,6 +1085,14 @@ fn response_calls(response: &ModelResponse) -> Vec<ToolCall> {
             AssistantBlock::Text { .. } => None,
         })
         .collect()
+}
+
+fn args_error(error: serde_json::Error) -> ToolError {
+    ToolError {
+        class: ToolErrorClass::InvalidArguments,
+        retryable: true,
+        detail: format!("invalid arguments: {error}"),
+    }
 }
 
 #[derive(Deserialize)]

@@ -1,4 +1,4 @@
-import type { ChatMessage, LLMCompleteOptions, LLMCompleteResult, LLMProvider } from '../types.js';
+import type { ChatMessage, LLMCompleteOptions, LLMCompleteResult, LLMProvider, LLMToolCall } from '../types.js';
 
 function lastUserMessage(messages: ChatMessage[]): string {
   const message = [...messages].reverse().find((entry) => entry.role === 'user' && entry.content.trim());
@@ -75,6 +75,18 @@ export class MockProvider implements LLMProvider {
         toolCalls: [{ id: `mock_forced_${name}`, name, args }],
         stopReason: 'tool_use',
       };
+    }
+
+    // Agent-loop ReAct transport: no provider tools — emit JSON text actions.
+    if (
+      (opts.tools?.length ?? 0) === 0
+      && (
+        opts.telemetry?.purpose === 'agent_loop'
+        || (opts.system ?? '').includes('Available tools')
+        || (opts.system ?? '').includes('"actions"')
+      )
+    ) {
+      return mockReactAgentComplete(opts);
     }
 
     let lastNaturalUserIndex = -1;
@@ -261,4 +273,98 @@ export class MockProvider implements LLMProvider {
         }
       : { text: greeting, toolCalls: [], stopReason: 'stop' };
   }
+}
+
+function reactJson(actions: Array<{ name: string; arguments: Record<string, unknown> }>, thought = '') {
+  return {
+    text: JSON.stringify({ thought, actions }),
+    toolCalls: [] as LLMToolCall[],
+    stopReason: 'stop' as const,
+  };
+}
+
+function catalogToolNames(system: string): string[] {
+  return [...system.matchAll(/^- ([a-zA-Z0-9_]+) \[v/gm)]
+    .map((match) => match[1])
+    .filter((name): name is string => Boolean(name));
+}
+
+function mockReactAgentComplete(opts: LLMCompleteOptions): LLMCompleteResult {
+  const system = opts.system ?? '';
+  const tools = catalogToolNames(system);
+  const has = (name: string) => tools.some((tool) => tool.toLowerCase() === name.toLowerCase());
+  const content = lastUserMessage(opts.messages);
+  const observationText = [...opts.messages]
+    .reverse()
+    .find((message) => message.role === 'user' && message.content.startsWith('Observation:'))
+    ?.content
+    .toLowerCase() ?? '';
+
+  if (observationText) {
+    const hadError = observationText.includes('"error":{') || observationText.includes('"error": {');
+    const message = hadError
+      ? 'I could not complete that action safely.'
+      : observationText.includes('metric')
+        ? 'Based on what I remember, you prefer metric units.'
+        : observationText.includes('cancel')
+          ? 'Your order has been cancelled. Is there anything else I can help with?'
+          : observationText.includes('ship') || observationText.includes('tracking')
+            ? 'Your last order shipped today. Tracking: 1Z999AA10123456784'
+            : 'Done.';
+    if (has('finish')) {
+      return reactJson([{
+        name: 'finish',
+        arguments: {
+          message,
+          status: hadError ? 'blocked' : 'completed',
+          resolved_effect_ids: [],
+          unresolved_effect_ids: [],
+        },
+      }]);
+    }
+    return { text: message, toolCalls: [], stopReason: 'stop' };
+  }
+
+  if (
+    has('memory_search')
+    && (content.includes('what') || content.includes('remember'))
+    && (content.includes('unit') || content.includes('prefer') || content.includes('memory'))
+  ) {
+    return reactJson([{ name: 'memory_search', arguments: { query: content, limit: 5 } }]);
+  }
+
+  const cancelName = tools.find((name) => name.toLowerCase().includes('cancelorder'));
+  if (cancelName && content.includes('cancel')) {
+    const orderId = content.match(/\b[a-z]\d{3,}\b/i)?.[0]?.toUpperCase() ?? 'last';
+    return reactJson([{ name: cancelName, arguments: { orderId } }]);
+  }
+
+  const listName = tools.find((name) => name.toLowerCase().includes('listorders'));
+  if (listName && (content.includes('list') || content.includes('show') || content.includes('my orders'))) {
+    return reactJson([{ name: listName, arguments: {} }]);
+  }
+
+  const orderName = tools.find((name) => name.toLowerCase().includes('getorderstatus'));
+  if (
+    orderName
+    && !content.includes('cancel')
+    && (content.includes('order') || content.includes('status') || content.includes('ship'))
+  ) {
+    const orderId = content.match(/\b[a-z]\d{3,}\b/i)?.[0]?.toUpperCase() ?? 'last';
+    return reactJson([{ name: orderName, arguments: { orderId } }]);
+  }
+
+  const greeting = 'Hi! I can help you check order status. Try asking "what is my order status?"';
+  if (has('finish')) {
+    return reactJson([{
+      name: 'finish',
+      arguments: {
+        message: greeting,
+        status: 'completed',
+        resolved_effect_ids: [],
+        unresolved_effect_ids: [],
+      },
+    }]);
+  }
+  return { text: greeting, toolCalls: [], stopReason: 'stop' };
 }

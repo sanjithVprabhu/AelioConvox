@@ -268,10 +268,11 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
           );
 
           const isConfirmation =
-            awaitingConfirmation ||
-            /reply \*\*yes\*\* to confirm/i.test(reply);
+            /confirm this exact action|reply \*\*yes\*\* to confirm|yes to approve this exact action/i.test(
+              reply,
+            );
 
-          if (isConfirmation) {
+          if (isConfirmation || (awaitingConfirmation && /yes to (approve|confirm)/i.test(reply))) {
             socket.send(
               JSON.stringify({
                 type: 'confirmation',

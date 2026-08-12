@@ -250,6 +250,29 @@ export const RegisterMessageSchema = z.object({
   // Client-supplied assistant persona/voice; becomes the stable head of the
   // system prompt (see runtime/prompt-composer).
   persona: z.string().optional(),
+  /** Optional named personalities with audible voice traits. First entry is default. */
+  personalities: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(64),
+        label: z.string().min(1).max(128).optional(),
+        voice: z.object({
+          register: z.string().min(1).max(64),
+          verbosity: z.string().min(1).max(64),
+          formality: z.string().min(1).max(64),
+          emoji_policy: z.string().min(1).max(64),
+        }),
+        constraints: z.array(z.string().max(512)).max(16).optional(),
+        lexicon: z
+          .object({
+            preferred: z.array(z.string().max(64)).max(32).optional(),
+            forbidden: z.array(z.string().max(64)).max(32).optional(),
+          })
+          .optional(),
+      }),
+    )
+    .max(16)
+    .optional(),
   // Client-written description of what the product does — grounds the harness
   // planner's capability taxonomy. Falls back to a registry-generated brief.
   productBrief: z.string().optional(),

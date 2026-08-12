@@ -146,6 +146,13 @@ export class Aelio {
   private readonly inflightInvokeIds = new Set<string>();
   private sendHandler: SendHandler | null = null;
   private personaText: string | null = null;
+  private personalitiesConfig: Array<{
+    id: string;
+    label?: string;
+    voice: { register: string; verbosity: string; formality: string; emoji_policy: string };
+    constraints?: string[];
+    lexicon?: { preferred?: string[]; forbidden?: string[] };
+  }> | null = null;
   private productBriefText: string | null = null;
   private applicationName: string | null = null;
   private catalogSyncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -184,6 +191,44 @@ export class Aelio {
    */
   persona(text: string): void {
     this.personaText = text.trim();
+    this.scheduleCatalogSync();
+  }
+
+  /**
+   * Register named personalities with audible voice traits. The first entry is
+   * the default; tenants can switch by personality id. These must be visible in
+   * how the assistant texts — register/formality/verbosity are enforced in prompt.
+   */
+  personalities(
+    specs: Array<{
+      id: string;
+      label?: string;
+      voice: { register: string; verbosity: string; formality: string; emoji_policy: string };
+      constraints?: string[];
+      lexicon?: { preferred?: string[]; forbidden?: string[] };
+    }>,
+  ): void {
+    this.personalitiesConfig = specs
+      .map((spec) => ({
+        id: spec.id.trim(),
+        ...(spec.label ? { label: spec.label.trim() } : {}),
+        voice: {
+          register: spec.voice.register.trim(),
+          verbosity: spec.voice.verbosity.trim(),
+          formality: spec.voice.formality.trim(),
+          emoji_policy: spec.voice.emoji_policy.trim(),
+        },
+        ...(spec.constraints ? { constraints: spec.constraints.map((c) => c.trim()).filter(Boolean) } : {}),
+        ...(spec.lexicon
+          ? {
+              lexicon: {
+                preferred: (spec.lexicon.preferred ?? []).map((w) => w.trim()).filter(Boolean),
+                forbidden: (spec.lexicon.forbidden ?? []).map((w) => w.trim()).filter(Boolean),
+              },
+            }
+          : {}),
+      }))
+      .filter((spec) => spec.id.length > 0);
     this.scheduleCatalogSync();
   }
 
@@ -391,6 +436,9 @@ export class Aelio {
       ...(policies.length > 0 ? { policies } : {}),
       ...(flows.length > 0 ? { flows } : {}),
       ...(this.personaText ? { persona: this.personaText } : {}),
+      ...(this.personalitiesConfig && this.personalitiesConfig.length > 0
+        ? { personalities: this.personalitiesConfig }
+        : {}),
       ...(this.productBriefText ? { productBrief: this.productBriefText } : {}),
       canSend: this.sendHandler != null,
     };

@@ -221,7 +221,7 @@ The existing protocol may adopt selected MCP-compatible content shapes. It must 
 
 ### A-08 — Provider capabilities are explicit
 
-The current Rust `LlmProvider` returns plain text. The loop requires structured assistant content, tool calls, stable call IDs, usage including cached tokens, stop reasons, and streaming events. Add a versioned internal gateway contract and a capability handshake. A provider without native tool calling is unsupported for this harness; parsing tool calls from prose is prohibited.
+The loop requires structured assistant content, stable call IDs, usage, and stop reasons on the **internal** gateway contract (`AgentModelRequestV2` / response). The provider-facing transport is **ReAct JSON text** (`tool_transport: "react_json"`): the TypeScript gateway encodes tools as a prompt catalog, sends plain chat messages (no provider `tools` / `tool_calls` / `role:tool`), and parses a strict `{"thought","actions":[...]}` JSON object back into structured `tool_call` blocks for the kernel. Native provider function-calling is disabled on the agent path (`native_tools: false`). Kernel `finish` / effect gate / confirmation remain structured and unchanged.
 
 ### A-09 — Parallel dispatch is effect-aware
 

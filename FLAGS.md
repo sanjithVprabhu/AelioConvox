@@ -565,3 +565,27 @@ Starlark before the observation.
 warm-path correctness over production traffic. Keep Session E blocked until real dated J1 data
 and the J3 review are recorded here. `PROVISIONAL` — implement durable metric retention/export
 before starting the observation if the runtime can restart during the week.
+
+### F-040 — Agent-loop provider transport is ReAct JSON (amends harness A-08) — `docs/harness_new` A-08
+**What:** A-08 originally required native provider tool calling and prohibited extracting tool calls from prose. That couples the agent loop to OpenAI/Anthropic/Gemini function-calling transcripts and breaks multi-turn when history pairing is imperfect; it also blocks text-only / self-hosted models.
+**Options:** (a) keep native tools forever; (b) dual-mode native+ReAct behind a flag; (c) ReAct-JSON-only on the provider path while keeping internal `ToolCall`/`finish` structured.
+**Recommendation → (c) accepted.** Gateway capabilities advertise `native_tools: false`, `tool_transport: "react_json"`. TS adapter encodes/decodes strict `{"thought","actions"}` JSON; Rust kernel and confirmation/gate unchanged.
+**Status:** Implemented 2026-08-11.
+
+### F-041 — Cursor-like plan/execute tools on default agent_loop — harness §7.6/§8/§9/§10
+**What:** Production `agent_loop` was a flat ReAct tool loop without todo board, sub-harness spawn, reflection-on-error, or `run_program`. Spec §8 spawn/check/await and §10 Starlark were Phase 5 optional; Conductor/`TaskGraph` existed on the legacy spine only.
+**Options:** (a) revive Conductor as second authority; (b) fold prosthetic kernel tools into `agent_loop` with in-memory task board + durable orchestration bag, Sol JSON `run_program` v0, Starlark gated; (c) wait for full Starlark+ProcessTree durability before any spawn.
+**Recommendation → (b) accepted.** Kernel tools: `write_todos`, `update_todos`, `spawn_task`, `check_tasks`, `await_tasks`, `cancel_tasks`, `run_program`. Child capability ∩ parent; depth ≤ 3; budget carve-out; finish blocked on open todos/running children; structured reflection notices (not LLM self-grade). Child executor currently scripted stub in API (true nested LLM harness later). Starlark remains behind A-12.
+**Status:** Implemented 2026-08-11 — unit vectors in `aelio-agent-loop/tests/plan_execute.rs`; soak `docs/chat-runs/2026-08-11T15-39-32-955Z/`.
+
+### F-042 — `run_program` compute dialect `expr_v0` (PROVISIONAL) — ahead of Starlark A-12
+**What:** `run_program` v0 only ran Sol JSON tool-step batches. Users expect write-code → parse → compile → run → store → reuse with correct numeric output (e.g. addition), not just tool orchestration recipes.
+**Options:** (a) wait for full Starlark/HKv4; (b) add a tiny pure `expr_v0` compute dialect inside `aelio-agent-loop` with AST-as-authority hashing (F-034 spirit); (c) shell out to external eval.
+**Recommendation → (b) PROVISIONAL.** `kind=compute` / `lang=expr_v0` sources parse to `ComputeAst`, hash by AST (`ast_hash` stored as `source_hash`), eval under step budget, store in `ProgramRegistry` as `ProgramBody::Compute`. Sol `steps[]` path unchanged. Starlark remains future replacement, not this dialect.
+**Status:** Implemented 2026-08-12 — `aelio-agent-loop/src/compute.rs`, tests `test_run_program_compute_*`, harness `examples/run_compute_session.rs`. Superseded for language label by F-043 (expr_v0 remains accepted as input alias).
+
+### F-043 — Starlark A-12 surface spike (Meta crate blocked) — harness §10
+**What:** Long-term target is Meta `starlark` + async host bindings (A-12). Official `starlark` crates (0.8–0.13) fail to build in this workspace (hashbrown/allocative / edition conflicts under rustc 1.94, edition 2021).
+**Options:** (a) block all compute until Meta crate builds; (b) ship in-tree Starlark-surface pipeline (`parse → analyze → authorize → execute`) with AST-as-authority hashing, zero host dispatch for pure programs, `lang=starlark` (`expr_v0` alias); (c) fork Meta starlark into tree.
+**Recommendation → (b) PROVISIONAL.** Durable spike in `aelio-agent-loop/src/compute.rs` via `run_starlark_pipeline`. Forbidden calls (`print`/`load`/…); host paths like `api.*` analyzed then denied in pure spike. Meta crate + async host remain deferred until dependency resolves — do not claim full §10 host bindings done.
+**Status:** Implemented 2026-08-12 — observation fields `pipeline`/`analyzed`/`authorized`/`host_dispatches`; harness + plan_execute vectors assert `lang=starlark` and output 42.

@@ -7,7 +7,8 @@ import {
   AgentCompletionRequestSchema,
   AgentCompletionResponseSchema,
   AgentGatewayCapabilitiesSchema,
-  agentRequestToLlmOptions,
+  parseReactAssistantText,
+  reactRequestToLlmOptions,
 } from './agent-gateway-contract.js';
 
 const CompletionRequestSchema = z.object({
@@ -60,7 +61,8 @@ export async function registerAelioGatewayRoutes(app: FastifyInstance, deps: Run
       protocol_version: 2,
       provider: deps.config.llm.provider,
       model: deps.config.llm.model,
-      native_tools: true,
+      native_tools: false,
+      tool_transport: 'react_json',
       prompt_caching: ['anthropic', 'openai'].includes(deps.config.llm.provider),
       streaming: false,
       max_output_tokens: deps.config.llm.max_tokens,
@@ -136,35 +138,35 @@ export async function registerAelioGatewayRoutes(app: FastifyInstance, deps: Run
       return reply.code(400).send({ error: 'shape', detail: parsed.error.message });
     }
     const call = parsed.data;
-    const result = await deps.llm.complete(agentRequestToLlmOptions({
+    const llmOptions = reactRequestToLlmOptions({
       ...call,
       model: call.model.startsWith('tier:') ? deps.config.llm.model : call.model,
-    }));
+    });
+    const result = await deps.llm.complete(llmOptions);
+    // Prefer ReAct JSON in text. Ignore any accidental provider-native toolCalls.
+    const react = parseReactAssistantText(result.text, call.request_id);
+    const content =
+      react.content.length > 0
+        ? react.content
+        : result.text.trim()
+          ? [{ type: 'text' as const, text: result.text }]
+          : [];
+    const stopReason =
+      react.stop_reason === 'tool_use'
+        ? ('tool_use' as const)
+        : result.stopReason === 'length'
+          ? ('max_output_tokens' as const)
+          : result.stopReason === 'stop'
+            ? ('end_turn' as const)
+            : ('other' as const);
     const response = {
       protocol_version: 2 as const,
       request_id: call.request_id,
       attempt_id: call.attempt_id,
       response: {
         id: `${call.request_id}:response`,
-        content: [
-          ...(result.text.trim() ? [{ type: 'text' as const, text: result.text }] : []),
-          ...result.toolCalls.map((toolCall) => ({
-            type: 'tool_call' as const,
-            call: {
-              id: toolCall.id,
-              name: toolCall.name,
-              arguments: toolCall.args,
-            },
-          })),
-        ],
-        stop_reason:
-          result.stopReason === 'tool_use'
-            ? 'tool_use' as const
-            : result.stopReason === 'length'
-              ? 'max_output_tokens' as const
-              : result.stopReason === 'stop'
-                ? 'end_turn' as const
-                : 'other' as const,
+        content,
+        stop_reason: stopReason,
         usage: {
           input_tokens: result.usage?.inputTokens ?? 0,
           cached_input_tokens: 0,

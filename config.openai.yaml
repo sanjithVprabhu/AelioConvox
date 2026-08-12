@@ -5,7 +5,7 @@ llm:
   provider: openai
   model: gpt-4o-mini
   api_key: ${OPENAI_API_KEY}
-  max_tokens: 1024
+  max_tokens: 4096
 
 # Real semantic embeddings for memory recall + response cache (defaults to the
 # built-in 'hash' embedding if omitted). 'openai' uses text-embedding-3-small (1536d).

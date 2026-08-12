@@ -44,7 +44,7 @@ This audit supports a code-complete local/default cutover. It does not certify t
 | Confirmation | Pending writes bind tenant, conversation, versioned tool, canonical args, effect class, expiry, and nonce; approval is single-use | Complete |
 | Durability | AES-256-GCM conversation state, tenant/conversation AAD, hashed keys, CAS lease, fencing, stale-holder rejection, replay cache | Complete |
 | Rate limiting | Persistent fixed-window tenant, user, conversation, and per-tool reservations occur before dispatch | Complete |
-| Model gateway | Strict version-2 request/response schemas, capability handshake, native tools, size caps, and bounded retry classes | Complete |
+| Model gateway | Strict version-2 request/response schemas, capability handshake (`tool_transport: react_json`), ReAct JSON provider transport, size caps, and bounded retry classes | Complete |
 | SDK execution | Existing authenticated SDK bridge is reused through a blocking-safe adapter and stable invocation idempotency key | Complete |
 | API boundary | Existing `/v1/turns`, `TurnResult`, render frame, mode trace, and channel ingress contracts are retained | Complete |
 | Operations | Readiness reports model-gateway configuration; launcher provides stable state key and explicit authority banner/toggle | Complete |

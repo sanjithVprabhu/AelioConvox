@@ -1,6 +1,6 @@
 //! Fenced, encrypted conversation state for the agent-loop harness.
 
-use aelio_agent_loop::{AgentMessage, EffectClass, LoopManifest, ToolCall};
+use aelio_agent_loop::{AgentMessage, EffectClass, LoopManifest, OrchestrationState, ToolCall};
 use aelio_sol::SolValue;
 use aelio_store::{PutIfAbsent, Store, StoreError};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -61,6 +61,9 @@ pub(crate) struct ConversationState {
     #[serde(default)]
     pub compaction_count: u32,
     pub last_result: Option<aelio_agent::blocks::turn::TurnResult>,
+    /// Plan/execute board: todos, sub-harness tasks, stored programs, reflections.
+    #[serde(default)]
+    pub orchestration: Option<OrchestrationState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -774,6 +777,7 @@ mod tests {
             last_request_hash: None,
             compaction_count: 0,
             last_result: None,
+            orchestration: None,
         }
     }
 

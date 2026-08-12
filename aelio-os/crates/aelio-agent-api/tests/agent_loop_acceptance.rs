@@ -21,7 +21,8 @@ async fn capabilities() -> Json<Value> {
         "protocol_version": 2,
         "provider": "scripted-test",
         "model": "agent-loop-acceptance",
-        "native_tools": true,
+        "native_tools": false,
+        "tool_transport": "react_json",
         "prompt_caching": false,
         "streaming": false,
         "max_output_tokens": 4096

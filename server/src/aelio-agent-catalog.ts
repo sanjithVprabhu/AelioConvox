@@ -72,26 +72,7 @@ export function buildAgentCatalog(
     tenant_id: tenant,
     mode: 'live',
     tools,
-    personalities: [{
-      id: 'sdk',
-      voice: {
-        register: 'friendly',
-        verbosity: 'medium',
-        formality: 'casual',
-        emoji_policy: 'sparse',
-      },
-      lexicon: { preferred: [], forbidden: [] },
-      constraints: [
-        registration.persona?.trim() || 'Be concise, accurate, and helpful.',
-        registration.productBrief?.trim() || 'Use only registered product capabilities.',
-        ...(registration.policies ?? []).map(
-          (policy) =>
-            `${policy.severity === 'hard' ? 'Required product rule' : 'Product guidance'} ` +
-            `[${policy.id}]: ${policy.description}`,
-        ),
-      ],
-      templates: {},
-    }],
+    personalities: toAgentPersonalities(registration),
     states,
     policies,
     // Semantic WHAT plus symbolic HOW are admitted together. Rust resolves every `$cap:` call to
@@ -101,6 +82,56 @@ export function buildAgentCatalog(
     flow_artifacts: {},
     attributes: [],
   };
+}
+
+function toAgentPersonalities(registration: RegisterMessage): Json[] {
+  const sharedConstraints = [
+    registration.persona?.trim() || 'Be concise, accurate, and helpful.',
+    registration.productBrief?.trim() || 'Use only registered product capabilities.',
+    ...(registration.policies ?? []).map(
+      (policy) =>
+        `${policy.severity === 'hard' ? 'Required product rule' : 'Product guidance'} ` +
+        `[${policy.id}]: ${policy.description}`,
+    ),
+  ].filter(Boolean);
+
+  const declared = registration.personalities ?? [];
+  if (declared.length > 0) {
+    return declared.map((personality) => ({
+      id: personality.id,
+      voice: {
+        register: personality.voice.register,
+        verbosity: personality.voice.verbosity,
+        formality: personality.voice.formality,
+        emoji_policy: personality.voice.emoji_policy,
+      },
+      lexicon: {
+        preferred: personality.lexicon?.preferred ?? [],
+        forbidden: personality.lexicon?.forbidden ?? [],
+      },
+      constraints: [
+        ...(personality.label ? [`Personality label: ${personality.label}.`] : []),
+        ...(personality.constraints ?? []),
+        ...sharedConstraints,
+      ],
+      templates: {},
+    }));
+  }
+
+  return [
+    {
+      id: 'sdk',
+      voice: {
+        register: 'friendly',
+        verbosity: 'medium',
+        formality: 'casual',
+        emoji_policy: 'sparse',
+      },
+      lexicon: { preferred: [], forbidden: [] },
+      constraints: sharedConstraints,
+      templates: {},
+    },
+  ];
 }
 
 function toMemorySearchTool(): ReturnType<typeof toAgentTool> {
@@ -250,10 +281,13 @@ function toAgentStates(
     timeout: null,
   }));
   if (!mapped.some((state) => state.id === 'unauthenticated')) {
+    // Deny-by-default bootstrap state. Never grant the full catalog here — that made
+    // anonymous employer widget users able to confirm candidate_* tools and then thrash
+    // on invented phone validation after session failures.
     mapped.unshift({
       id: 'unauthenticated',
       name: 'Default',
-      permission_envelope: allCapabilities,
+      permission_envelope: [],
       direction: null,
       entry_conditions: [],
       exit_edges: [],

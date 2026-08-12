@@ -470,6 +470,9 @@ struct TurnApiRequest {
     channel: String,
     #[serde(default)]
     memory_subject_id: Option<String>,
+    /// Optional tenant personality id from the admitted catalog (defaults to first).
+    #[serde(default)]
+    personality_id: Option<String>,
 }
 
 fn unknown_channel() -> String {

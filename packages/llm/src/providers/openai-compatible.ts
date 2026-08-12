@@ -162,15 +162,21 @@ export class OpenAICompatibleProvider implements LLMProvider {
           ...(opts.system ? [{ role: 'system' as const, content: opts.system }] : []),
           ...toOpenAIMessages(opts.messages),
         ],
-        tools: opts.tools.map((tool) => ({
-          type: 'function',
-          function: {
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.input_schema,
-          },
-        })),
-        tool_choice: toOpenAIToolChoice(opts.toolChoice, opts.tools.length),
+        ...(opts.tools.length > 0
+          ? {
+              tools: opts.tools.map((tool) => ({
+                type: 'function',
+                function: {
+                  name: tool.name,
+                  description: tool.description,
+                  parameters: tool.input_schema,
+                },
+              })),
+              tool_choice: toOpenAIToolChoice(opts.toolChoice, opts.tools.length),
+            }
+          : opts.responseFormat?.type === 'json_object'
+            ? { response_format: { type: 'json_object' } }
+            : {}),
       }),
     });
 

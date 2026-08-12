@@ -61,6 +61,8 @@ export type LLMCompleteOptions = {
   maxTokens?: number;
   temperature?: number;
   toolChoice?: LLMToolChoice;
+  /** When set (and tools are empty), providers that support it force a JSON object reply. */
+  responseFormat?: { type: 'json_object' };
   telemetry?: LLMTelemetryMeta;
 };
 

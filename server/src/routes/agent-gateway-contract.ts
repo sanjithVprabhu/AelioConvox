@@ -4,7 +4,10 @@ export const AgentGatewayCapabilitiesSchema = z.object({
   protocol_version: z.literal(2),
   provider: z.string().min(1).max(128),
   model: z.string().min(1).max(256),
-  native_tools: z.literal(true),
+  /** Provider-native function calling is disabled on the agent path. */
+  native_tools: z.literal(false),
+  /** Agent-loop provider transport: strict ReAct JSON text. */
+  tool_transport: z.literal('react_json'),
   prompt_caching: z.boolean(),
   streaming: z.boolean(),
   max_output_tokens: z.number().int().min(512).max(131_072),
@@ -90,62 +93,188 @@ export const AgentCompletionResponseSchema = z.object({
   response: AgentResponseSchema,
 }).strict();
 
-type AgentCompletionRequest = z.infer<typeof AgentCompletionRequestSchema>;
+export type AgentCompletionRequest = z.infer<typeof AgentCompletionRequestSchema>;
 
-export function agentRequestToLlmOptions(call: AgentCompletionRequest) {
-  const messages = [
-    { role: 'user' as const, content: call.bootstrap },
-    ...call.messages.map((message) => {
-      switch (message.role) {
-        case 'user':
-          return { role: 'user' as const, content: message.text };
-        case 'assistant':
-          return {
-            role: 'assistant' as const,
-            content: message.response.content
-              .flatMap((block) => block.type === 'text' ? [block.text] : [])
-              .join('\n'),
-            toolCalls: message.response.content.flatMap((block) =>
-              block.type === 'tool_call'
-                ? [{ id: block.call.id, name: block.call.name, args: block.call.arguments }]
-                : [],
-            ),
-          };
-        case 'tool_result':
-          return {
-            role: 'user' as const,
-            content: '',
-            toolResults: [{
-              toolUseId: message.result.call_id,
-              content: JSON.stringify({
-                tool: message.result.tool,
-                data: message.result.data,
-                error: message.result.error,
-              }),
-            }],
-          };
-        case 'kernel_notice':
-          return {
-            role: 'user' as const,
-            content: JSON.stringify({
-              kernel_notice: { code: message.code, detail: message.detail },
-            }),
-          };
-      }
+const ReactActionSchema = z.object({
+  name: z.string().min(1).max(128),
+  arguments: z.record(z.unknown()).optional().default({}),
+}).strict();
+
+const ReactReplySchema = z.object({
+  thought: z.string().max(16_384).optional().default(''),
+  actions: z.array(ReactActionSchema).min(1).max(32),
+}).strict();
+
+/** Build a text tool catalog for the system prompt (not provider function declarations). */
+export function formatReactToolCatalog(
+  tools: AgentCompletionRequest['tools'],
+): string {
+  const lines = [
+    'Available tools (call via JSON actions; do not invent names):',
+    ...tools.map((tool) => {
+      const schema = JSON.stringify(tool.input_schema);
+      return [
+        `- ${tool.name} [v${tool.version}] (${tool.effect_class})`,
+        `  ${tool.description}`,
+        `  input_schema: ${schema}`,
+      ].join('\n');
     }),
+    '',
+    'Reply with ONLY a JSON object of the form:',
+    '{"thought":"...","actions":[{"name":"tool_name","arguments":{...}}]}',
+    'Do not write markdown fences or prose outside the JSON object.',
+    'finish must be the only action when completing the turn.',
+    'For complex multi-step work use write_todos / update_todos; spawn_task for isolated sub-goals; await_tasks or cancel_tasks before finish if children are pending.',
   ];
+  return lines.join('\n');
+}
+
+function assistantBlocksToReactText(
+  content: z.infer<typeof AgentResponseSchema>['content'],
+): string {
+  const textParts = content
+    .flatMap((block) => (block.type === 'text' ? [block.text] : []));
+  const actions = content.flatMap((block) =>
+    block.type === 'tool_call'
+      ? [{ name: block.call.name, arguments: block.call.arguments }]
+      : [],
+  );
+  if (actions.length === 0) {
+    return textParts.join('\n').trim();
+  }
+  const payload = {
+    thought: textParts.join('\n').trim(),
+    actions,
+  };
+  return `\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\``;
+}
+
+/**
+ * Encode a structured agent-loop request as plain text for any LLM provider.
+ * Never attaches tools / toolCalls / toolResults / toolChoice.
+ */
+export function reactRequestToLlmOptions(call: AgentCompletionRequest) {
+  const catalog = formatReactToolCatalog(call.tools);
+  const system = `${call.system.trim()}\n\n${catalog}`;
+  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
+    { role: 'user', content: call.bootstrap },
+  ];
+
+  for (const message of call.messages) {
+    switch (message.role) {
+      case 'user':
+        messages.push({ role: 'user', content: message.text });
+        break;
+      case 'assistant':
+        messages.push({
+          role: 'assistant',
+          content: assistantBlocksToReactText(message.response.content),
+        });
+        break;
+      case 'tool_result':
+        messages.push({
+          role: 'user',
+          content: `Observation:\n${JSON.stringify({
+            call_id: message.result.call_id,
+            tool: message.result.tool,
+            data: message.result.data,
+            error: message.result.error,
+          })}`,
+        });
+        break;
+      case 'kernel_notice':
+        messages.push({
+          role: 'user',
+          content: `Kernel notice (${message.code}): ${message.detail}`,
+        });
+        break;
+    }
+  }
+
   return {
     messages,
-    tools: call.tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      input_schema: tool.input_schema,
-    })),
-    system: call.system,
+    tools: [] as Array<{ name: string; description: string; input_schema: Record<string, unknown> }>,
+    system,
     model: call.model,
     maxTokens: call.max_tokens,
     temperature: call.temperature,
-    toolChoice: { type: 'auto' as const },
+    responseFormat: { type: 'json_object' as const },
     telemetry: { purpose: 'agent_loop' as const },
   };
+}
+
+/** Extract a JSON object from raw model text (raw or fenced). */
+export function extractJsonObject(text: string): unknown | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = (fence?.[1] ?? trimmed).trim();
+
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    // Fall through to brace scan.
+  }
+
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(candidate.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+export type ParsedReactAssistant = {
+  content: Array<
+    | { type: 'text'; text: string }
+    | { type: 'tool_call'; call: { id: string; name: string; arguments: Record<string, unknown> } }
+  >;
+  stop_reason: 'tool_use' | 'end_turn';
+};
+
+/**
+ * Parse ReAct JSON text into structured agent gateway content blocks.
+ * Invalid / empty actions → text-only content (kernel will nudge must_call_finish).
+ */
+export function parseReactAssistantText(
+  text: string,
+  requestId: string,
+): ParsedReactAssistant {
+  const parsed = extractJsonObject(text);
+  const checked = ReactReplySchema.safeParse(parsed);
+  if (!checked.success) {
+    const fallback = text.trim();
+    return {
+      content: fallback ? [{ type: 'text', text: fallback }] : [],
+      stop_reason: 'end_turn',
+    };
+  }
+
+  const thought = checked.data.thought.trim();
+  const content: ParsedReactAssistant['content'] = [];
+  if (thought) {
+    content.push({ type: 'text', text: thought });
+  }
+  checked.data.actions.forEach((action, index) => {
+    content.push({
+      type: 'tool_call',
+      call: {
+        id: `react-${requestId}-${index + 1}`.slice(0, 256),
+        name: action.name,
+        arguments: action.arguments ?? {},
+      },
+    });
+  });
+  return {
+    content,
+    stop_reason: 'tool_use',
+  };
+}
+
+/** @deprecated Prefer reactRequestToLlmOptions — kept for transitional fixtures only. */
+export function agentRequestToLlmOptions(call: AgentCompletionRequest) {
+  return reactRequestToLlmOptions(call);
 }

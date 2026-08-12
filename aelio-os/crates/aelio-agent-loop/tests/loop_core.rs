@@ -282,6 +282,44 @@ fn context(tenant_tools: Vec<ToolDefinition>) -> Context {
     )
 }
 
+/// OpenAI rejects histories where an assistant tool_call id lacks a later tool_result.
+fn assert_tool_calls_are_paired(messages: &[AgentMessage]) {
+    use std::collections::HashSet;
+    let mut open = HashSet::new();
+    for message in messages {
+        match message {
+            AgentMessage::Assistant { response } => {
+                for block in &response.content {
+                    if let AssistantBlock::ToolCall { call } = block {
+                        assert!(
+                            open.insert(call.id.clone()),
+                            "duplicate open tool_call id {}",
+                            call.id
+                        );
+                    }
+                }
+            }
+            AgentMessage::ToolResult { result } => {
+                assert!(
+                    open.remove(&result.call_id),
+                    "tool_result for unknown or already-closed id {}",
+                    result.call_id
+                );
+            }
+            AgentMessage::User { .. } | AgentMessage::KernelNotice { .. } => {
+                assert!(
+                    open.is_empty(),
+                    "unpaired tool_call ids before user/notice boundary: {open:?}"
+                );
+            }
+        }
+    }
+    assert!(
+        open.is_empty(),
+        "unpaired tool_call ids at end of transcript: {open:?}"
+    );
+}
+
 #[tokio::test]
 async fn model_tool_result_model_finish_end_to_end() {
     let host = RecordingHost::default();
@@ -307,6 +345,7 @@ async fn model_tool_result_model_finish_end_to_end() {
     );
     assert_eq!(*calls.lock().expect("call log lock"), vec!["list_orders"]);
     assert_eq!(engine.budget().turns, 2);
+    assert_tool_calls_are_paired(engine.context().messages());
 }
 
 #[tokio::test]
@@ -345,6 +384,7 @@ async fn missing_required_argument_parks_entire_batch_before_dispatch() {
         message,
         AgentMessage::KernelNotice { code, .. } if code == "missing_tool_arguments"
     )));
+    assert_tool_calls_are_paired(engine.context().messages());
 }
 
 #[tokio::test]
@@ -685,7 +725,8 @@ async fn independent_reads_execute_concurrently_but_results_keep_call_order() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(result_ids, vec!["c1", "c2"]);
+    assert_eq!(result_ids, vec!["c1", "c2", "c3"]);
+    assert_tool_calls_are_paired(engine.context().messages());
 }
 
 #[tokio::test]

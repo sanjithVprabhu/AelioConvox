@@ -1,3 +1,4 @@
+use crate::kernel_tools::is_reserved_tenant_name;
 use crate::{EffectClass, ToolDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,7 +25,7 @@ pub enum ManifestError {
     TooManyTools,
     #[error("tool name `{0}` is invalid")]
     InvalidName(String),
-    #[error("tool `{0}` uses the reserved kernel name finish")]
+    #[error("tool `{0}` uses a reserved kernel name")]
     ReservedName(String),
     #[error("tool `{0}` is duplicated")]
     DuplicateTool(String),
@@ -86,7 +87,7 @@ impl LoopManifest {
 }
 
 fn validate_tool(tool: &ToolDefinition) -> Result<(), ManifestError> {
-    if tool.name == "finish" {
+    if is_reserved_tenant_name(&tool.name) {
         return Err(ManifestError::ReservedName(tool.name.clone()));
     }
     if tool.name.is_empty()

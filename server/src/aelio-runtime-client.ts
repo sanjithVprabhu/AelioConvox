@@ -116,16 +116,26 @@ export type AelioTurnReply = z.infer<typeof TurnReplySchema>;
 
 export class AelioRuntimeClient {
   private readonly baseUrl: string;
+  private readonly timeoutMs: number;
 
   constructor(
     url: string,
     private readonly token: string,
-    private readonly timeoutMs = 35_000,
+    timeoutMs?: number,
   ) {
     this.baseUrl = url.replace(/\/+$/, '');
     if (!this.baseUrl || !token) {
       throw new Error('Aelio Rust runtime URL and token are required');
     }
+    // Agent-loop turns often need multiple LLM + tool rounds; 35s aborts mid-turn and
+    // leaves the Rust conversation lease held → "already being processed" on the next message.
+    const fromEnv = Number(process.env.AELIO_RUNTIME_TIMEOUT_MS || '');
+    this.timeoutMs =
+      Number.isFinite(timeoutMs) && (timeoutMs as number) > 0
+        ? (timeoutMs as number)
+        : Number.isFinite(fromEnv) && fromEnv > 0
+          ? fromEnv
+          : 180_000;
   }
 
   async ready(): Promise<void> {

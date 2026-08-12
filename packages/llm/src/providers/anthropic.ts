@@ -90,12 +90,16 @@ export class AnthropicProvider implements LLMProvider {
         temperature: opts.temperature ?? 0.2,
         system: opts.system,
         messages: toAnthropicMessages(opts.messages),
-        tools: opts.tools.map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          input_schema: tool.input_schema,
-        })),
-        ...(toolChoice ? { tool_choice: toolChoice } : {}),
+        ...(opts.tools.length > 0
+          ? {
+              tools: opts.tools.map((tool) => ({
+                name: tool.name,
+                description: tool.description,
+                input_schema: tool.input_schema,
+              })),
+              ...(toolChoice ? { tool_choice: toolChoice } : {}),
+            }
+          : {}),
       }),
     });
 
