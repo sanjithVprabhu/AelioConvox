@@ -1,6 +1,22 @@
 node_modules/
 dist/
 .turbo/
+*.tsbuildinfo
+
+# Rust build artifacts
+**/target/
+*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
 *.db
 *.db-shm
 *.db-wal
@@ -13,3 +29,6 @@ lldata/
 secrets.md
 *.pem
 *.key
+
+# Local leftover Rust workspace (build output only, not part of Aelio-Convox)
+aelio-os/
