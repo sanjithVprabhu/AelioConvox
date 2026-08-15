@@ -61,12 +61,20 @@ import type { HarnessBindingConfig, HarnessBudgets } from '../harness/schema.js'
 import type { HarnessTracer } from '../harness/traces.js';
 import type { SuspensionStore } from '../harness/suspension.js';
 import type { LighthouseService } from '../lighthouse/index.js';
+import {
+  evaluatePipeline,
+  handlePipelinePostTurn,
+  patchPipelineContext,
+  resolvePipelineRoute,
+  runPipelineTurn,
+} from '../pipeline/index.js';
 import { runWithTurnContext } from '../telemetry/turn-calls.js';
 
 export type ProcessTurnResult = {
   reply: string;
   turnId: string;
   awaitingConfirmation?: boolean;
+  uiDirective?: import('@aelio/protocol').UiDirective;
 };
 
 export type ProcessTurnInput = {
@@ -92,6 +100,8 @@ export type ProcessTurnInput = {
   messageStore?: ConvoxMessageStore;
   /** Config-level persona override (SDK-registered persona wins when present). */
   persona?: string | null;
+  /** When true the customer authenticated via magic link / session token. */
+  authenticated?: boolean;
   /** Harness engine (plan-execute-replan). When absent/disabled, the legacy tool loop runs. */
   harness?: {
     enabled: boolean;
@@ -376,7 +386,10 @@ async function executeTurn(
   // fresh question, and must reach the harness even if it resembles a cached one.
   // (The parked-plan probe only runs when the cache is on, so the default path
   // pays no extra read.)
-  if (input.cache?.enabled) {
+  // Skip response cache when a pipeline manifest is registered — pipeline steps
+  // are stage-sensitive and a stale cached bind-failure must not replay.
+  const pipelineManifest = input.sdk.getPipelineManifest?.() ?? null;
+  if (input.cache?.enabled && !pipelineManifest) {
     const hasParkedPlan =
       input.harness?.enabled && input.suspensionStore
         ? (await input.suspensionStore.get(session.id)) !== null
@@ -412,25 +425,53 @@ async function executeTurn(
     maxTokens: input.maxTokens,
   });
 
+  const flows = input.sdk.getFlows();
+  const pipelineContext = patchPipelineContext(
+    await evaluatePipeline({
+      database: input.database,
+      internalCustomerId: customerId,
+      externalId,
+      userMessage: input.message,
+      manifest: input.sdk.getPipelineManifest?.() ?? null,
+      flows,
+      attributes: input.sdk.getAttributes?.() ?? [],
+      authenticated: input.authenticated ?? false,
+    }),
+    flows,
+  );
+
   const intentStack = preTurnSnapshot.intentStack;
   const intentPrompt = input.intent?.enabled ? buildIntentStackPrompt(intentStack) : '';
 
   const lifecycle = preTurnSnapshot.lifecycle;
-  const stateDef = lifecycle.lifecycleState
-    ? input.sdk.getStates().find((entry) => entry.id === lifecycle.lifecycleState)
+  const effectiveLifecycleState = pipelineContext.enabled
+    ? pipelineContext.globalStage
+    : lifecycle.lifecycleState;
+  const stateDef = effectiveLifecycleState
+    ? input.sdk.getStates().find((entry) => entry.id === effectiveLifecycleState) ??
+      (pipelineContext.stage
+        ? {
+            id: pipelineContext.globalStage,
+            description: pipelineContext.stage.description,
+            allowedTools: pipelineContext.stage.allowedTools,
+            blockedTools: pipelineContext.stage.blockedTools,
+            guards: pipelineContext.stage.guards,
+          }
+        : undefined)
     : undefined;
   const lifecyclePrompt = buildLifecycleSystemPrompt({
-    stateId: lifecycle.lifecycleState,
+    stateId: effectiveLifecycleState,
     state: stateDef,
     policies: input.sdk.getPolicies(),
     flows: input.sdk.getFlows(),
     flowProgress: lifecycle.flowProgress,
+    omitActiveFlows: pipelineContext.enabled && Boolean(pipelineContext.currentStep),
   });
   // Lifecycle scoping first (allowed/blocked per state), then relevance
   // retrieval: above the registry-size threshold only the top-K tools for THIS
   // message ship to the model. The active flow step's tool always survives.
   const stateScopedFunctions = filterFunctionsByState(input.sdk.getFunctions(), stateDef);
-  const activeFlowTools: string[] = [];
+  const activeFlowTools: string[] = [...pipelineContext.forceIncludeTools];
   for (const flow of input.sdk.getFlows()) {
     const progress = lifecycle.flowProgress?.[flow.id];
     if (!progress) continue;
@@ -469,10 +510,25 @@ async function executeTurn(
         .map((fn) => `- ${fn.name} (${fn.intent ?? fn.name})${fn.safety !== 'read' ? ` [${fn.safety}]` : ''}: ${fn.description}`)
         .join('\n')
     : '';
+  const attributes = input.sdk.getAttributes?.() ?? [];
   const system = composeSystemPrompt([
     { id: 'persona', content: persona, stability: 'stable', priority: 100, maxTokens: 800 },
     { id: 'guidance', content: TOOL_GUIDANCE, stability: 'stable', priority: 95 },
     { id: 'brief', content: brief, stability: 'stable', priority: 92, maxTokens: 1500 },
+    {
+      id: 'pipeline',
+      content: pipelineContext.pipelinePrompt,
+      stability: 'volatile',
+      priority: 91,
+      maxTokens: 1200,
+    },
+    {
+      id: 'profile_memory',
+      content: pipelineContext.memoryPrompt,
+      stability: 'volatile',
+      priority: 88,
+      maxTokens: 800,
+    },
     { id: 'lifecycle', content: lifecyclePrompt ?? '', stability: 'stable', priority: 90, maxTokens: 1200 },
     { id: 'tools', content: toolCards ? `Available tools for this turn:\n${toolCards}` : '', stability: 'volatile', priority: 70, maxTokens: 1500 },
     { id: 'summary', content: summary ? `Rolling session summary:\n${summary}` : '', stability: 'volatile', priority: 60, maxTokens: 600 },
@@ -494,22 +550,65 @@ async function executeTurn(
     context,
     safety: input.safety,
   };
-  const loopResult = input.harness?.enabled
-    ? await runHarness({
-        ...engineInput,
-        ...(stateDef ? { state: stateDef } : {}),
-        presentFields: preTurnSnapshot.presentFields,
-        lighthouse: input.lighthouse,
-        tracer: input.tracer,
-        suspensionStore: input.suspensionStore,
-        budgets: input.harness.budgets,
-        binding: input.harness.binding,
-        turnId,
-      })
-    : await runToolLoop(engineInput);
+  const evaluateBase = {
+    database: input.database,
+    internalCustomerId: customerId,
+    externalId,
+    userMessage: input.message,
+    manifest: input.sdk.getPipelineManifest?.() ?? null,
+    flows,
+    attributes,
+    authenticated: input.authenticated ?? false,
+  };
+
+  const pipelineRoute = resolvePipelineRoute(pipelineContext, input.message);
+  const loopResult =
+    pipelineRoute != null
+      ? await runPipelineTurn({
+          database: input.database,
+          externalId,
+          internalCustomerId: customerId,
+          flows,
+          attributes,
+          evaluateBase,
+          pipeline: pipelineContext,
+          llm: input.llm,
+          sdk: input.sdk,
+          model: input.model,
+          maxTokens: input.maxTokens,
+          system,
+          history,
+          userMessage: input.message,
+          context,
+          safety: input.safety,
+        })
+      : input.harness?.enabled
+      ? await runHarness({
+          ...engineInput,
+          ...(stateDef ? { state: stateDef } : {}),
+          presentFields: preTurnSnapshot.presentFields,
+          lighthouse: input.lighthouse,
+          tracer: input.tracer,
+          suspensionStore: input.suspensionStore,
+          budgets: input.harness.budgets,
+          binding: input.harness.binding,
+          turnId,
+        })
+      : await runToolLoop(engineInput);
 
   if (loopResult.pendingConfirmation) {
     await setPendingConfirmation(db, session.id, loopResult.pendingConfirmation);
+  }
+
+  if (pipelineRoute == null) {
+    await handlePipelinePostTurn({
+      database: input.database,
+      externalId,
+      internalCustomerId: customerId,
+      pipeline: pipelineContext,
+      executedToolNames: loopResult.executedToolNames,
+      userMessage: input.message,
+    });
   }
 
   let postTurnSnapshot = preTurnSnapshot;
@@ -554,7 +653,8 @@ async function executeTurn(
     input.cache?.enabled &&
     loopResult.toolCallsExecuted === 0 &&
     !loopResult.pendingConfirmation &&
-    loopResult.reply.trim().length > 0
+    loopResult.reply.trim().length > 0 &&
+    !/^I don't have a way to "/.test(loopResult.reply)
   ) {
     await storeCachedResponse({
       database: input.database,
@@ -569,5 +669,6 @@ async function executeTurn(
     reply: loopResult.reply,
     turnId,
     ...(loopResult.pendingConfirmation ? { awaitingConfirmation: true } : {}),
+    ...(pipelineContext.uiDirective ? { uiDirective: pipelineContext.uiDirective } : {}),
   };
 }

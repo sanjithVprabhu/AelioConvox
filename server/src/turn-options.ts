@@ -93,6 +93,7 @@ export function buildTurnInput(
     channel: Channel;
     channelAddress: string;
     message: string;
+    authenticated?: boolean;
   },
 ): ProcessTurnInput {
   return {

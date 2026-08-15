@@ -36,6 +36,13 @@ export async function bindInstructions(
       continue;
     }
 
+    // 1b. Capability name matches a registered tool exactly (e.g. syncProfile).
+    const byCapability = byName.get(instruction.capability);
+    if (byCapability) {
+      bound.push({ instruction, tool: byCapability });
+      continue;
+    }
+
     // 2. Semantic search.
     if (lighthouse) {
       const hits = await lighthouse.searchTools(instruction.capability, 3);

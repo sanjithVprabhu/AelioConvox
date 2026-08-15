@@ -1,0 +1,240 @@
+# ShopCo conversational pipeline manifest
+# Loaded by examples/sample-saas — defines stages, profile memory, and flows.
+# Tools (syncProfile, listOrders, …) are implemented in src/index.ts via aelio.expose().
+
+product:
+  name: ShopCo
+  description: >
+    ShopCo is an e-commerce subscription platform. Customers track orders,
+    manage plans, and pay invoices through chat.
+  persona: >
+    You are ShopCo's assistant. Be warm and concise. Guide new users through
+    setup one pipeline step at a time. Use tools for account data — never
+    invent order or billing details.
+
+pipeline:
+  initial_stage: unverified
+  stages:
+    unverified:
+      description: >
+        Brand-new visitor. Deliver the greeting pitch, explain what ShopCo does,
+        and get them to engage. No account tools yet.
+      content:
+        greeting: "Hi! I'm ShopCo — track orders, manage your plan, and handle billing, all in chat."
+        cta: "Let's go"
+      flow: welcome
+      blocked_tools:
+        - listOrders
+        - getOrderStatus
+        - getSubscription
+        - listInvoices
+        - cancelOrder
+        - upgradePlan
+        - syncProfile
+      next: verified
+
+    verified:
+      description: >
+        Collect and confirm the customer's email (identity verification).
+        No order or billing tools until onboarding completes.
+      flow: verify_identity
+      blocked_tools:
+        - listOrders
+        - getOrderStatus
+        - getSubscription
+        - listInvoices
+        - cancelOrder
+        - upgradePlan
+      guards:
+        requires_fields:
+          - verified_email
+      next: onboarding
+
+    onboarding:
+      description: >
+        Profile intake + product walkthrough. Collect name and shopping preference,
+        then tour orders → plan → invoices. No upgrades or cancellations yet.
+      flow: shopco_onboarding
+      allowed_tools:
+        - listOrders
+        - getOrderStatus
+        - getSubscription
+        - listInvoices
+        - syncProfile
+      blocked_tools:
+        - cancelOrder
+        - upgradePlan
+      guards:
+        requires_fields:
+          - display_name
+          - shopping_preference
+      next: active
+
+    active:
+      description: >
+        Fully onboarded customer. Full support: orders, subscription changes,
+        and cancellations (with confirmation).
+
+    churn_risk:
+      description: Customer may be leaving. Empathetic retention tone — no upsells.
+      blocked_tools:
+        - upgradePlan
+
+# Profile memory schema — Aelio stores collected values per customer automatically.
+attributes:
+  verified_email:
+    label: Email address
+    data_type: string
+    sensitivity_tier: pii
+    prompts:
+      - What email should we use for your ShopCo account?
+    ui_format:
+      component: email_input
+
+  display_name:
+    label: Display name
+    data_type: string
+    sensitivity_tier: pii
+    prompts:
+      - What should I call you? (first name is fine)
+    ui_format:
+      component: text_input
+
+  shopping_preference:
+    label: Shopping preference
+    data_type: string
+    sensitivity_tier: public
+    prompts:
+      - Are you shopping for personal orders, business, or both?
+    enum_values:
+      - Personal
+      - Business
+      - Both
+    ui_format:
+      component: quick_reply
+      config:
+        options:
+          - Personal
+          - Business
+          - Both
+
+  intent_ack:
+    label: Welcome intent
+    data_type: string
+    sensitivity_tier: public
+    prompts:
+      - Ready to get started with ShopCo?
+    enum_values:
+      - "Let's go"
+      - Tell me more
+    ui_format:
+      component: quick_reply
+      config:
+        options:
+          - "Let's go"
+          - Tell me more
+
+flows:
+  welcome:
+    state: unverified
+    description: Greet the visitor and capture intent to continue.
+    steps:
+      pitch:
+        type: content
+        goal: Deliver the ShopCo greeting and value pitch, then ask if they want to continue
+      intent_ack:
+        type: attribute
+        goal: Confirm the user wants to proceed (tap a quick reply or say yes)
+        attribute: intent_ack
+
+  verify_identity:
+    state: verified
+    description: Collect verified email before product access.
+    steps:
+      collect_email:
+        type: attribute
+        goal: Ask for their email address for account verification
+        attribute: verified_email
+      email_ack:
+        type: content
+        goal: Confirm you received their email and will use it for their account
+
+  shopco_onboarding:
+    state: onboarding
+    description: "Profile intake then product tour: name → preference → orders → plan → invoices."
+    steps:
+      collect_name:
+        type: attribute
+        goal: Ask for their name
+        attribute: display_name
+      collect_preference:
+        type: attribute
+        goal: Ask personal vs business shopping (quick-reply chips)
+        attribute: shopping_preference
+        skip_if_present: shopping_preference
+      sync_profile:
+        type: tool
+        goal: Save their profile to ShopCo
+        tool: syncProfile
+      review_orders:
+        type: tool
+        goal: Show their existing orders
+        tool: listOrders
+      check_plan:
+        type: tool
+        goal: Show their current subscription plan
+        tool: getSubscription
+      view_invoices:
+        type: tool
+        goal: Show invoice status
+        tool: listInvoices
+
+lifecycle_states:
+  unverified:
+    description: New visitor — greet only, no account tools.
+    blocked_tools:
+      - listOrders
+      - getOrderStatus
+      - getSubscription
+      - listInvoices
+      - cancelOrder
+      - upgradePlan
+      - syncProfile
+
+  verified:
+    description: Identity step — collect email before product access.
+    blocked_tools:
+      - listOrders
+      - getOrderStatus
+      - getSubscription
+      - listInvoices
+      - cancelOrder
+      - upgradePlan
+
+  onboarding:
+    description: Intake + product tour — read-only account exploration.
+    allowed_tools:
+      - listOrders
+      - getOrderStatus
+      - getSubscription
+      - listInvoices
+      - syncProfile
+    blocked_tools:
+      - cancelOrder
+      - upgradePlan
+
+  active:
+    description: Full product access including writes.
+
+  churn_risk:
+    description: Retention-focused — no upgrade pushes.
+    blocked_tools:
+      - upgradePlan
+
+policies:
+  stay-in-lifecycle:
+    description: Stay within the customer's current pipeline stage. Do not skip ahead.
+    severity: hard
+  pricing-clarity:
+    description: Be transparent about plan pricing; never invent amounts.
+    severity: soft

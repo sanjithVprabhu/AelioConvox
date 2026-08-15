@@ -200,5 +200,30 @@ export {
   hashArgs,
   type HarnessRunInput,
 } from './harness/index.js';
+export {
+  evaluatePipeline,
+  handlePipelinePostTurn,
+  patchPipelineContext,
+  resolvePipelineRoute,
+  isPipelineConversationStep,
+  shouldUsePipelineConversation,
+  isPipelineToolStep,
+  runPipelineStepTurn,
+  runPipelineToolTurn,
+  runPipelineTurn,
+  buildProfileMemoryPrompt,
+  getPipelineState,
+  upsertPipelineState,
+  getFeatureStates,
+  upsertFeatureState,
+  getCustomerAttributes,
+  upsertCustomerAttribute,
+  hasAttribute,
+  type PipelineContext,
+  type PipelineEvaluateInput,
+  type PipelineStateRecord,
+  type FeatureStateRecord,
+  type CustomerAttributeRecord,
+} from './pipeline/index.js';
 export type { BoundInstruction } from './harness/resolver.js';
 export type { ExecOutcome, ExecutorState } from './harness/executor.js';

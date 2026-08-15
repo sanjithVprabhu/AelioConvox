@@ -1,21 +1,18 @@
 /**
- * Sample SaaS backend — "ShopCo".
+ * Sample SaaS backend — "ShopCo" (advanced pipeline demo).
  *
- * This is a tiny but realistic backend: it has its own in-memory "database" and
- * exposes its business logic both as normal REST endpoints (your existing API) AND
- * as Aelio functions (so the conversational runtime can call them). The same
- * functions back both — that's the point: you wrap what you already have.
- *
- * State is mutable, so the demo feels alive: cancel an order, then ask to list
- * orders, and you'll see it reflected.
+ * Every new customer id starts at pipeline stage `unverified` and walks through:
+ *   unverified → verified → onboarding → active
  *
  * Run:  pnpm --filter aelio-sample-saas start
+ * Demo: http://127.0.0.1:3010/demo.html?customer=new-user-001
  */
 import { aelio } from '@aelio/sdk';
 import express from 'express';
+import { loadShopCoManifest } from './load-manifest.js';
 
 // ---------------------------------------------------------------------------
-// In-memory "database", keyed by customer id (lazily seeded so ANY customer works).
+// In-memory "database"
 // ---------------------------------------------------------------------------
 type Order = {
   id: string;
@@ -24,8 +21,11 @@ type Order = {
   total: number;
   tracking?: string;
 };
+
 type Customer = {
   name: string;
+  email?: string;
+  shoppingPreference?: string;
   orders: Order[];
   subscription: { plan: 'starter' | 'pro' | 'enterprise'; renewsOn: string };
   invoices: Array<{ id: string; amount: number; paid: boolean }>;
@@ -36,7 +36,7 @@ const db = new Map<string, Customer>();
 function customer(id: string): Customer {
   if (!db.has(id)) {
     db.set(id, {
-      name: 'Demo Customer',
+      name: 'New Shopper',
       orders: [
         { id: 'A-1001', item: 'Wireless Headphones', status: 'shipped', total: 129, tracking: '1Z999AA10123456784' },
         { id: 'A-1002', item: 'USB-C Charger', status: 'pending', total: 25 },
@@ -52,9 +52,6 @@ function customer(id: string): Customer {
   return db.get(id)!;
 }
 
-// ---------------------------------------------------------------------------
-// Business logic — plain functions. These ARE your "APIs".
-// ---------------------------------------------------------------------------
 const api = {
   listOrders(customerId: string, status?: string) {
     const orders = customer(customerId).orders;
@@ -85,66 +82,44 @@ const api = {
 };
 
 // ---------------------------------------------------------------------------
-// 1) Your normal REST API (what you already have today).
+// REST API
 // ---------------------------------------------------------------------------
 const app = express();
-const cid = (req: express.Request) => String(req.query.customerId ?? 'demo-user-123');
+app.use(express.json());
+
+const cid = (req: express.Request) => String(req.query.customerId ?? req.params.customerId ?? 'demo-user-123');
+
 app.get('/api/orders', (req, res) => res.json(api.listOrders(cid(req), req.query.status as string | undefined)));
 app.get('/api/orders/:id', (req, res) => res.json(api.getOrderStatus(cid(req), req.params.id)));
 app.get('/api/subscription', (req, res) => res.json(api.getSubscription(cid(req))));
 app.get('/api/invoices', (req, res) => res.json(api.listInvoices(cid(req))));
+app.get('/api/profile/:customerId', (req, res) => {
+  const row = customer(req.params.customerId);
+  res.json({ name: row.name, email: row.email, shoppingPreference: row.shoppingPreference });
+});
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 // ---------------------------------------------------------------------------
-// 2) Lifecycle catalog — states, policies, and guided flows (SDK → Aelio server).
-//    Your backend decides each customer's current state via setCustomerState().
+// Aelio persona + pipeline (from YAML manifest)
 // ---------------------------------------------------------------------------
-aelio.persona(
-  'You are the ShopCo assistant. Be friendly and efficient; refer to the product as ShopCo. Use tools for any account-specific data.',
-);
+loadShopCoManifest();
 
-aelio.state('onboarding', {
-  description:
-    'New customer setting up ShopCo for the first time. Help with setup only: exploring orders, checking subscription, listing invoices. Do NOT discuss plan upgrades, cancellations, or churn retention offers.',
-  allowedTools: ['listOrders', 'getOrderStatus', 'getSubscription', 'listInvoices'],
-  blockedTools: ['cancelOrder', 'upgradePlan'],
+// SaaS tools — implemented here; referenced by flow steps in the YAML manifest.
+// syncProfile, listOrders, etc. are YOUR backend functions, not Aelio internals.
+aelio.expose('syncProfile', async (_args, ctx) => {
+  const row = customer(ctx.customerId);
+  return {
+    synced: true,
+    profile: { name: row.name, email: row.email, shoppingPreference: row.shoppingPreference },
+    note: 'Intake fields are persisted by Aelio; this tool marks the profile checkpoint in the tour.',
+  };
+}, {
+  description: 'Persist collected profile fields (name, email, preference) to the ShopCo account',
+  params: {},
+  safety: 'read',
+  intent: 'onboarding',
 });
 
-aelio.state('active', {
-  description:
-    'Fully onboarded paying customer. Full product support: orders, subscription, upgrades, and cancellations (with confirmation).',
-});
-
-aelio.state('churn_risk', {
-  description:
-    'Customer may be leaving. Be empathetic and retention-focused. Do NOT push new feature upsells. Focus on understanding issues and keeping them.',
-  blockedTools: ['upgradePlan'],
-});
-
-aelio.policy('stay-in-lifecycle', {
-  description: 'Only discuss topics appropriate for the customer\'s current lifecycle state.',
-  severity: 'hard',
-});
-
-aelio.policy('pricing-clarity', {
-  description: 'When discussing plans, be transparent and avoid inventing prices.',
-  severity: 'soft',
-});
-
-aelio.flow('onboarding_setup', {
-  state: 'onboarding',
-  description: 'Guide the customer through initial setup: review orders → check subscription → explore invoices.',
-  steps: {
-    review_orders: { goal: 'Review their existing orders', tool: 'listOrders' },
-    check_plan: { goal: 'Check their current subscription plan', tool: 'getSubscription' },
-    view_invoices: { goal: 'Review invoice status', tool: 'listInvoices' },
-  },
-});
-
-// ---------------------------------------------------------------------------
-// 3) Wrap the SAME functions with Aelio so the assistant can call them.
-//    ctx.customerId is resolved by Aelio from the channel — you just scope to it.
-// ---------------------------------------------------------------------------
 aelio.expose('listOrders', async ({ status }, ctx) => api.listOrders(ctx.customerId, status as string | undefined), {
   description: "List the customer's orders, optionally filtered by status",
   params: { status: { type: 'string', enum: ['shipped', 'pending', 'cancelled'], optional: true } },
@@ -176,7 +151,7 @@ aelio.expose('listInvoices', async (_args, ctx) => api.listInvoices(ctx.customer
 aelio.expose('cancelOrder', async ({ orderId }, ctx) => api.cancelOrder(ctx.customerId, orderId as string), {
   description: 'Cancel a pending order by its id',
   params: { orderId: 'string' },
-  safety: 'write', // Aelio asks the customer to confirm before this runs
+  safety: 'write',
   intent: 'cancellation',
 });
 
@@ -187,17 +162,18 @@ aelio.expose('upgradePlan', async ({ plan }, ctx) => api.upgradePlan(ctx.custome
   intent: 'subscription',
 });
 
+// ---------------------------------------------------------------------------
+// Boot — do NOT pre-seed pipeline stage; every new customer id starts at `unverified`
+// ---------------------------------------------------------------------------
 const PORT = Number(process.env.PORT ?? 8081);
-const DEMO_CUSTOMER_ID = 'demo-user-123';
 
 await aelio.listen({
   secret: process.env.AELIO_SDK_SECRET ?? 'change-me-in-production',
   url: process.env.AELIO_SERVER_URL ?? `ws://127.0.0.1:${process.env.AELIO_PORT ?? '3010'}`,
 });
 
-// Demo users start in onboarding — your real app would set this from your DB on login/events.
-aelio.setCustomerState(DEMO_CUSTOMER_ID, 'onboarding', 'demo_seed');
-
 app.listen(PORT, () => {
-  console.log(`ShopCo sample backend on :${PORT} — Aelio SDK connected (6 tools, 3 states, 2 policies, 1 flow)`);
+  console.log(`ShopCo pipeline demo on :${PORT}`);
+  console.log('  Stages: unverified → verified → onboarding → active');
+  console.log('  Demo UI: http://127.0.0.1:3010/demo.html?customer=new-user-001');
 });

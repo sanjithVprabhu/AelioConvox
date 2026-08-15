@@ -87,6 +87,7 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
     let customerId = 'anonymous';
     let channelAddress = `web:${remoteAddress}`;
     let initialized = false;
+    let authenticated = false;
 
     socket.on('message', (raw) => {
       if (raw.toString().length > MAX_WS_FRAME_BYTES) {
@@ -170,6 +171,7 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
             channelAddress = message.email ? `web:${message.email}` : `web:${customerId}`;
           }
 
+          authenticated = Boolean(claims);
           initialized = true;
           app.log.info(
             {
@@ -214,12 +216,13 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
         socket.send(JSON.stringify({ type: 'typing', active: true }));
 
         try {
-          const { reply, turnId, awaitingConfirmation } = await processTurn(
+          const { reply, turnId, awaitingConfirmation, uiDirective } = await processTurn(
             buildTurnInput(deps, {
               customerExternalId: customerId,
               channel: 'web',
               channelAddress,
               message: message.content,
+              authenticated,
             }),
           );
 
@@ -244,6 +247,10 @@ export async function registerWidgetRoutes(app: FastifyInstance, deps: RuntimeDe
                 turnId,
               }),
             );
+          }
+
+          if (uiDirective) {
+            socket.send(JSON.stringify({ type: 'ui', ...uiDirective }));
           }
         } catch (error) {
           app.log.error(

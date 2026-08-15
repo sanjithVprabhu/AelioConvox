@@ -22,7 +22,6 @@ export function evaluateGate(
   args: Record<string, unknown>,
   ctx: GateContext,
 ): GateVerdict {
-  // 1. Missing required arguments → collect them (recoil).
   const missing = findMissingRequiredArgs(fn.params, args);
   if (missing.length > 0) {
     return {

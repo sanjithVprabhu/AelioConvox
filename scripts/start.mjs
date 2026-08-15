@@ -229,8 +229,8 @@ log('boot', 'starting Aelio server…');
 run('server', 'pnpm', ['--filter', '@aelio/server', 'dev:once'], root);
 await waitFor(`http://127.0.0.1:${serverPort}/health`);
 
-log('boot', 'starting example SDK backend…');
-run('sdk', 'pnpm', ['--filter', 'aelio-example-express', 'start'], root);
+log('boot', 'starting ShopCo pipeline SDK…');
+run('sdk', 'pnpm', ['--filter', 'aelio-sample-saas', 'start'], root);
 await waitForSdkReady();
 
 console.log('\n────────────────────────────────────────────────────────');

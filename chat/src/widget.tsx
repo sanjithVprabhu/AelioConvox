@@ -16,6 +16,13 @@ type ServerMessage =
   | { type: 'message'; role: 'assistant'; content: string }
   | { type: 'confirmation'; prompt: string; turnId?: string }
   | { type: 'typing'; active: boolean }
+  | {
+      type: 'ui';
+      component: string;
+      config?: Record<string, unknown>;
+      attribute_id?: string;
+      step_id?: string;
+    }
   | { type: 'error'; message: string; code?: string };
 
 type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'failed';
@@ -122,6 +129,7 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [statusDetail, setStatusDetail] = useState('');
   const [pendingConfirmationIndex, setPendingConfirmationIndex] = useState<number | null>(null);
+  const [quickReplyOptions, setQuickReplyOptions] = useState<string[]>([]);
   const socketRef = useRef<WebSocket | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   // Set by the connection effect; the Retry button calls it to restart from scratch.
@@ -253,6 +261,15 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
           setMessages((prev) => [...prev, { role: 'assistant', content: data.content }]);
           return;
         }
+        if (data.type === 'ui') {
+          if (data.component === 'quick_reply') {
+            const options = Array.isArray(data.config?.options)
+              ? data.config.options.map(String)
+              : [];
+            setQuickReplyOptions(options);
+          }
+          return;
+        }
         if (data.type === 'confirmation') {
           setMessages((prev) => {
             const next: ChatMessage[] = [...prev, { role: 'assistant', content: data.prompt }];
@@ -319,6 +336,7 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
       setInput('');
     }
     setPendingConfirmationIndex(null);
+    setQuickReplyOptions([]);
   };
 
   const respondToConfirmation = (answer: 'yes' | 'no') => {
@@ -391,6 +409,21 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
             ))}
             {typing ? <div class="aelio-typing">Aelio is typing...</div> : null}
           </div>
+          {quickReplyOptions.length > 0 ? (
+            <div class="aelio-quick-replies">
+              {quickReplyOptions.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  class="aelio-quick-reply"
+                  onClick={() => sendMessage(option)}
+                  disabled={!connected}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <div class="aelio-input-row">
             <input
               value={input}
@@ -443,6 +476,9 @@ function ChatWidget({ options }: { options: NormalizedOptions }) {
         .aelio-confirm-yes, .aelio-confirm-no { border: none; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
         .aelio-confirm-yes { background: #111827; color: #fff; }
         .aelio-confirm-no { background: #f3f4f6; color: #374151; }
+        .aelio-quick-replies { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 12px 8px; border-top: 1px solid #f3f4f6; }
+        .aelio-quick-reply { background: #fff; border: 1px solid #d1d5db; border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; color: #111827; }
+        .aelio-quick-reply:disabled { opacity: .6; cursor: not-allowed; }
         .aelio-hint, .aelio-typing { color: #6b7280; font-size: 13px; }
         .aelio-status { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 12px; border-bottom: 1px solid #e5e7eb; }
         .aelio-status-dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }

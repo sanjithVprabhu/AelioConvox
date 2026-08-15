@@ -1,10 +1,12 @@
 import {
   INVOKE_TIMEOUT_MS,
+  type AttributeDefinition,
   type Channel,
   type FlowDefinition,
   type FunctionDefinition,
   type InvocationContext,
   type InvokeMessage,
+  type PipelineManifest,
   type PolicyDefinition,
   type ResultMessage,
   type SendInvokeMessage,
@@ -22,6 +24,8 @@ type ActiveConnection = {
   states: StateDefinition[];
   policies: PolicyDefinition[];
   flows: FlowDefinition[];
+  pipeline: PipelineManifest | null;
+  attributes: AttributeDefinition[];
   persona: string | null;
   productBrief: string | null;
   sdkVersion: string;
@@ -84,6 +88,8 @@ export class ServerSdkBridge implements SdkBridge {
       states: [],
       policies: [],
       flows: [],
+      pipeline: null,
+      attributes: [],
       persona: null,
       productBrief: null,
       sdkVersion: '',
@@ -232,6 +238,25 @@ export class ServerSdkBridge implements SdkBridge {
     for (const connection of this.registeredConnections()) {
       for (const flow of connection.flows) {
         seen.set(flow.id, flow);
+      }
+    }
+    return [...seen.values()];
+  }
+
+  getPipelineManifest(): PipelineManifest | null {
+    for (const connection of this.registeredConnections()) {
+      if (connection.pipeline) {
+        return connection.pipeline;
+      }
+    }
+    return null;
+  }
+
+  getAttributes(): AttributeDefinition[] {
+    const seen = new Map<string, AttributeDefinition>();
+    for (const connection of this.registeredConnections()) {
+      for (const attribute of connection.attributes) {
+        seen.set(attribute.id, attribute);
       }
     }
     return [...seen.values()];

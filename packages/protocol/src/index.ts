@@ -66,7 +66,23 @@ export type PolicyDefinition = z.infer<typeof PolicyDefinitionSchema>;
 export const FlowStepDefinitionSchema = z.object({
   id: z.string().min(1),
   goal: z.string().min(1),
+  /** @deprecated use `type: 'tool'` — kept for backward compatibility */
   tool: z.string().min(1).optional(),
+  type: z.enum(['tool', 'attribute', 'content']).optional(),
+  attribute: z.string().min(1).optional(),
+  ui_format: z
+    .object({
+      component: z.string().min(1),
+      config: z.record(z.unknown()).optional(),
+    })
+    .optional(),
+  skip_if_present: z.string().min(1).optional(),
+  on_complete: z
+    .object({
+      advance_flow: z.boolean().default(true),
+      transition_to: z.string().min(1).optional(),
+    })
+    .optional(),
 });
 export type FlowStepDefinition = z.infer<typeof FlowStepDefinitionSchema>;
 
@@ -77,6 +93,96 @@ export const FlowDefinitionSchema = z.object({
   steps: z.array(FlowStepDefinitionSchema).min(1),
 });
 export type FlowDefinition = z.infer<typeof FlowDefinitionSchema>;
+
+/** Canonical global product lifecycle stages. */
+export const GlobalStageSchema = z.enum(['unverified', 'verified', 'onboarding', 'active']);
+export type GlobalStage = z.infer<typeof GlobalStageSchema>;
+
+/** Per-feature lifecycle stages (discover → activate → retain). */
+export const FeatureStageSchema = z.enum([
+  'not_started',
+  'feature_discovery',
+  'activated',
+  'power_usage',
+]);
+export type FeatureStage = z.infer<typeof FeatureStageSchema>;
+
+export const EntryMethodSchema = z.enum(['system_triggered', 'user_invoked']);
+export type EntryMethod = z.infer<typeof EntryMethodSchema>;
+
+export const UiFormatSchema = z.object({
+  component: z.string().min(1),
+  config: z.record(z.unknown()).optional(),
+});
+export type UiFormat = z.infer<typeof UiFormatSchema>;
+
+export const AttributeDefinitionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  data_type: z.enum(['string', 'number', 'boolean', 'object', 'array']).default('string'),
+  sensitivity_tier: z.enum(['public', 'pii', 'sensitive_regulated']).default('pii'),
+  prompts: z.array(z.string().min(1)).optional(),
+  ui_format: UiFormatSchema.optional(),
+  enum_values: z.array(z.union([z.string(), z.number()])).optional(),
+});
+export type AttributeDefinition = z.infer<typeof AttributeDefinitionSchema>;
+
+export const PipelineStageDefinitionSchema = z.object({
+  id: z.string().min(1),
+  description: z.string().min(1),
+  content: z
+    .object({
+      greeting: z.string().optional(),
+      cta: z.string().optional(),
+    })
+    .optional(),
+  flow: z.string().min(1).optional(),
+  allowedTools: z.array(z.string().min(1)).optional(),
+  blockedTools: z.array(z.string().min(1)).optional(),
+  guards: StateGuardSchema.optional(),
+  next: z.string().min(1).optional(),
+});
+export type PipelineStageDefinition = z.infer<typeof PipelineStageDefinitionSchema>;
+
+export const FeatureTriggerSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('immediate') }),
+  z.object({
+    type: z.literal('stage_reached'),
+    depends_on_feature: z.string().min(1),
+    min_stage: FeatureStageSchema,
+    dependency_type: z.enum(['soft', 'hard']).default('soft'),
+  }),
+  z.object({
+    type: z.literal('event'),
+    event_name: z.string().min(1),
+  }),
+  z.object({ type: z.literal('user_invoked') }),
+]);
+export type FeatureTrigger = z.infer<typeof FeatureTriggerSchema>;
+
+export const FeaturePipelineDefinitionSchema = z.object({
+  id: z.string().min(1),
+  description: z.string().optional(),
+  trigger: FeatureTriggerSchema.optional(),
+  activation_action: z.string().min(1).optional(),
+});
+export type FeaturePipelineDefinition = z.infer<typeof FeaturePipelineDefinitionSchema>;
+
+export const PipelineManifestSchema = z.object({
+  initial_stage: z.string().min(1).default('unverified'),
+  stages: z.record(PipelineStageDefinitionSchema),
+  features: z.array(FeaturePipelineDefinitionSchema).optional(),
+});
+export type PipelineManifest = z.infer<typeof PipelineManifestSchema>;
+
+/** Widget UI directive emitted by the pipeline engine. */
+export const UiDirectiveSchema = z.object({
+  component: z.string().min(1),
+  config: z.record(z.unknown()).optional(),
+  attribute_id: z.string().optional(),
+  step_id: z.string().optional(),
+});
+export type UiDirective = z.infer<typeof UiDirectiveSchema>;
 
 export const InvocationContextSchema = z.object({
   customerId: z.string().min(1),
@@ -96,6 +202,8 @@ export const RegisterMessageSchema = z.object({
   states: z.array(StateDefinitionSchema).optional(),
   policies: z.array(PolicyDefinitionSchema).optional(),
   flows: z.array(FlowDefinitionSchema).optional(),
+  pipeline: PipelineManifestSchema.optional(),
+  attributes: z.array(AttributeDefinitionSchema).optional(),
   // Client-supplied assistant persona/voice; becomes the stable head of the
   // system prompt (see runtime/prompt-composer).
   persona: z.string().optional(),
@@ -124,6 +232,25 @@ export const SetFlowProgressMessageSchema = z.object({
   completedSteps: z.array(z.string().min(1)).optional(),
 });
 export type SetFlowProgressMessage = z.infer<typeof SetFlowProgressMessageSchema>;
+
+export const SetGlobalStageMessageSchema = z.object({
+  type: z.literal('set_global_stage'),
+  customerId: z.string().min(1),
+  stage: z.string().min(1),
+  entryMethod: EntryMethodSchema.optional(),
+  reason: z.string().optional(),
+});
+export type SetGlobalStageMessage = z.infer<typeof SetGlobalStageMessageSchema>;
+
+export const SetAttributeMessageSchema = z.object({
+  type: z.literal('set_attribute'),
+  customerId: z.string().min(1),
+  attributeId: z.string().min(1),
+  value: z.unknown(),
+  source: z.enum(['explicit_ask', 'inferred', 'third_party_auth']).optional(),
+  verified: z.boolean().optional(),
+});
+export type SetAttributeMessage = z.infer<typeof SetAttributeMessageSchema>;
 
 export const InvokeMessageSchema = z.object({
   type: z.literal('invoke'),
@@ -194,6 +321,8 @@ export const SdkToServerMessageSchema = z.discriminatedUnion('type', [
   IngestMessageSchema,
   SetStateMessageSchema,
   SetFlowProgressMessageSchema,
+  SetGlobalStageMessageSchema,
+  SetAttributeMessageSchema,
 ]);
 export type SdkToServerMessage = z.infer<typeof SdkToServerMessageSchema>;
 
@@ -209,7 +338,7 @@ export type ServerErrorMessage = z.infer<typeof ServerErrorMessageSchema>;
 
 export const AckMessageSchema = z.object({
   type: z.literal('ack'),
-  op: z.enum(['set_state', 'set_flow_progress', 'ingest']),
+  op: z.enum(['set_state', 'set_flow_progress', 'set_global_stage', 'set_attribute', 'ingest']),
 });
 export type AckMessage = z.infer<typeof AckMessageSchema>;
 

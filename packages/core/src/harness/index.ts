@@ -147,6 +147,37 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
     };
   }
 
+  // Flow step ids (pitch, collect_name, …) are NOT tools. If the planner
+  // mistakenly plans them as capabilities, converse instead of bind-failing.
+  const flowStepIds = new Set(
+    input.sdk.getFlows().flatMap((flow) => flow.steps.map((step) => step.id)),
+  );
+  const registeredTools = new Set(input.functions.map((fn) => fn.name));
+  const flowStepOnlyPlan =
+    plan.instructions.length > 0 &&
+    plan.instructions.every(
+      (instruction) =>
+        (flowStepIds.has(instruction.capability) || flowStepIds.has(instruction.id)) &&
+        !registeredTools.has(instruction.capability) &&
+        !(instruction.tool && registeredTools.has(instruction.tool)),
+    );
+  if (flowStepOnlyPlan) {
+    trace('repair', { reason: 'flow_step_misbound', capabilities: plan.instructions.map((i) => i.capability) });
+    const result = await input.llm.complete({
+      model: input.model,
+      maxTokens: Math.min(input.maxTokens, 600),
+      tools: [],
+      system: `${input.system}\n\nYou are on a conversational pipeline step (greeting, profile collection, or content delivery). Reply naturally to the user. Do NOT mention tools, capabilities, or internal step names.`,
+      messages: [...input.history, { role: 'user', content: input.userMessage }],
+      telemetry: { purpose: 'chat_completion', iteration: 0 },
+    });
+    return {
+      reply: result.text.trim() || 'Hi! How can I help you today?',
+      toolCallsExecuted: 0,
+      executedToolNames: [],
+    };
+  }
+
   // ---- Bind → resolve ----
   const bindResult = await bindInstructions(plan.instructions, input.functions, input.lighthouse, binding);
   trace('bind', {
@@ -154,6 +185,29 @@ export async function runHarness(input: HarnessRunInput): Promise<ToolLoopResult
     unbound: bindResult.ok ? [] : bindResult.unbound.map((i) => i.id),
   });
   if (!bindResult.ok) {
+    const mistakenFlowStep = bindResult.unbound.some(
+      (instruction) =>
+        flowStepIds.has(instruction.capability) || flowStepIds.has(instruction.id),
+    );
+    if (mistakenFlowStep) {
+      trace('repair', {
+        reason: 'flow_step_bind_failure',
+        unbound: bindResult.unbound.map((i) => i.capability),
+      });
+      const result = await input.llm.complete({
+        model: input.model,
+        maxTokens: Math.min(input.maxTokens, 700),
+        tools: [],
+        system: `${input.system}\n\nFlow steps (profile questions, greetings) are handled conversationally — they are NOT tools. Answer the user's question in plain language. If they asked what's left in onboarding, summarize the remaining steps without mentioning internal ids.`,
+        messages: [...input.history, { role: 'user', content: input.userMessage }],
+        telemetry: { purpose: 'chat_completion', iteration: 0 },
+      });
+      return {
+        reply: result.text.trim() || 'Let me walk you through the next step.',
+        toolCallsExecuted: 0,
+        executedToolNames: [],
+      };
+    }
     // Unbindable capability — nothing in the registry serves it. End gracefully.
     return {
       reply: `I don't have a way to "${bindResult.unbound[0]?.capability ?? 'do that'}" right now.`,

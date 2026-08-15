@@ -1,7 +1,9 @@
 import type {
+  AttributeDefinition,
   FlowDefinition,
   FunctionDefinition,
   InvocationContext,
+  PipelineManifest,
   PolicyDefinition,
   StateDefinition,
 } from '@aelio/protocol';
@@ -18,6 +20,8 @@ export interface SdkBridge {
   getStates(): StateDefinition[];
   getPolicies(): PolicyDefinition[];
   getFlows(): FlowDefinition[];
+  getPipelineManifest?(): PipelineManifest | null;
+  getAttributes?(): AttributeDefinition[];
   /** Client-declared assistant persona, when the SDK registered one. */
   getPersona?(): string | null;
   /** Client-written product description grounding the harness planner. */

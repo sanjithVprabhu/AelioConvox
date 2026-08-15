@@ -271,6 +271,54 @@ export const harnessLedger = sqliteTable(
   ],
 );
 
+/** Global product lifecycle stage (greet → verify → onboard → active). */
+export const customerPipelineState = sqliteTable(
+  'customer_pipeline_state',
+  {
+    customerId: text('customer_id')
+      .primaryKey()
+      .references(() => customers.id),
+    globalStage: text('global_stage').notNull(),
+    enteredAt: integer('entered_at', { mode: 'timestamp_ms' }).notNull(),
+    entryMethod: text('entry_method').notNull().default('system_triggered'),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
+  },
+  (table) => [index('idx_pipeline_state_stage').on(table.globalStage)],
+);
+
+/** Per-(customer, feature) lifecycle stage for discover/activate/retain. */
+export const customerFeatureState = sqliteTable(
+  'customer_feature_state',
+  {
+    id: text('id').primaryKey(),
+    customerId: text('customer_id')
+      .notNull()
+      .references(() => customers.id),
+    featureId: text('feature_id').notNull(),
+    stage: text('stage').notNull(),
+    enteredAt: integer('entered_at', { mode: 'timestamp_ms' }).notNull(),
+    entryMethod: text('entry_method').notNull().default('system_triggered'),
+  },
+  (table) => [uniqueIndex('idx_feature_state_customer_feature').on(table.customerId, table.featureId)],
+);
+
+/** Structured profile attributes collected during onboarding/intake. */
+export const customerAttributes = sqliteTable(
+  'customer_attributes',
+  {
+    id: text('id').primaryKey(),
+    customerId: text('customer_id')
+      .notNull()
+      .references(() => customers.id),
+    attributeId: text('attribute_id').notNull(),
+    value: text('value', { mode: 'json' }).notNull(),
+    source: text('source').notNull().default('explicit_ask'),
+    verified: integer('verified', { mode: 'boolean' }).default(false),
+    collectedAt: integer('collected_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [uniqueIndex('idx_customer_attribute').on(table.customerId, table.attributeId)],
+);
+
 export const schema = {
   customers,
   channelAddresses,
@@ -287,6 +335,9 @@ export const schema = {
   turnApiCalls,
   suspendedPlans,
   harnessLedger,
+  customerPipelineState,
+  customerFeatureState,
+  customerAttributes,
 };
 
 export type DatabaseSchema = typeof schema;

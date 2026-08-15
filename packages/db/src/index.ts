@@ -90,6 +90,50 @@ function initializeVectorStore(sqlite: Database.Database): boolean {
   }
 }
 
+function ensurePipelineTables(sqlite: Database.Database): void {
+  const hasPipelineState = sqlite
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'customer_pipeline_state' LIMIT 1")
+    .get();
+  if (hasPipelineState) {
+    return;
+  }
+
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS customer_pipeline_state (
+      customer_id TEXT PRIMARY KEY NOT NULL,
+      global_stage TEXT NOT NULL,
+      entered_at INTEGER NOT NULL,
+      entry_method TEXT NOT NULL DEFAULT 'system_triggered',
+      metadata TEXT,
+      FOREIGN KEY (customer_id) REFERENCES customers(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pipeline_state_stage ON customer_pipeline_state (global_stage);
+    CREATE TABLE IF NOT EXISTS customer_feature_state (
+      id TEXT PRIMARY KEY NOT NULL,
+      customer_id TEXT NOT NULL,
+      feature_id TEXT NOT NULL,
+      stage TEXT NOT NULL,
+      entered_at INTEGER NOT NULL,
+      entry_method TEXT NOT NULL DEFAULT 'system_triggered',
+      FOREIGN KEY (customer_id) REFERENCES customers(id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_feature_state_customer_feature
+      ON customer_feature_state (customer_id, feature_id);
+    CREATE TABLE IF NOT EXISTS customer_attributes (
+      id TEXT PRIMARY KEY NOT NULL,
+      customer_id TEXT NOT NULL,
+      attribute_id TEXT NOT NULL,
+      value TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'explicit_ask',
+      verified INTEGER DEFAULT 0,
+      collected_at INTEGER NOT NULL,
+      FOREIGN KEY (customer_id) REFERENCES customers(id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_attribute
+      ON customer_attributes (customer_id, attribute_id);
+  `);
+}
+
 function ensureHarnessTables(sqlite: Database.Database): void {
   const hasHarnessLedger = sqlite
     .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'harness_ledger' LIMIT 1")
@@ -274,6 +318,7 @@ export function createDatabase(databasePath: string): AelioDatabase {
       // created_at stamp. Orphan journal rows (from renamed/regenerated SQL) can
       // block later migrations — ensure harness tables exist regardless.
       ensureHarnessTables(sqlite);
+      ensurePipelineTables(sqlite);
       // Additive columns for existing deployments (SQLite has no IF NOT EXISTS
       // for columns; inspect the table instead).
       const turnCallCols = sqlite

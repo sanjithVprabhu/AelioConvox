@@ -8,6 +8,7 @@ import type {
 } from '@aelio/protocol';
 import { eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
+import { getCustomerAttributes } from '../pipeline/state-store.js';
 
 export type FlowProgressRecord = {
   currentStepIndex: number;
@@ -86,6 +87,19 @@ export async function getCustomerPresentFields(
     .limit(1);
   const metadata = rows[0]?.metadata;
   const present = new Set<string>();
+
+  const attributes = await getCustomerAttributes(db, internalCustomerId);
+  for (const attribute of attributes) {
+    if (
+      attribute.value !== null &&
+      attribute.value !== undefined &&
+      attribute.value !== false &&
+      attribute.value !== ''
+    ) {
+      present.add(attribute.attributeId);
+    }
+  }
+
   if (metadata && typeof metadata === 'object') {
     for (const [key, value] of Object.entries(metadata)) {
       if (
@@ -218,6 +232,8 @@ export function buildLifecycleSystemPrompt(input: {
   policies: PolicyDefinition[];
   flows: FlowDefinition[];
   flowProgress?: Record<string, FlowProgressRecord>;
+  /** When true, skip lifecycle flow guidance — the pipeline engine owns step routing. */
+  omitActiveFlows?: boolean;
 }): string {
   const sections: string[] = [];
 
@@ -245,9 +261,11 @@ export function buildLifecycleSystemPrompt(input: {
     sections.push(`Active policies:\n${policyLines.join('\n')}`);
   }
 
-  const activeFlows = input.stateId
-    ? input.flows.filter((flow) => flow.state === input.stateId)
-    : [];
+  const activeFlows = input.omitActiveFlows
+    ? []
+    : input.stateId
+      ? input.flows.filter((flow) => flow.state === input.stateId)
+      : [];
 
   if (activeFlows.length > 0) {
     const flowLines = activeFlows.map((flow) => {
@@ -258,13 +276,19 @@ export function buildLifecycleSystemPrompt(input: {
       );
       const step = flow.steps[stepIndex];
       const completed = progress?.completedSteps?.length
-        ? ` Completed steps: ${progress.completedSteps.join(', ')}.`
+        ? ` Completed steps: ${progress.completedSteps.length}.`
         : '';
-      const stepLine = step
-        ? `Current step (${stepIndex + 1}/${flow.steps.length}): ${step.id} — ${step.goal}${
-            step.tool ? ` (tool: ${step.tool})` : ''
-          }.`
-        : '';
+      let stepLine = '';
+      if (step) {
+        const kind = step.type ?? (step.tool ? 'tool' : step.attribute ? 'attribute' : 'content');
+        if (kind === 'tool' && step.tool) {
+          stepLine = `Current focus (${stepIndex + 1}/${flow.steps.length}): ${step.goal} (completes via tool "${step.tool}").`;
+        } else if (kind === 'attribute') {
+          stepLine = `Current focus (${stepIndex + 1}/${flow.steps.length}): ${step.goal} (profile collection — conversational, NOT a tool).`;
+        } else {
+          stepLine = `Current focus (${stepIndex + 1}/${flow.steps.length}): ${step.goal} (conversational step — NOT a tool).`;
+        }
+      }
       return [
         `Flow "${flow.id}": ${flow.description.trim()}`,
         stepLine,

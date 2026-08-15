@@ -6,7 +6,9 @@ import {
   SDK_REGISTER_TIMEOUT_MS,
   SdkToServerMessageSchema,
 } from '@aelio/protocol';
-import { enqueueJob, upsertCustomerFlowProgress, upsertCustomerLifecycleState } from '@aelio/core';
+import { enqueueJob, upsertCustomerAttribute, upsertCustomerFlowProgress, upsertCustomerLifecycleState, upsertPipelineState } from '@aelio/core';
+import { customers } from '@aelio/db';
+import { eq } from 'drizzle-orm';
 import type { WebSocket } from '@fastify/websocket';
 import type { FastifyInstance } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
@@ -126,6 +128,8 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           states: message.states ?? [],
           policies: message.policies ?? [],
           flows: message.flows ?? [],
+          pipeline: message.pipeline ?? null,
+          attributes: message.attributes ?? [],
           persona: message.persona?.trim() || null,
           productBrief: message.productBrief?.trim() || null,
           sdkVersion: message.sdkVersion,
@@ -196,6 +200,80 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
                 type: 'error',
                 code: 'set_flow_progress_failed',
                 message: error instanceof Error ? error.message : 'Failed to update flow progress',
+              }),
+            );
+          });
+        return;
+      }
+
+      if (message.type === 'set_global_stage') {
+        void (async () => {
+          const rows = await database.db
+            .select({ id: customers.id })
+            .from(customers)
+            .where(eq(customers.externalId, message.customerId))
+            .limit(1);
+          const internalId = rows[0]?.id;
+          if (!internalId) {
+            throw new Error(`Customer ${message.customerId} not found`);
+          }
+          await upsertPipelineState(
+            database.db,
+            internalId,
+            message.stage,
+            message.entryMethod ?? 'system_triggered',
+          );
+          await upsertCustomerLifecycleState(
+            database.db,
+            message.customerId,
+            message.stage,
+            message.reason,
+          );
+        })()
+          .then(() => {
+            socket.send(JSON.stringify({ type: 'ack', op: 'set_global_stage' }));
+          })
+          .catch((error: unknown) => {
+            socket.send(
+              JSON.stringify({
+                type: 'error',
+                code: 'set_global_stage_failed',
+                message: error instanceof Error ? error.message : 'Failed to update global stage',
+              }),
+            );
+          });
+        return;
+      }
+
+      if (message.type === 'set_attribute') {
+        void (async () => {
+          const rows = await database.db
+            .select({ id: customers.id })
+            .from(customers)
+            .where(eq(customers.externalId, message.customerId))
+            .limit(1);
+          const internalId = rows[0]?.id;
+          if (!internalId) {
+            throw new Error(`Customer ${message.customerId} not found`);
+          }
+          await upsertCustomerAttribute(
+            database.db,
+            internalId,
+            message.attributeId,
+            message.value,
+            message.source ?? 'explicit_ask',
+            message.verified ?? false,
+          );
+        })()
+          .then(() => {
+            socket.send(JSON.stringify({ type: 'ack', op: 'set_attribute' }));
+          })
+          .catch((error: unknown) => {
+            socket.send(
+              JSON.stringify({
+                type: 'error',
+                code: 'set_attribute_failed',
+                message: error instanceof Error ? error.message : 'Failed to update attribute',
               }),
             );
           });

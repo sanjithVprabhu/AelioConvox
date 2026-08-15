@@ -58,6 +58,7 @@ export async function registerHealthRoutes(app: FastifyInstance, deps?: RuntimeD
       checks,
       sdk: {
         connected: deps.sdkBridge.getFunctions().length > 0,
+        pipeline: deps.sdkBridge.getPipelineManifest?.() != null,
         ...(redactCatalog
           ? {}
           : {

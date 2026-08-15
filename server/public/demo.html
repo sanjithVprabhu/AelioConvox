@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AelioConvox — Live Demo (ShopCo)</title>
+    <title>AelioConvox — ShopCo Pipeline Demo</title>
     <style>
       body {
         font-family: Inter, system-ui, sans-serif;
@@ -15,49 +15,145 @@
         color: #0f172a;
       }
       main {
-        max-width: 620px;
+        max-width: 680px;
         padding: 36px;
         background: white;
         border-radius: 20px;
         box-shadow: 0 20px 50px rgba(15, 23, 42, 0.08);
       }
-      h1 { margin: 0 0 4px; }
+      h1 { margin: 0 0 4px; font-size: 1.5rem; }
       .sub { color: #475569; margin-top: 0; }
-      ul { line-height: 1.9; padding-left: 18px; }
+      .badge {
+        display: inline-block;
+        background: #ecfdf5;
+        color: #047857;
+        font-size: 0.75rem;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 999px;
+        margin-bottom: 12px;
+      }
+      ol { line-height: 1.85; padding-left: 20px; }
+      ul { line-height: 1.75; padding-left: 18px; }
       code {
         background: #f1f5f9;
         padding: 2px 7px;
         border-radius: 6px;
-        font-size: 0.92em;
+        font-size: 0.88em;
       }
-      .hint { margin-top: 24px; color: #64748b; font-size: 0.9em; }
+      .stage {
+        margin: 16px 0;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+      }
+      .stage strong { color: #334155; }
+      .user-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin: 20px 0;
+        padding: 14px;
+        background: #eff6ff;
+        border-radius: 12px;
+        border: 1px solid #bfdbfe;
+      }
+      .user-bar code { background: #dbeafe; }
+      button {
+        background: #111827;
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 8px 14px;
+        font-size: 0.85rem;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: #fff;
+        color: #111827;
+        border: 1px solid #d1d5db;
+      }
+      .hint { margin-top: 20px; color: #64748b; font-size: 0.88em; line-height: 1.6; }
     </style>
   </head>
   <body>
     <main>
-      <h1>AelioConvox — live demo</h1>
-      <p class="sub">Talking to the <strong>ShopCo</strong> sample backend through the Aelio runtime.</p>
-      <p>Open the chat bubble (bottom-right) and try things like:</p>
-      <ul>
-        <li><code>show me my orders</code></li>
-        <li><code>which orders are still pending?</code></li>
-        <li><code>what's the status of order A-1002?</code></li>
-        <li><code>cancel order A-1002</code> &nbsp;→ it asks you to confirm first</li>
-        <li><code>then list my orders again</code> &nbsp;→ see it updated</li>
-        <li><code>what plan am I on?</code></li>
-        <li><code>upgrade me to pro</code> &nbsp;→ confirmation required</li>
-        <li><code>do I have any unpaid invoices?</code></li>
-      </ul>
+      <span class="badge">Pipeline demo</span>
+      <h1>ShopCo — multi-stage onboarding</h1>
+      <p class="sub">
+        Every <strong>new customer id</strong> walks the full pipeline:
+        <code>unverified</code> → <code>verified</code> → <code>onboarding</code> → <code>active</code>
+      </p>
+
+      <div class="user-bar">
+        <span>Testing as: <code id="customer-label">…</code></span>
+        <button type="button" id="new-user-btn" title="Start fresh pipeline">New user</button>
+        <button type="button" class="secondary" id="copy-link-btn">Copy link</button>
+      </div>
+
+      <p>Open the chat bubble (bottom-right) and follow the stages:</p>
+
+      <div class="stage">
+        <strong>1. Unverified</strong> — Greeting + quick-reply: tap <code>Let's go</code>
+      </div>
+      <div class="stage">
+        <strong>2. Verified</strong> — Give your email (e.g. <code>you@example.com</code>), confirm
+      </div>
+      <div class="stage">
+        <strong>3. Onboarding</strong> — Name → preference chips → orders → plan → invoices
+      </div>
+      <div class="stage">
+        <strong>4. Active</strong> — Try <code>cancel order A-1002</code> or <code>upgrade me to pro</code>
+      </div>
+
       <p class="hint">
-        The assistant decides which exposed function to call, asks for confirmation on
-        writes, and runs the actual code in the ShopCo backend. Use a real LLM provider
-        (e.g. OpenAI) for the smartest tool selection.
-        <br /><br />
-        <a href="/telemetry" style="color:#2563eb">Open telemetry</a> to watch intent, state,
-        and flow assignments live as messages land in Sunjet.
+        <strong>Blocked during onboarding:</strong> cancel/upgrade are rejected until stage 4.<br />
+        <strong>New user each time:</strong> click "New user" or add
+        <code>?customer=any-unique-id</code> to the URL.<br />
+        <a href="/telemetry" style="color:#2563eb">Telemetry</a> ·
+        <a href="/ready" style="color:#2563eb">/ready</a>
       </p>
     </main>
-    <!-- data-server-url defaults to this page's origin (same host/port as Aelio) -->
-    <script src="/widget.js" data-customer-id="demo-user-123"></script>
+
+    <script>
+      function customerIdFromUrl() {
+        const params = new URLSearchParams(location.search);
+        return params.get('customer') || 'shopco-' + Date.now();
+      }
+
+      function mountWidget(customerId) {
+        const existing = document.getElementById('aelio-widget-script');
+        if (existing) existing.remove();
+        document.querySelectorAll('.aelio-widget').forEach((el) => el.remove());
+
+        const script = document.createElement('script');
+        script.id = 'aelio-widget-script';
+        script.src = '/widget.js';
+        script.dataset.customerId = customerId;
+        document.body.appendChild(script);
+      }
+
+      let customerId = customerIdFromUrl();
+      document.getElementById('customer-label').textContent = customerId;
+      mountWidget(customerId);
+
+      document.getElementById('new-user-btn').addEventListener('click', () => {
+        customerId = 'shopco-' + Date.now();
+        history.replaceState(null, '', location.pathname + '?customer=' + encodeURIComponent(customerId));
+        document.getElementById('customer-label').textContent = customerId;
+        mountWidget(customerId);
+      });
+
+      document.getElementById('copy-link-btn').addEventListener('click', () => {
+        const url = location.origin + location.pathname + '?customer=' + encodeURIComponent(customerId);
+        navigator.clipboard.writeText(url).then(() => {
+          const btn = document.getElementById('copy-link-btn');
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = 'Copy link'; }, 1500);
+        });
+      });
+    </script>
   </body>
 </html>

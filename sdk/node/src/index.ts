@@ -3,11 +3,13 @@ import {
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_TIMEOUT_MS,
   type Channel,
+  type AttributeDefinition,
   type FlowDefinition,
   type FunctionDefinition,
   type IngestMessage,
   type InvocationContext,
   type InvokeMessage,
+  type PipelineManifest,
   type PingMessage,
   type PolicyDefinition,
   type RegisterMessage,
@@ -104,12 +106,49 @@ export type PolicySchema = {
 export type FlowStepSchema = {
   goal: string;
   tool?: string;
+  type?: 'tool' | 'attribute' | 'content';
+  attribute?: string;
+  uiFormat?: {
+    component: string;
+    config?: Record<string, unknown>;
+  };
+  skipIfPresent?: string;
 };
 
 export type FlowSchema = {
   state: string;
   description: string;
   steps: Record<string, FlowStepSchema>;
+};
+
+export type AttributeSchema = {
+  label: string;
+  dataType?: 'string' | 'number' | 'boolean' | 'object' | 'array';
+  sensitivityTier?: 'public' | 'pii' | 'sensitive_regulated';
+  prompts?: string[];
+  uiFormat?: {
+    component: string;
+    config?: Record<string, unknown>;
+  };
+  enumValues?: Array<string | number>;
+};
+
+export type PipelineStageSchema = {
+  description: string;
+  content?: {
+    greeting?: string;
+    cta?: string;
+  };
+  flow?: string;
+  allowedTools?: string[];
+  blockedTools?: string[];
+  guards?: StateGuardSchema;
+  next?: string;
+};
+
+export type PipelineSchema = {
+  initialStage?: string;
+  stages: Record<string, PipelineStageSchema>;
 };
 
 type ExposedHandler = (args: Record<string, unknown>, ctx: InvocationContext) => Promise<unknown>;
@@ -125,6 +164,8 @@ export class Aelio {
   private readonly states = new Map<string, StateSchema>();
   private readonly policies = new Map<string, PolicySchema>();
   private readonly flows = new Map<string, FlowSchema>();
+  private pipelineManifest: PipelineSchema | null = null;
+  private readonly attributes = new Map<string, AttributeSchema>();
   private sendHandler: SendHandler | null = null;
   private personaText: string | null = null;
   private productBriefText: string | null = null;
@@ -184,6 +225,46 @@ export class Aelio {
    */
   flow(id: string, schema: FlowSchema): void {
     this.flows.set(id, schema);
+  }
+
+  /**
+   * Declare the conversational pipeline: global stages, flows, and transitions.
+   * Aelio runs this deterministically — the agent guides users through each step.
+   */
+  pipeline(schema: PipelineSchema): void {
+    this.pipelineManifest = schema;
+  }
+
+  /** Register a profile attribute the pipeline can collect during onboarding. */
+  attribute(id: string, schema: AttributeSchema): void {
+    this.attributes.set(id, schema);
+  }
+
+  /** Push the customer's global pipeline stage (verified, onboarding, active, …). */
+  setGlobalStage(customerId: string, stage: string, reason?: string): void {
+    this.send({
+      type: 'set_global_stage',
+      customerId,
+      stage,
+      ...(reason ? { reason } : {}),
+    });
+  }
+
+  /** Push a collected profile attribute for a customer. */
+  setAttribute(
+    customerId: string,
+    attributeId: string,
+    value: unknown,
+    options?: { source?: 'explicit_ask' | 'inferred' | 'third_party_auth'; verified?: boolean },
+  ): void {
+    this.send({
+      type: 'set_attribute',
+      customerId,
+      attributeId,
+      value,
+      ...(options?.source ? { source: options.source } : {}),
+      ...(options?.verified !== undefined ? { verified: options.verified } : {}),
+    });
   }
 
   /** Push the current lifecycle state for a customer (your DB is source of truth). */
@@ -340,8 +421,47 @@ export class Aelio {
         id: stepId,
         goal: step.goal,
         ...(step.tool ? { tool: step.tool } : {}),
+        ...(step.type ? { type: step.type } : {}),
+        ...(step.attribute ? { attribute: step.attribute } : {}),
+        ...(step.uiFormat ? { ui_format: step.uiFormat } : {}),
+        ...(step.skipIfPresent ? { skip_if_present: step.skipIfPresent } : {}),
       })),
     }));
+
+    const attributes: AttributeDefinition[] = [...this.attributes.entries()].map(
+      ([id, entry]) => ({
+        id,
+        label: entry.label,
+        data_type: entry.dataType ?? 'string',
+        sensitivity_tier: entry.sensitivityTier ?? 'pii',
+        ...(entry.prompts ? { prompts: entry.prompts } : {}),
+        ...(entry.uiFormat ? { ui_format: entry.uiFormat } : {}),
+        ...(entry.enumValues ? { enum_values: entry.enumValues } : {}),
+      }),
+    );
+
+    const pipeline: PipelineManifest | undefined = this.pipelineManifest
+      ? {
+          initial_stage: this.pipelineManifest.initialStage ?? 'unverified',
+          stages: Object.fromEntries(
+            Object.entries(this.pipelineManifest.stages).map(([stageId, stage]) => [
+              stageId,
+              {
+                id: stageId,
+                description: stage.description,
+                ...(stage.content ? { content: stage.content } : {}),
+                ...(stage.flow ? { flow: stage.flow } : {}),
+                ...(stage.allowedTools ? { allowedTools: stage.allowedTools } : {}),
+                ...(stage.blockedTools ? { blockedTools: stage.blockedTools } : {}),
+                ...(stage.guards?.requiresFields
+                  ? { guards: { requires_fields: stage.guards.requiresFields } }
+                  : {}),
+                ...(stage.next ? { next: stage.next } : {}),
+              },
+            ]),
+          ),
+        }
+      : undefined;
 
     const message: RegisterMessage = {
       type: 'register',
@@ -351,6 +471,8 @@ export class Aelio {
       ...(states.length > 0 ? { states } : {}),
       ...(policies.length > 0 ? { policies } : {}),
       ...(flows.length > 0 ? { flows } : {}),
+      ...(pipeline ? { pipeline } : {}),
+      ...(attributes.length > 0 ? { attributes } : {}),
       ...(this.personaText ? { persona: this.personaText } : {}),
       ...(this.productBriefText ? { productBrief: this.productBriefText } : {}),
       canSend: this.sendHandler != null,
