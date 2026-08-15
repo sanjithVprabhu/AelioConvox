@@ -265,9 +265,6 @@ async function buildFlowStepContext(input: {
   if (currentStep?.tool) {
     forceIncludeTools.push(currentStep.tool);
   }
-  if (input.stage?.allowedTools) {
-    forceIncludeTools.push(...input.stage.allowedTools);
-  }
 
   const uiDirective = currentStep ? buildUiDirective(currentStep, attributeDef) : undefined;
   const pipelinePrompt =
@@ -391,7 +388,7 @@ export async function evaluatePipeline(input: PipelineEvaluateInput): Promise<Pi
       currentStepIndex: 0,
       pipelinePrompt: buildStagePrompt(stage),
       memoryPrompt: buildProfileMemoryPrompt(input.attributes, collectedAttributes),
-      forceIncludeTools: stage.allowedTools ?? [],
+      forceIncludeTools: [],
     };
   }
 
@@ -405,7 +402,7 @@ export async function evaluatePipeline(input: PipelineEvaluateInput): Promise<Pi
       currentStepIndex: 0,
       pipelinePrompt: buildStagePrompt(stage),
       memoryPrompt: buildProfileMemoryPrompt(input.attributes, collectedAttributes),
-      forceIncludeTools: stage.allowedTools ?? [],
+      forceIncludeTools: [],
     };
   }
 

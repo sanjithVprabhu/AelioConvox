@@ -1,6 +1,9 @@
 # ShopCo conversational pipeline manifest
 # Loaded by examples/sample-saas — defines stages, profile memory, and flows.
 # Tools (syncProfile, listOrders, …) are implemented in src/index.ts via aelio.expose().
+#
+# tool_groups: define allow/block buckets once, reuse via allowed_groups / blocked_groups.
+# Stages may mix groups with individual allowed_tools / blocked_tools / intents / safety.
 
 product:
   name: ShopCo
@@ -11,6 +14,19 @@ product:
     You are ShopCo's assistant. Be warm and concise. Guide new users through
     setup one pipeline step at a time. Use tools for account data — never
     invent order or billing details.
+
+# Reusable access buckets. Groups may list tools, intents, and/or safety classes.
+tool_groups:
+  public:
+    intents: [public]
+  identity:
+    intents: [onboarding]
+  account_read:
+    intents: [onboarding, order_inquiry, subscription, billing]
+  writes:
+    safety: [write, destructive]
+  upsell:
+    tools: [upgradePlan]
 
 pipeline:
   initial_stage: unverified
@@ -23,14 +39,9 @@ pipeline:
         greeting: "Hi! I'm ShopCo — track orders, manage your plan, and handle billing, all in chat."
         cta: "Let's go"
       flow: welcome
-      blocked_tools:
-        - listOrders
-        - getOrderStatus
-        - getSubscription
-        - listInvoices
-        - cancelOrder
-        - upgradePlan
-        - syncProfile
+      # Fail closed: no current account tool has the public intent. Future
+      # public/read-only discovery tools can opt in without listing names here.
+      allowed_groups: [public]
       next: verified
 
     verified:
@@ -38,13 +49,7 @@ pipeline:
         Collect and confirm the customer's email (identity verification).
         No order or billing tools until onboarding completes.
       flow: verify_identity
-      blocked_tools:
-        - listOrders
-        - getOrderStatus
-        - getSubscription
-        - listInvoices
-        - cancelOrder
-        - upgradePlan
+      allowed_groups: [identity]
       guards:
         requires_fields:
           - verified_email
@@ -55,15 +60,8 @@ pipeline:
         Profile intake + product walkthrough. Collect name and shopping preference,
         then tour orders → plan → invoices. No upgrades or cancellations yet.
       flow: shopco_onboarding
-      allowed_tools:
-        - listOrders
-        - getOrderStatus
-        - getSubscription
-        - listInvoices
-        - syncProfile
-      blocked_tools:
-        - cancelOrder
-        - upgradePlan
+      allowed_groups: [account_read]
+      blocked_groups: [writes]
       guards:
         requires_fields:
           - display_name
@@ -77,8 +75,8 @@ pipeline:
 
     churn_risk:
       description: Customer may be leaving. Empathetic retention tone — no upsells.
-      blocked_tools:
-        - upgradePlan
+      # Reuse a tool bucket; could also write blocked_tools: [upgradePlan] once.
+      blocked_groups: [upsell]
 
 # Profile memory schema — Aelio stores collected values per customer automatically.
 attributes:
@@ -188,48 +186,6 @@ flows:
         type: tool
         goal: Show invoice status
         tool: listInvoices
-
-lifecycle_states:
-  unverified:
-    description: New visitor — greet only, no account tools.
-    blocked_tools:
-      - listOrders
-      - getOrderStatus
-      - getSubscription
-      - listInvoices
-      - cancelOrder
-      - upgradePlan
-      - syncProfile
-
-  verified:
-    description: Identity step — collect email before product access.
-    blocked_tools:
-      - listOrders
-      - getOrderStatus
-      - getSubscription
-      - listInvoices
-      - cancelOrder
-      - upgradePlan
-
-  onboarding:
-    description: Intake + product tour — read-only account exploration.
-    allowed_tools:
-      - listOrders
-      - getOrderStatus
-      - getSubscription
-      - listInvoices
-      - syncProfile
-    blocked_tools:
-      - cancelOrder
-      - upgradePlan
-
-  active:
-    description: Full product access including writes.
-
-  churn_risk:
-    description: Retention-focused — no upgrade pushes.
-    blocked_tools:
-      - upgradePlan
 
 policies:
   stay-in-lifecycle:

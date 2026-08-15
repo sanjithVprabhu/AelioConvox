@@ -28,6 +28,10 @@ class StateSchema:
     description: str
     allowed_tools: Optional[list[str]] = None
     blocked_tools: Optional[list[str]] = None
+    allowed_intents: Optional[list[str]] = None
+    blocked_intents: Optional[list[str]] = None
+    allowed_safety: Optional[list[str]] = None
+    blocked_safety: Optional[list[str]] = None
 
 
 @dataclass
@@ -58,8 +62,26 @@ class Aelio:
         self._ws = None
         self._last_pong_at = int(time.time() * 1000)
 
-    def state(self, state_id: str, description: str, allowed_tools: Optional[list[str]] = None, blocked_tools: Optional[list[str]] = None) -> None:
-        self.states[state_id] = StateSchema(description=description, allowed_tools=allowed_tools, blocked_tools=blocked_tools)
+    def state(
+        self,
+        state_id: str,
+        description: str,
+        allowed_tools: Optional[list[str]] = None,
+        blocked_tools: Optional[list[str]] = None,
+        allowed_intents: Optional[list[str]] = None,
+        blocked_intents: Optional[list[str]] = None,
+        allowed_safety: Optional[list[str]] = None,
+        blocked_safety: Optional[list[str]] = None,
+    ) -> None:
+        self.states[state_id] = StateSchema(
+            description=description,
+            allowed_tools=allowed_tools,
+            blocked_tools=blocked_tools,
+            allowed_intents=allowed_intents,
+            blocked_intents=blocked_intents,
+            allowed_safety=allowed_safety,
+            blocked_safety=blocked_safety,
+        )
 
     def policy(self, policy_id: str, description: str, severity: str = "soft") -> None:
         self.policies[policy_id] = PolicySchema(description=description, severity=severity)
@@ -150,6 +172,10 @@ class Aelio:
                 "description": schema.description,
                 **({"allowedTools": schema.allowed_tools} if schema.allowed_tools else {}),
                 **({"blockedTools": schema.blocked_tools} if schema.blocked_tools else {}),
+                **({"allowedIntents": schema.allowed_intents} if schema.allowed_intents else {}),
+                **({"blockedIntents": schema.blocked_intents} if schema.blocked_intents else {}),
+                **({"allowedSafety": schema.allowed_safety} if schema.allowed_safety else {}),
+                **({"blockedSafety": schema.blocked_safety} if schema.blocked_safety else {}),
             }
             for state_id, schema in self.states.items()
         ]

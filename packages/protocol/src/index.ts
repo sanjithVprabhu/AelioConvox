@@ -48,6 +48,12 @@ export const StateDefinitionSchema = z.object({
   description: z.string().min(1),
   allowedTools: z.array(z.string().min(1)).optional(),
   blockedTools: z.array(z.string().min(1)).optional(),
+  /** Compact access rules for large registries. Intent values come from FunctionDefinition.intent. */
+  allowedIntents: z.array(z.string().min(1)).optional(),
+  blockedIntents: z.array(z.string().min(1)).optional(),
+  /** Safety-class selectors compose with intent/name selectors; block rules always win. */
+  allowedSafety: z.array(SafetyLevelSchema).optional(),
+  blockedSafety: z.array(SafetyLevelSchema).optional(),
   guards: StateGuardSchema.optional(),
   transitions: z.array(StateTransitionSchema).optional(),
 });
@@ -139,6 +145,10 @@ export const PipelineStageDefinitionSchema = z.object({
   flow: z.string().min(1).optional(),
   allowedTools: z.array(z.string().min(1)).optional(),
   blockedTools: z.array(z.string().min(1)).optional(),
+  allowedIntents: z.array(z.string().min(1)).optional(),
+  blockedIntents: z.array(z.string().min(1)).optional(),
+  allowedSafety: z.array(SafetyLevelSchema).optional(),
+  blockedSafety: z.array(SafetyLevelSchema).optional(),
   guards: StateGuardSchema.optional(),
   next: z.string().min(1).optional(),
 });
@@ -358,3 +368,9 @@ export const INVOKE_TIMEOUT_MS = 30_000;
 export const MAX_WS_FRAME_BYTES = 64 * 1024;
 export const MAX_SDK_CONNECTIONS = 32;
 export const SDK_REGISTER_TIMEOUT_MS = 15_000;
+
+export {
+  expandToolAccess,
+  type ToolAccessSelectors,
+  type ToolGroupDefinition,
+} from './tool-groups.js';

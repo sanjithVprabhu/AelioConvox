@@ -108,6 +108,7 @@ export {
 export {
   buildLifecycleSystemPrompt,
   filterFunctionsByState,
+  isFunctionAllowedByState,
   getCustomerLifecycleMetadata,
   getCustomerPresentFields,
   readLifecycleMetadata,
@@ -197,6 +198,7 @@ export {
   rehydrateSuspension,
   toSuspensionPayload,
   applyStateTransition,
+  buildExecutionFailureReply,
   hashArgs,
   type HarnessRunInput,
 } from './harness/index.js';

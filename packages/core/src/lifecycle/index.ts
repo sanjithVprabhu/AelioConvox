@@ -9,6 +9,9 @@ import type {
 import { eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { getCustomerAttributes } from '../pipeline/state-store.js';
+import { isFunctionAllowedByState } from './tool-access.js';
+
+export { isFunctionAllowedByState } from './tool-access.js';
 
 export type FlowProgressRecord = {
   currentStepIndex: number;
@@ -212,18 +215,7 @@ export function filterFunctionsByState(
     return functions;
   }
 
-  const allowed = state.allowedTools?.length ? new Set(state.allowedTools) : null;
-  const blocked = new Set(state.blockedTools ?? []);
-
-  return functions.filter((fn) => {
-    if (blocked.has(fn.name)) {
-      return false;
-    }
-    if (allowed && !allowed.has(fn.name)) {
-      return false;
-    }
-    return true;
-  });
+  return functions.filter((fn) => isFunctionAllowedByState(fn, state));
 }
 
 export function buildLifecycleSystemPrompt(input: {

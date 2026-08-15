@@ -14,4 +14,13 @@ export async function registerTestRoutes(app: FastifyInstance, sdkBridge: Server
   app.get('/__test__/sdk/functions', async () => ({
     functions: sdkBridge.getFunctions().map((fn) => fn.name),
   }));
+
+  /** Full registered catalog — used by e2e to assert tool-group expansion. */
+  app.get('/__test__/sdk/catalog', async () => ({
+    functions: sdkBridge.getFunctions(),
+    states: sdkBridge.getStates(),
+    policies: sdkBridge.getPolicies().map((policy) => ({ id: policy.id, severity: policy.severity })),
+    flows: sdkBridge.getFlows().map((flow) => ({ id: flow.id, state: flow.state })),
+    pipeline: sdkBridge.getPipelineManifest?.() ?? null,
+  }));
 }

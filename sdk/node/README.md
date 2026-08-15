@@ -129,9 +129,9 @@ filters tools per state.
 
 ```typescript
 aelio.state('onboarding', {
-  description: 'New user. Setup only — no billing or upgrade topics.',
-  allowedTools: ['listOrders', 'getSubscription'],
-  blockedTools: ['upgradePlan', 'cancelOrder'],
+  description: 'New user. Read-only setup and account exploration.',
+  allowedIntents: ['onboarding', 'order_inquiry', 'subscription', 'billing'],
+  blockedSafety: ['write', 'destructive'],
 })
 
 aelio.state('active', {
@@ -165,12 +165,47 @@ aelio.setCustomerState(userId, 'onboarding')
 aelio.setFlowProgress(userId, 'onboarding_setup', 1, ['review_orders'])
 ```
 
+For small catalogs, `allowedTools` and `blockedTools` still accept exact tool
+names. For large catalogs, use `allowedIntents` / `blockedIntents` and
+`allowedSafety` / `blockedSafety`. A tool matches the `intent` declared in
+`aelio.expose(...)`; without one, its function name is used. Block rules always
+take precedence. When any allow rule is present, matching any allowed name,
+intent, or safety class admits the tool.
+
+To reuse the same allow/block set across stages without copying lists, define
+`toolGroups` (YAML: `tool_groups`) once and reference them with `allowedGroups` /
+`blockedGroups`. Mix groups with individual tools freely:
+
+```ts
+aelio.pipeline({
+  toolGroups: {
+    catalog: { intents: ['catalog'] },
+    cart: { tools: ['get_cart', 'add_to_cart'] },
+    writes: { safety: ['write', 'destructive'] },
+  },
+  stages: {
+    browsing: {
+      description: '…',
+      allowedGroups: ['catalog', 'cart'],
+      blockedGroups: ['writes'],
+      allowedTools: ['list_orders'], // one-off exception
+    },
+  },
+})
+```
+
+Pipeline stages use the same compact selectors and are automatically registered
+as lifecycle states. An explicit `aelio.state(...)` with the same id overrides
+the derived stage, so pipeline YAML does not need a duplicated state section.
+
 ## API
 
 - `aelio.expose(name, handler, schema)` — register a callable function.
 - `aelio.persona(text)` — set the assistant's voice (head of the system prompt).
 - `aelio.describe(text)` — describe what your product does; grounds the harness
   planner so it plans well and declines the impossible gracefully.
+- `aelio.toolGroups(groups)` — register reusable allow/block buckets for
+  `allowedGroups` / `blockedGroups` on states and pipeline stages.
 - `aelio.state(id, schema)` — declare a lifecycle state, its tool boundaries, and
   optional `transitions` / `guards`.
 - `aelio.policy(id, schema)` — declare a conversation policy.

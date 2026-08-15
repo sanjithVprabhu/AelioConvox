@@ -8,6 +8,7 @@ import {
   evaluateGate,
   toSuspensionPayload,
   rehydrateSuspension,
+  buildExecutionFailureReply,
 } from '@aelio/core';
 
 let failures = 0;
@@ -291,6 +292,31 @@ console.log('\n[14] Idempotency hash is key-order insensitive (HAR-012)');
   const { hashArgs } = await import('@aelio/core');
   assert(hashArgs({ a: 1, b: 2 }) === hashArgs({ b: 2, a: 1 }), 'same args, different key order → same hash');
   assert(hashArgs({ a: 1 }) !== hashArgs({ a: 2 }), 'different values → different hash');
+}
+
+console.log('\n[15] Failed SDK results bypass LLM synthesis with a deterministic failure reply');
+{
+  const failed = buildExecutionFailureReply([
+    {
+      instructionId: 'a', argsHash: 'h', status: 'error',
+      result: 'authorization denied', toolName: 'startShoppingSession', durationMs: 1,
+    },
+  ]);
+  assert(failed?.includes("couldn't complete"), 'reports that the action failed');
+  assert(failed?.includes('authorization denied'), 'preserves the SDK failure reason');
+  assert(!/success|started/i.test(failed ?? ''), 'cannot claim the failed action succeeded');
+
+  const partial = buildExecutionFailureReply([
+    {
+      instructionId: 'a', argsHash: 'h1', status: 'success',
+      result: { ok: true }, toolName: 'lookupProduct', durationMs: 1,
+    },
+    {
+      instructionId: 'b', argsHash: 'h2', status: 'error',
+      result: 'cart unavailable', toolName: 'addToCart', durationMs: 1,
+    },
+  ]);
+  assert(partial?.includes('completed part'), 'distinguishes partial completion from full success');
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 import type { FunctionDefinition, StateDefinition } from '@aelio/protocol';
 import { evaluateSafety, type SafetyConfig } from '../safety/policy.js';
 import { findMissingRequiredArgs } from '../runtime/tool-schema.js';
+import { isFunctionAllowedByState } from '../lifecycle/tool-access.js';
 import type { GateVerdict } from './schema.js';
 
 export type GateContext = {
@@ -33,13 +34,7 @@ export function evaluateGate(
 
   // 2. State tool-gating (blocked in this state) → fatal, with a nudge reason.
   if (ctx.state) {
-    if (ctx.state.blockedTools?.includes(fn.name)) {
-      return {
-        verdict: 'deny_fatal',
-        reason: `"${fn.name}" is not available while in the ${ctx.state.id} stage.`,
-      };
-    }
-    if (ctx.state.allowedTools && !ctx.state.allowedTools.includes(fn.name)) {
+    if (!isFunctionAllowedByState(fn, ctx.state)) {
       return {
         verdict: 'deny_fatal',
         reason: `"${fn.name}" is not available while in the ${ctx.state.id} stage.`,

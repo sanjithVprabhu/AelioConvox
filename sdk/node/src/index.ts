@@ -2,6 +2,7 @@ import {
   DEFAULT_SDK_PATH,
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_TIMEOUT_MS,
+  expandToolAccess,
   type Channel,
   type AttributeDefinition,
   type FlowDefinition,
@@ -17,12 +18,14 @@ import {
   type SafetyLevel,
   type SendInvokeMessage,
   type StateDefinition,
+  type ToolGroupDefinition,
   SdkToServerMessageSchema,
   ServerToSdkMessageSchema,
 } from '@aelio/protocol';
 import WebSocket from 'ws';
 
-export type { Channel, InvocationContext, SafetyLevel };
+export type { Channel, InvocationContext, SafetyLevel, ToolGroupDefinition };
+export { expandToolAccess };
 
 /** A reply Aelio is asking the SDK to deliver via the dev's own provider. */
 export type OutboundDelivery = {
@@ -42,6 +45,26 @@ export type InboundIngest = {
 };
 
 type SendHandler = (delivery: OutboundDelivery) => Promise<void>;
+
+function pickDefinedAccess(
+  expanded: ReturnType<typeof expandToolAccess>,
+): {
+  allowedTools?: string[];
+  blockedTools?: string[];
+  allowedIntents?: string[];
+  blockedIntents?: string[];
+  allowedSafety?: SafetyLevel[];
+  blockedSafety?: SafetyLevel[];
+} {
+  return {
+    ...(expanded.allowedTools ? { allowedTools: expanded.allowedTools } : {}),
+    ...(expanded.blockedTools ? { blockedTools: expanded.blockedTools } : {}),
+    ...(expanded.allowedIntents ? { allowedIntents: expanded.allowedIntents } : {}),
+    ...(expanded.blockedIntents ? { blockedIntents: expanded.blockedIntents } : {}),
+    ...(expanded.allowedSafety ? { allowedSafety: expanded.allowedSafety } : {}),
+    ...(expanded.blockedSafety ? { blockedSafety: expanded.blockedSafety } : {}),
+  };
+}
 
 /** JSON-schema-ish primitive types a parameter can declare. */
 export type ParamType = 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object';
@@ -92,6 +115,15 @@ export type StateSchema = {
   description: string;
   allowedTools?: string[];
   blockedTools?: string[];
+  /** Admit tools by their schema `intent` category instead of enumerating names. */
+  allowedIntents?: string[];
+  blockedIntents?: string[];
+  /** Admit or block whole safety classes. Block rules take precedence. */
+  allowedSafety?: SafetyLevel[];
+  blockedSafety?: SafetyLevel[];
+  /** Reuse named buckets from `pipeline({ toolGroups })` / `toolGroups(...)`. */
+  allowedGroups?: string[];
+  blockedGroups?: string[];
   /** Presence requirements for this state to apply (customer-profile fields). */
   guards?: StateGuardSchema;
   /** Declarative lifecycle transitions applied on tool success by the harness. */
@@ -142,12 +174,21 @@ export type PipelineStageSchema = {
   flow?: string;
   allowedTools?: string[];
   blockedTools?: string[];
+  allowedIntents?: string[];
+  blockedIntents?: string[];
+  allowedSafety?: SafetyLevel[];
+  blockedSafety?: SafetyLevel[];
+  /** Reuse named buckets from pipeline `toolGroups`. Mix with individual tools freely. */
+  allowedGroups?: string[];
+  blockedGroups?: string[];
   guards?: StateGuardSchema;
   next?: string;
 };
 
 export type PipelineSchema = {
   initialStage?: string;
+  /** Named reusable allow/block buckets referenced by stages via allowedGroups/blockedGroups. */
+  toolGroups?: Record<string, ToolGroupDefinition>;
   stages: Record<string, PipelineStageSchema>;
 };
 
@@ -165,6 +206,7 @@ export class Aelio {
   private readonly policies = new Map<string, PolicySchema>();
   private readonly flows = new Map<string, FlowSchema>();
   private pipelineManifest: PipelineSchema | null = null;
+  private toolGroupCatalog: Record<string, ToolGroupDefinition> = {};
   private readonly attributes = new Map<string, AttributeSchema>();
   private sendHandler: SendHandler | null = null;
   private personaText: string | null = null;
@@ -209,9 +251,16 @@ export class Aelio {
    * Declare a customer lifecycle state. The SaaS backend sets the active state
    * per customer via setCustomerState(); Aelio keeps conversations within the
    * state's boundaries until the stage changes.
+   * `allowedGroups` / `blockedGroups` expand against the catalog from
+   * `toolGroups(...)` or `pipeline({ toolGroups })`.
    */
   state(id: string, schema: StateSchema): void {
-    this.states.set(id, schema);
+    this.states.set(id, this.expandAccessSchema(schema));
+  }
+
+  /** Register reusable tool-access buckets for `allowedGroups` / `blockedGroups`. */
+  toolGroups(groups: Record<string, ToolGroupDefinition>): void {
+    this.toolGroupCatalog = { ...this.toolGroupCatalog, ...groups };
   }
 
   /** Register a conversation policy enforced on every turn. */
@@ -230,9 +279,35 @@ export class Aelio {
   /**
    * Declare the conversational pipeline: global stages, flows, and transitions.
    * Aelio runs this deterministically — the agent guides users through each step.
+   * Optional `toolGroups` define reusable allow/block buckets referenced by
+   * stage `allowedGroups` / `blockedGroups` (mixable with individual tools).
    */
   pipeline(schema: PipelineSchema): void {
-    this.pipelineManifest = schema;
+    if (schema.toolGroups) {
+      this.toolGroupCatalog = { ...this.toolGroupCatalog, ...schema.toolGroups };
+    }
+    const stages: Record<string, PipelineStageSchema> = {};
+    for (const [id, stage] of Object.entries(schema.stages)) {
+      const { allowedGroups: _ag, blockedGroups: _bg, ...rest } = stage;
+      const expanded = expandToolAccess(this.toolGroupCatalog, stage);
+      stages[id] = {
+        ...rest,
+        ...pickDefinedAccess(expanded),
+      };
+    }
+    this.pipelineManifest = {
+      initialStage: schema.initialStage,
+      stages,
+    };
+  }
+
+  private expandAccessSchema<T extends StateSchema | PipelineStageSchema>(schema: T): T {
+    const expanded = expandToolAccess(this.toolGroupCatalog, schema);
+    const { allowedGroups: _ag, blockedGroups: _bg, ...rest } = schema;
+    return {
+      ...rest,
+      ...pickDefinedAccess(expanded),
+    } as T;
   }
 
   /** Register a profile attribute the pipeline can collect during onboarding. */
@@ -386,11 +461,34 @@ export class Aelio {
       ...(entry.schema.intent ? { intent: entry.schema.intent } : {}),
     }));
 
-    const states: StateDefinition[] = [...this.states.entries()].map(([id, entry]) => ({
+    // Pipeline stages are lifecycle states by definition. Derive them automatically so a
+    // YAML-backed pipeline does not need a second, duplicated lifecycle_states section.
+    // An explicitly registered state with the same id remains authoritative.
+    const stateEntries = new Map(this.states);
+    for (const [id, stage] of Object.entries(this.pipelineManifest?.stages ?? {})) {
+      if (!stateEntries.has(id)) {
+        stateEntries.set(id, {
+          description: stage.description,
+          ...(stage.allowedTools ? { allowedTools: stage.allowedTools } : {}),
+          ...(stage.blockedTools ? { blockedTools: stage.blockedTools } : {}),
+          ...(stage.allowedIntents ? { allowedIntents: stage.allowedIntents } : {}),
+          ...(stage.blockedIntents ? { blockedIntents: stage.blockedIntents } : {}),
+          ...(stage.allowedSafety ? { allowedSafety: stage.allowedSafety } : {}),
+          ...(stage.blockedSafety ? { blockedSafety: stage.blockedSafety } : {}),
+          ...(stage.guards ? { guards: stage.guards } : {}),
+        });
+      }
+    }
+
+    const states: StateDefinition[] = [...stateEntries.entries()].map(([id, entry]) => ({
       id,
       description: entry.description,
       ...(entry.allowedTools ? { allowedTools: entry.allowedTools } : {}),
       ...(entry.blockedTools ? { blockedTools: entry.blockedTools } : {}),
+      ...(entry.allowedIntents ? { allowedIntents: entry.allowedIntents } : {}),
+      ...(entry.blockedIntents ? { blockedIntents: entry.blockedIntents } : {}),
+      ...(entry.allowedSafety ? { allowedSafety: entry.allowedSafety } : {}),
+      ...(entry.blockedSafety ? { blockedSafety: entry.blockedSafety } : {}),
       ...(entry.guards?.requiresFields
         ? { guards: { requires_fields: entry.guards.requiresFields } }
         : {}),
@@ -453,6 +551,10 @@ export class Aelio {
                 ...(stage.flow ? { flow: stage.flow } : {}),
                 ...(stage.allowedTools ? { allowedTools: stage.allowedTools } : {}),
                 ...(stage.blockedTools ? { blockedTools: stage.blockedTools } : {}),
+                ...(stage.allowedIntents ? { allowedIntents: stage.allowedIntents } : {}),
+                ...(stage.blockedIntents ? { blockedIntents: stage.blockedIntents } : {}),
+                ...(stage.allowedSafety ? { allowedSafety: stage.allowedSafety } : {}),
+                ...(stage.blockedSafety ? { blockedSafety: stage.blockedSafety } : {}),
                 ...(stage.guards?.requiresFields
                   ? { guards: { requires_fields: stage.guards.requiresFields } }
                   : {}),

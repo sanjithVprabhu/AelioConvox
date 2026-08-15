@@ -455,6 +455,10 @@ async function executeTurn(
             description: pipelineContext.stage.description,
             allowedTools: pipelineContext.stage.allowedTools,
             blockedTools: pipelineContext.stage.blockedTools,
+            allowedIntents: pipelineContext.stage.allowedIntents,
+            blockedIntents: pipelineContext.stage.blockedIntents,
+            allowedSafety: pipelineContext.stage.allowedSafety,
+            blockedSafety: pipelineContext.stage.blockedSafety,
             guards: pipelineContext.stage.guards,
           }
         : undefined)

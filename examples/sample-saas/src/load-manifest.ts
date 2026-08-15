@@ -1,11 +1,23 @@
 /**
  * Load ShopCo pipeline / memory / flows from YAML manifest.
+ * Supports `tool_groups` + stage `allowed_groups` / `blocked_groups` (expanded by the SDK).
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
-import { aelio } from '@aelio/sdk';
+import { aelio, type ToolGroupDefinition } from '@aelio/sdk';
+
+type AccessFields = {
+  allowed_tools?: string[];
+  blocked_tools?: string[];
+  allowed_intents?: string[];
+  blocked_intents?: string[];
+  allowed_safety?: Array<'read' | 'write' | 'destructive'>;
+  blocked_safety?: Array<'read' | 'write' | 'destructive'>;
+  allowed_groups?: string[];
+  blocked_groups?: string[];
+};
 
 type ShopCoManifest = {
   product: {
@@ -13,16 +25,22 @@ type ShopCoManifest = {
     description: string;
     persona: string;
   };
+  tool_groups?: Record<
+    string,
+    {
+      tools?: string[];
+      intents?: string[];
+      safety?: Array<'read' | 'write' | 'destructive'>;
+    }
+  >;
   pipeline: {
     initial_stage: string;
     stages: Record<
       string,
-      {
+      AccessFields & {
         description: string;
         content?: { greeting?: string; cta?: string };
         flow?: string;
-        allowed_tools?: string[];
-        blocked_tools?: string[];
         guards?: { requires_fields?: string[] };
         next?: string;
       }
@@ -56,12 +74,10 @@ type ShopCoManifest = {
       >;
     }
   >;
-  lifecycle_states: Record<
+  lifecycle_states?: Record<
     string,
-    {
+    AccessFields & {
       description: string;
-      allowed_tools?: string[];
-      blocked_tools?: string[];
     }
   >;
   policies: Record<
@@ -73,6 +89,35 @@ type ShopCoManifest = {
   >;
 };
 
+function mapAccess(fields: AccessFields) {
+  return {
+    ...(fields.allowed_tools ? { allowedTools: fields.allowed_tools } : {}),
+    ...(fields.blocked_tools ? { blockedTools: fields.blocked_tools } : {}),
+    ...(fields.allowed_intents ? { allowedIntents: fields.allowed_intents } : {}),
+    ...(fields.blocked_intents ? { blockedIntents: fields.blocked_intents } : {}),
+    ...(fields.allowed_safety ? { allowedSafety: fields.allowed_safety } : {}),
+    ...(fields.blocked_safety ? { blockedSafety: fields.blocked_safety } : {}),
+    ...(fields.allowed_groups ? { allowedGroups: fields.allowed_groups } : {}),
+    ...(fields.blocked_groups ? { blockedGroups: fields.blocked_groups } : {}),
+  };
+}
+
+function mapToolGroups(
+  raw: ShopCoManifest['tool_groups'],
+): Record<string, ToolGroupDefinition> | undefined {
+  if (!raw) return undefined;
+  return Object.fromEntries(
+    Object.entries(raw).map(([id, group]) => [
+      id,
+      {
+        ...(group.tools ? { tools: group.tools } : {}),
+        ...(group.intents ? { intents: group.intents } : {}),
+        ...(group.safety ? { safety: group.safety } : {}),
+      },
+    ]),
+  );
+}
+
 export function loadShopCoManifest(manifestPath?: string): void {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const path = manifestPath ?? join(__dirname, '../manifests/shopco.pipeline.yaml');
@@ -81,8 +126,14 @@ export function loadShopCoManifest(manifestPath?: string): void {
   aelio.describe(raw.product.description.trim());
   aelio.persona(raw.product.persona.trim());
 
+  const toolGroups = mapToolGroups(raw.tool_groups);
+  if (toolGroups) {
+    aelio.toolGroups(toolGroups);
+  }
+
   aelio.pipeline({
     initialStage: raw.pipeline.initial_stage,
+    ...(toolGroups ? { toolGroups } : {}),
     stages: Object.fromEntries(
       Object.entries(raw.pipeline.stages).map(([id, stage]) => [
         id,
@@ -90,8 +141,7 @@ export function loadShopCoManifest(manifestPath?: string): void {
           description: stage.description.trim(),
           ...(stage.content ? { content: stage.content } : {}),
           ...(stage.flow ? { flow: stage.flow } : {}),
-          ...(stage.allowed_tools ? { allowedTools: stage.allowed_tools } : {}),
-          ...(stage.blocked_tools ? { blockedTools: stage.blocked_tools } : {}),
+          ...mapAccess(stage),
           ...(stage.guards?.requires_fields
             ? { guards: { requiresFields: stage.guards.requires_fields } }
             : {}),
@@ -138,11 +188,10 @@ export function loadShopCoManifest(manifestPath?: string): void {
     });
   }
 
-  for (const [id, state] of Object.entries(raw.lifecycle_states)) {
+  for (const [id, state] of Object.entries(raw.lifecycle_states ?? {})) {
     aelio.state(id, {
       description: state.description.trim(),
-      ...(state.allowed_tools ? { allowedTools: state.allowed_tools } : {}),
-      ...(state.blocked_tools ? { blockedTools: state.blocked_tools } : {}),
+      ...mapAccess(state),
     });
   }
 

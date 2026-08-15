@@ -22,6 +22,7 @@ import {
   type EmitTurn,
   type HarnessBindingConfig,
   type HarnessBudgets,
+  type LedgerEntry,
   type ResolvedPlan,
 } from './schema.js';
 
@@ -34,6 +35,31 @@ export { executePlan, newExecutorState, hydrateExecutorState, hashArgs } from '.
 export { evaluateGate } from './gates.js';
 export { rehydrateSuspension, toSuspensionPayload } from './resume.js';
 export { applyStateTransition } from './transitions.js';
+
+/**
+ * Tool errors are rendered in code instead of handed back to the LLM. This is
+ * deliberately less conversational: a failed SDK invocation must never be
+ * rewritten as a successful action during synthesis.
+ */
+export function buildExecutionFailureReply(ledger: LedgerEntry[]): string | null {
+  const failures = ledger.filter((entry) => entry.status === 'error');
+  if (failures.length === 0) {
+    return null;
+  }
+
+  const details = failures
+    .map((entry) => {
+      const raw = typeof entry.result === 'string' ? entry.result : JSON.stringify(entry.result);
+      const reason = (raw || 'the tool returned an error').slice(0, 300);
+      return failures.length === 1 ? reason : `${entry.toolName}: ${reason}`;
+    })
+    .join('; ');
+  const partial = ledger.some((entry) => entry.status === 'success');
+
+  return partial
+    ? `I completed part of the request, but I couldn't finish: ${details}`
+    : `I couldn't complete that action: ${details}`;
+}
 
 export type HarnessRunInput = {
   database?: AelioDatabase;
@@ -454,6 +480,16 @@ async function finishTurn(
       ...(outcome.pendingConfirmation && !canPersist
         ? { pendingConfirmation: outcome.pendingConfirmation }
         : {}),
+    };
+  }
+
+  const failureReply = buildExecutionFailureReply(state.ledger);
+  if (failureReply) {
+    trace('synthesis', { skipped: true, reason: 'tool_failure', replyPreview: failureReply.slice(0, 200) });
+    return {
+      reply: failureReply,
+      toolCallsExecuted: state.toolCallsExecuted,
+      executedToolNames: state.executedToolNames,
     };
   }
 

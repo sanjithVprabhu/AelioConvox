@@ -99,6 +99,8 @@ const server = spawn('npx', ['tsx', 'src/main.ts'], {
   env: {
     ...process.env,
     AELIO_CONFIG: configPath,
+    // Prevent a developer .env from overriding the isolated port after main.ts loads it.
+    AELIO_PORT: String(testPort),
     AELIO_SDK_SECRET: process.env.AELIO_SDK_SECRET ?? 'change-me-in-production',
     AELIO_TEST_MODE: '1',
   },
@@ -125,6 +127,13 @@ try {
 
   console.log('\n=== Running harness executor unit tests ===');
   await run('node', [join(root, 'scripts/test-harness-executor.mjs')], {});
+
+  console.log('\n=== Running compact tool-access unit tests ===');
+  await run(
+    'node',
+    ['--conditions=import', '--import', 'tsx', join(root, 'scripts/test-tool-access.ts')],
+    {},
+  );
 
   await waitForHealth(baseUrl, server, getServerLogs);
 

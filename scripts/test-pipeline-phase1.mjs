@@ -23,7 +23,8 @@ const manifest = {
       id: 'onboarding',
       description: 'Setup phase',
       flow: 'setup_flow',
-      allowedTools: ['listOrders'],
+      // A large state allowlist must scope admission, not bypass top-K retrieval.
+      allowedTools: ['listOrders', ...Array.from({ length: 100 }, (_, i) => `catalogTool${i}`)],
       next: 'active',
     },
     active: {
@@ -87,6 +88,11 @@ if (!ctx.enabled || ctx.globalStage !== 'onboarding') {
 
 if (!ctx.activeFlow || ctx.currentStep?.tool !== 'listOrders') {
   console.error('FAIL: expected listOrders step, got', ctx.currentStep);
+  process.exit(1);
+}
+
+if (ctx.forceIncludeTools.length !== 1 || ctx.forceIncludeTools[0] !== 'listOrders') {
+  console.error('FAIL: state allowlist leaked into force-included retrieval tools', ctx.forceIncludeTools);
   process.exit(1);
 }
 
