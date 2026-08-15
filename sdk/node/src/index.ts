@@ -137,6 +137,24 @@ type ListenOptions = {
   sdkVersion?: string;
 };
 
+export function registrationFingerprint(value: RegisterMessage): string {
+  return JSON.stringify(canonicalJson(value));
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalJson);
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalJson(item)]),
+    );
+  }
+  return value;
+}
+
 export class Aelio {
   private readonly handlers = new Map<string, { handler: ExposedHandler; schema: FunctionSchema }>();
   private readonly states = new Map<string, StateSchema>();
@@ -157,12 +175,17 @@ export class Aelio {
   private applicationName: string | null = null;
   private catalogSyncTimer: ReturnType<typeof setTimeout> | null = null;
   private lastCatalogFingerprint: string | null = null;
+  private sentCatalogFingerprint: string | null = null;
+  private registrationInFlight = false;
   private ws: WebSocket | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastPongAt = 0;
   private reconnectAttempt = 0;
   private listenOptions: ListenOptions | null = null;
   private shouldReconnect = false;
+  /** Prevents overlapping connect()/reconnect storms that leave multiple live sockets. */
+  private connectInFlight: Promise<void> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   expose<T extends Record<string, unknown>, R>(
     name: string,
@@ -279,12 +302,31 @@ export class Aelio {
   }
 
   /**
+   * Optional flow-progress hint for multi-step journeys. Current Convox edge
+   * treats lifecycle `set_state` as the authority for tool admission; this is
+   * retained for shopping/testbed compatibility and is a no-op wire call until
+   * `set_flow_progress` is re-admitted on the server protocol.
+   */
+  setFlowProgress(
+    customerId: string,
+    flowId: string,
+    stepIndex: number,
+    completedSteps: string[] = [],
+  ): void {
+    void customerId;
+    void flowId;
+    void stepIndex;
+    void completedSteps;
+  }
+
+  /**
    * Register a delivery handler so Aelio can send outbound messages through your
    * own messaging provider (bring-your-own WhatsApp/SMS/etc.). Aelio invokes this
    * automatically after each turn — it is NOT an LLM tool.
    */
   onSend(handler: SendHandler): void {
     this.sendHandler = handler;
+    this.scheduleCatalogSync();
   }
 
   /**
@@ -311,10 +353,17 @@ export class Aelio {
 
   async disconnect(): Promise<void> {
     this.shouldReconnect = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.clearHeartbeat();
+    this.registrationInFlight = false;
+    this.sentCatalogFingerprint = null;
     if (this.ws) {
-      this.ws.close();
+      const previous = this.ws;
       this.ws = null;
+      previous.close();
     }
   }
 
@@ -322,11 +371,35 @@ export class Aelio {
     if (!this.listenOptions) {
       throw new Error('listen() must be called before connecting');
     }
+    if (this.connectInFlight) {
+      return this.connectInFlight;
+    }
 
+    this.connectInFlight = this.openSocket().finally(() => {
+      this.connectInFlight = null;
+    });
+    return this.connectInFlight;
+  }
+
+  private async openSocket(): Promise<void> {
     const baseUrl =
-      this.listenOptions.url ??
+      this.listenOptions!.url ??
       `ws://127.0.0.1:${process.env.AELIO_PORT ?? process.env.AELIO_SERVER_PORT ?? '3010'}`;
     const url = new URL(DEFAULT_SDK_PATH, baseUrl);
+
+    // Tear down any prior socket before opening a new one. Otherwise stale
+    // close handlers null `this.ws` while a newer connection is live, drop
+    // invoke results, and schedule more reconnects (connection fan-out).
+    if (this.ws) {
+      const previous = this.ws;
+      this.ws = null;
+      this.clearHeartbeat();
+      try {
+        previous.close();
+      } catch {
+        /* ignore */
+      }
+    }
 
     await new Promise<void>((resolve, reject) => {
       // The secret travels as an Authorization header, never in the URL —
@@ -349,11 +422,18 @@ export class Aelio {
       });
 
       ws.on('message', (raw) => {
-        void this.handleMessage(raw.toString());
+        void this.handleMessage(raw.toString(), ws);
       });
 
       ws.on('close', () => {
+        // Only the active socket may clear state / reconnect. A superseded
+        // socket's close must not clobber a newer connection.
+        if (this.ws !== ws) {
+          return;
+        }
         this.clearHeartbeat();
+        this.registrationInFlight = false;
+        this.sentCatalogFingerprint = null;
         this.ws = null;
         if (this.shouldReconnect) {
           void this.scheduleReconnect();
@@ -363,6 +443,19 @@ export class Aelio {
   }
 
   private sendRegister(): void {
+    if (this.registrationInFlight) {
+      return;
+    }
+    const message = this.buildRegisterMessage();
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    this.registrationInFlight = true;
+    this.sentCatalogFingerprint = registrationFingerprint(message);
+    this.sendOn(this.ws, message);
+  }
+
+  private buildRegisterMessage(): RegisterMessage {
     const functions: FunctionDefinition[] = [...this.handlers.entries()].map(([name, entry]) => ({
       name,
       description: entry.schema.description,
@@ -443,10 +536,10 @@ export class Aelio {
       canSend: this.sendHandler != null,
     };
 
-    this.send(message);
+    return message;
   }
 
-  private async handleMessage(raw: string): Promise<void> {
+  private async handleMessage(raw: string, socket: WebSocket): Promise<void> {
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -461,7 +554,7 @@ export class Aelio {
 
     const message = result.data;
     if (message.type === 'ping') {
-      this.handlePing(message);
+      this.handlePing(message, socket);
       const app = this.applicationName ?? 'unnamed SDK app';
       const ts = new Date().toISOString().slice(11, 19);
       console.log(
@@ -473,12 +566,12 @@ export class Aelio {
     }
 
     if (message.type === 'invoke') {
-      await this.handleInvoke(message);
+      await this.handleInvoke(message, socket);
       return;
     }
 
     if (message.type === 'send') {
-      await this.handleSend(message);
+      await this.handleSend(message, socket);
       return;
     }
 
@@ -486,6 +579,7 @@ export class Aelio {
       // A protocol-level complaint from the server (e.g. a malformed frame we
       // sent). Surface it so integrators can see why a message had no effect.
       console.warn(`[aelio-sdk] server error [${message.code}]: ${message.message}`);
+      this.registrationInFlight = false;
       return;
     }
 
@@ -535,18 +629,17 @@ export class Aelio {
           ].join('\n'),
         );
       }
-      this.lastCatalogFingerprint = this.catalogFingerprint();
+      this.registrationInFlight = false;
+      this.lastCatalogFingerprint = this.sentCatalogFingerprint;
+      this.sentCatalogFingerprint = null;
+      if (this.catalogFingerprint() !== this.lastCatalogFingerprint) {
+        this.scheduleCatalogSync();
+      }
     }
   }
 
   private catalogFingerprint(): string {
-    return JSON.stringify({
-      application: this.applicationName,
-      tools: [...this.handlers.keys()].sort(),
-      states: [...this.states.keys()].sort(),
-      flows: [...this.flows.keys()].sort(),
-      policies: [...this.policies.keys()].sort(),
-    });
+    return registrationFingerprint(this.buildRegisterMessage());
   }
 
   private scheduleCatalogSync(): void {
@@ -559,23 +652,23 @@ export class Aelio {
     this.catalogSyncTimer = setTimeout(() => {
       this.catalogSyncTimer = null;
       const next = this.catalogFingerprint();
-      if (next === this.lastCatalogFingerprint) {
+      if (next === this.lastCatalogFingerprint || this.registrationInFlight) {
         return;
       }
       this.sendRegister();
     }, 250);
   }
 
-  private handlePing(message: PingMessage): void {
+  private handlePing(message: PingMessage, socket: WebSocket): void {
     this.lastPongAt = Date.now();
-    this.send({ type: 'pong', ts: message.ts });
+    this.sendOn(socket, { type: 'pong', ts: message.ts });
   }
 
-  private async handleSend(message: SendInvokeMessage): Promise<void> {
+  private async handleSend(message: SendInvokeMessage, socket: WebSocket): Promise<void> {
     const started = Date.now();
 
     if (!this.sendHandler) {
-      this.send({
+      this.sendOn(socket, {
         type: 'result',
         id: message.id,
         ok: false,
@@ -592,9 +685,14 @@ export class Aelio {
         content: message.content,
         ...(message.metadata ? { metadata: message.metadata } : {}),
       });
-      this.send({ type: 'result', id: message.id, ok: true, durationMs: Date.now() - started });
+      this.sendOn(socket, {
+        type: 'result',
+        id: message.id,
+        ok: true,
+        durationMs: Date.now() - started,
+      });
     } catch (error) {
-      this.send({
+      this.sendOn(socket, {
         type: 'result',
         id: message.id,
         ok: false,
@@ -608,10 +706,10 @@ export class Aelio {
     }
   }
 
-  private async handleInvoke(message: InvokeMessage): Promise<void> {
+  private async handleInvoke(message: InvokeMessage, socket: WebSocket): Promise<void> {
     const cached = this.invokeResults.get(message.id);
     if (cached) {
-      this.send(cached);
+      this.sendOn(socket, cached);
       return;
     }
     if (this.inflightInvokeIds.has(message.id)) {
@@ -622,16 +720,19 @@ export class Aelio {
     const entry = this.handlers.get(message.function);
 
     if (!entry) {
-      this.finishInvoke({
-        type: 'result',
-        id: message.id,
-        ok: false,
-        error: {
-          code: 'FUNCTION_NOT_FOUND',
-          message: `Function "${message.function}" is not registered`,
+      this.finishInvoke(
+        {
+          type: 'result',
+          id: message.id,
+          ok: false,
+          error: {
+            code: 'FUNCTION_NOT_FOUND',
+            message: `Function "${message.function}" is not registered`,
+          },
+          durationMs: Date.now() - started,
         },
-        durationMs: Date.now() - started,
-      });
+        socket,
+      );
       return;
     }
 
@@ -644,7 +745,7 @@ export class Aelio {
         data,
         durationMs: Date.now() - started,
       };
-      this.finishInvoke(response);
+      this.finishInvoke(response, socket);
     } catch (error) {
       const response: ResultMessage = {
         type: 'result',
@@ -657,22 +758,29 @@ export class Aelio {
         },
         durationMs: Date.now() - started,
       };
-      this.finishInvoke(response);
+      this.finishInvoke(response, socket);
     }
   }
 
-  private finishInvoke(response: ResultMessage): void {
+  private finishInvoke(response: ResultMessage, socket: WebSocket): void {
     this.inflightInvokeIds.delete(response.id);
     if (this.invokeResults.size >= 10_000) {
       const oldest = this.invokeResults.keys().next().value;
       if (oldest) this.invokeResults.delete(oldest);
     }
     this.invokeResults.set(response.id, response);
-    this.send(response);
+    this.sendOn(socket, response);
   }
 
   private send(message: Parameters<typeof SdkToServerMessageSchema.parse>[0]): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    this.sendOn(this.ws, message);
+  }
+
+  private sendOn(
+    socket: WebSocket | null,
+    message: Parameters<typeof SdkToServerMessageSchema.parse>[0],
+  ): void {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
       // Dropped rather than queued (the server is the source of truth and will
       // re-request on reconnect). Warn so a caller pushing state/ingest while
       // disconnected isn't left wondering why nothing happened. `result` and
@@ -685,7 +793,7 @@ export class Aelio {
       }
       return;
     }
-    this.ws.send(JSON.stringify(message));
+    socket.send(JSON.stringify(message));
   }
 
   private startHeartbeat(): void {
@@ -706,9 +814,17 @@ export class Aelio {
   }
 
   private async scheduleReconnect(): Promise<void> {
+    if (this.reconnectTimer || this.connectInFlight) {
+      return;
+    }
     const delay = Math.min(30_000, 1_000 * 2 ** this.reconnectAttempt);
     this.reconnectAttempt += 1;
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    await new Promise<void>((resolve) => {
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        resolve();
+      }, delay);
+    });
     if (!this.shouldReconnect) {
       return;
     }

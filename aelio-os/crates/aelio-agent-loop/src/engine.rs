@@ -1,9 +1,7 @@
 use crate::child::{ChildExecutionRequest, ChildExecutor, RejectingChildExecutor};
+use crate::compute::{compute_observation, is_compute_source, run_starlark_pipeline};
 use crate::kernel_tools::{is_kernel_tool, kernel_name_set};
 use crate::orchestration::OrchestrationState;
-use crate::compute::{
-    compute_observation, is_compute_source, run_starlark_pipeline,
-};
 use crate::program::{parse_program, source_hash, validate_against_tools};
 use crate::tasks::{SpawnMode, SpawnRequest, TaskBoard, TaskResult, TaskStatus};
 use crate::todos::{TodoItem, TodoStatus};
@@ -68,7 +66,9 @@ where
     G: EffectGate,
 {
     pub fn new(model: M, host: H, gate: G, context: Context, limits: BudgetLimits) -> Self {
-        let remaining = limits.max_total_tokens.saturating_sub(limits.reserve_tokens);
+        let remaining = limits
+            .max_total_tokens
+            .saturating_sub(limits.reserve_tokens);
         Self {
             model,
             host,
@@ -885,11 +885,7 @@ where
             let executor = Arc::clone(&self.child_executor);
             let futures = parallel.into_iter().map(|task| {
                 let executor = Arc::clone(&executor);
-                async move {
-                    executor
-                        .execute(ChildExecutionRequest { task })
-                        .await
-                }
+                async move { executor.execute(ChildExecutionRequest { task }).await }
             });
             for result in join_all(futures).await {
                 out.push(self.commit_task_result(result));
@@ -916,7 +912,16 @@ where
             "effects_performed": result.effects_performed,
             "tokens_used": result.tokens_used,
         });
-        let _ = self.orchestration.tasks.complete(result);
+        if let Err(detail) = self.orchestration.tasks.complete(result) {
+            return json!({
+                "task_id": task_id,
+                "status": "failed",
+                "summary": detail,
+                "data": null,
+                "effects_performed": [],
+                "tokens_used": 0,
+            });
+        }
         let todo_status = match status {
             TaskStatus::Completed => TodoStatus::Completed,
             TaskStatus::Cancelled => TodoStatus::Cancelled,

@@ -30,6 +30,7 @@ type ActiveConnection = {
   connectedAt: number;
   lastHeartbeatAt: number;
   registered: boolean;
+  catalogFingerprint: string | null;
 };
 
 type PendingInvoke = {
@@ -38,12 +39,26 @@ type PendingInvoke = {
   timeout: ReturnType<typeof setTimeout>;
 };
 
+export type PendingUserStateCommand = {
+  commandId: string;
+  stateId: string;
+  reason?: string;
+};
+
+type SdkInvokeResultWithLifecycle = SdkInvokeResult & {
+  lifecycleCommand?: PendingUserStateCommand;
+};
+
 export class ServerSdkBridge implements SdkBridge {
   private readonly connections = new Map<string, ActiveConnection>();
   private readonly pendingInvokes = new Map<string, PendingInvoke>();
   private readonly registryListeners = new Set<() => void>();
-  private readonly correlatedInvokes = new Map<string, Promise<SdkInvokeResult>>();
-  private readonly completedInvokes = new Map<string, { at: number; result: SdkInvokeResult }>();
+  private readonly correlatedInvokes = new Map<string, Promise<SdkInvokeResultWithLifecycle>>();
+  private readonly completedInvokes = new Map<
+    string,
+    { at: number; result: SdkInvokeResultWithLifecycle }
+  >();
+  private readonly userStateCommands = new Map<string, PendingUserStateCommand>();
 
   constructor(private readonly sdkConnectionStore: ConvoxSdkConnectionStore) {
     // Prune stale rows from prior boots instead of wiping the whole table.
@@ -86,6 +101,7 @@ export class ServerSdkBridge implements SdkBridge {
       connectedAt: now,
       lastHeartbeatAt: now,
       registered: false,
+      catalogFingerprint: null,
     });
   }
 
@@ -143,6 +159,26 @@ export class ServerSdkBridge implements SdkBridge {
       if (connection.registered) {
         this.persist(connection);
       }
+    }
+  }
+
+  /**
+   * Capture an SDK lifecycle write synchronously. Agent-loop tool calls return this command in
+   * their host envelope, allowing Rust to commit it while it already owns the runtime lock.
+   */
+  trackUserStateCommand(userId: string, command: PendingUserStateCommand): void {
+    this.userStateCommands.set(userId, command);
+  }
+
+  consumeUserStateCommand(userId: string): PendingUserStateCommand | undefined {
+    const command = this.userStateCommands.get(userId);
+    if (command) this.userStateCommands.delete(userId);
+    return command;
+  }
+
+  clearUserStateCommand(userId: string, commandId: string): void {
+    if (this.userStateCommands.get(userId)?.commandId === commandId) {
+      this.userStateCommands.delete(userId);
     }
   }
 
@@ -320,28 +356,38 @@ export class ServerSdkBridge implements SdkBridge {
     args: Record<string, unknown>,
     context: InvocationContext,
     correlationId: string,
-  ): Promise<SdkInvokeResult> {
+  ): Promise<SdkInvokeResultWithLifecycle> {
+    // Correlation carries the durable runtime proxy instance identity. Keep the
+    // function in the key as a defensive boundary for non-artifact callers.
+    const dedupeKey = `${correlationId}\u001f${functionName}`;
     const now = Date.now();
     for (const [id, entry] of this.completedInvokes) {
       if (now - entry.at > 10 * 60_000) this.completedInvokes.delete(id);
     }
-    const completed = this.completedInvokes.get(correlationId);
-    if (completed) return completed.result;
-    const active = this.correlatedInvokes.get(correlationId);
+    const completed = this.completedInvokes.get(dedupeKey);
+    // Only replay successful completions. Caching transport/handler failures
+    // poisoned confirmation retries (dead socket → cached error → forever fail).
+    if (completed?.result.ok) return completed.result;
+    if (completed && !completed.result.ok) {
+      this.completedInvokes.delete(dedupeKey);
+    }
+    const active = this.correlatedInvokes.get(dedupeKey);
     if (active) return active;
 
-    const invocation = this.invokeOnce(functionName, args, context, correlationId);
-    this.correlatedInvokes.set(correlationId, invocation);
+    const invocation = this.invokeOnce(functionName, args, context, dedupeKey);
+    this.correlatedInvokes.set(dedupeKey, invocation);
     try {
       const result = await invocation;
-      if (this.completedInvokes.size >= 10_000) {
-        const oldest = this.completedInvokes.keys().next().value;
-        if (oldest) this.completedInvokes.delete(oldest);
+      if (result.ok) {
+        if (this.completedInvokes.size >= 10_000) {
+          const oldest = this.completedInvokes.keys().next().value;
+          if (oldest) this.completedInvokes.delete(oldest);
+        }
+        this.completedInvokes.set(dedupeKey, { at: Date.now(), result });
       }
-      this.completedInvokes.set(correlationId, { at: Date.now(), result });
       return result;
     } finally {
-      this.correlatedInvokes.delete(correlationId);
+      this.correlatedInvokes.delete(dedupeKey);
     }
   }
 
@@ -350,12 +396,16 @@ export class ServerSdkBridge implements SdkBridge {
     args: Record<string, unknown>,
     context: InvocationContext,
     id: string,
-  ): Promise<SdkInvokeResult> {
-    const connection = [...this.registeredConnections()]
-      .filter((entry) => entry.functions.some((fn) => fn.name === functionName))
-      .sort((a, b) => b.lastHeartbeatAt - a.lastHeartbeatAt)[0];
+  ): Promise<SdkInvokeResultWithLifecycle> {
+    const candidates = [...this.registeredConnections()]
+      .filter(
+        (entry) =>
+          entry.functions.some((fn) => fn.name === functionName) &&
+          entry.socket.readyState === 1, // WebSocket.OPEN
+      )
+      .sort((a, b) => b.lastHeartbeatAt - a.lastHeartbeatAt);
 
-    if (!connection) {
+    if (candidates.length === 0) {
       return {
         ok: false,
         error: `No connected SDK exposes function "${functionName}"`,
@@ -372,30 +422,45 @@ export class ServerSdkBridge implements SdkBridge {
     };
 
     const started = Date.now();
+    let lastError = 'SDK invoke failed';
 
-    try {
-      const result = await new Promise<ResultMessage>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          this.pendingInvokes.delete(id);
-          reject(new Error(`SDK invoke timed out after ${INVOKE_TIMEOUT_MS}ms`));
-        }, INVOKE_TIMEOUT_MS);
+    for (const connection of candidates) {
+      try {
+        const result = await new Promise<ResultMessage>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            this.pendingInvokes.delete(id);
+            reject(new Error(`SDK invoke timed out after ${INVOKE_TIMEOUT_MS}ms`));
+          }, INVOKE_TIMEOUT_MS);
 
-        this.pendingInvokes.set(id, { resolve, reject, timeout });
-        connection.socket.send(JSON.stringify(invokeMessage));
-      });
+          this.pendingInvokes.set(id, { resolve, reject, timeout });
+          try {
+            connection.socket.send(JSON.stringify(invokeMessage));
+          } catch (error) {
+            clearTimeout(timeout);
+            this.pendingInvokes.delete(id);
+            reject(error instanceof Error ? error : new Error('SDK socket send failed'));
+          }
+        });
 
-      return {
-        ok: result.ok,
-        data: result.data,
-        error: result.error?.message,
-        durationMs: result.durationMs || Date.now() - started,
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : 'SDK invoke failed',
-        durationMs: Date.now() - started,
-      };
+        return {
+          ok: result.ok,
+          data: result.data,
+          error: result.error?.message,
+          durationMs: result.durationMs || Date.now() - started,
+          ...(result.ok
+            ? { lifecycleCommand: this.consumeUserStateCommand(context.customerId) }
+            : {}),
+        };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : 'SDK invoke failed';
+        // Try the next live connection (stale sockets after SDK restart).
+      }
     }
+
+    return {
+      ok: false,
+      error: lastError,
+      durationMs: Date.now() - started,
+    };
   }
 }

@@ -32,6 +32,7 @@ export function buildAgentCatalog(
   const states = toAgentStates(registration.states ?? [], tools, capabilities);
   const policies = toAgentPolicies(
     registration.policies ?? [],
+    registration.states ?? [],
     tools,
     options.memoryEnabled === true,
   );
@@ -277,7 +278,27 @@ function toAgentStates(
       op: 'present',
       path: `slot.${field}`,
     })),
-    exit_edges: [],
+    exit_edges: (state.transitions ?? []).map((transition) => {
+      const requiredEvidence = transition.guard?.requires_fields ?? [];
+      return {
+        to: transition.to,
+        guard: {
+          op: 'and',
+          of: [
+            {
+              op: 'eq',
+              path: 'tool',
+              value: canonicalAgentToolId(transition.on_tool_success),
+            },
+            ...requiredEvidence.map((field) => ({
+              op: 'present',
+              path: `evidence.${field}`,
+            })),
+          ],
+        },
+        evidence_required: requiredEvidence.length > 0,
+      };
+    }),
     timeout: null,
   }));
   if (!mapped.some((state) => state.id === 'unauthenticated')) {
@@ -299,6 +320,7 @@ function toAgentStates(
 
 function toAgentPolicies(
   policies: PolicyDefinition[],
+  states: StateDefinition[],
   tools: ReturnType<typeof toAgentTool>[],
   memoryEnabled: boolean,
 ) {
@@ -333,7 +355,22 @@ function toAgentPolicies(
         priority: 1,
       }))
     : [];
-  return [...declaredPolicies, ...toolPolicies, ...memoryPolicies];
+  const transitionPolicies = states.flatMap((state) =>
+    (state.transitions ?? []).map((transition) => ({
+      id: `sdk.state-transition.${state.id}.${canonicalAgentToolId(transition.on_tool_success)}.${transition.to}`,
+      effect: 'allow',
+      subject: { state: state.id },
+      action: { transition: `${state.id}->${transition.to}` },
+      condition: {
+        op: 'eq',
+        path: 'tool',
+        value: canonicalAgentToolId(transition.on_tool_success),
+      },
+      reason_code: 'sdk_declared_state_transition',
+      priority: 1,
+    })),
+  );
+  return [...declaredPolicies, ...toolPolicies, ...transitionPolicies, ...memoryPolicies];
 }
 
 function agentType(type: string): string {

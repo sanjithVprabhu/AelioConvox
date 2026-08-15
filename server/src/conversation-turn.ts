@@ -128,6 +128,19 @@ export function stableAgentUserId(customerExternalId: string): string {
     .digest('hex');
 }
 
+/**
+ * SDK `set_state` / tool context may already carry the hashed agent user id
+ * (from a prior `stableAgentUserId` at turn ingress). Re-hashing that value
+ * orphans lifecycle updates so cart tools stay stuck in anonymous forever.
+ */
+export function agentUserIdFromSdkCustomerId(customerId: string): string {
+  const trimmed = customerId.trim();
+  if (/^[a-f0-9]{64}$/i.test(trimmed)) {
+    return trimmed.toLowerCase();
+  }
+  return stableAgentUserId(trimmed);
+}
+
 function stableTurnId(channel: string, customerId: string, sourceTurnId: string): string {
   return `ingress:${createHash('sha256')
     .update(`${channel}\u001f${customerId}\u001f${sourceTurnId}`)

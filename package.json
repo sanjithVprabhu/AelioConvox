@@ -30,6 +30,8 @@
     "test:agent-loop:contract": "node --import tsx scripts/test-agent-loop-contract.ts",
     "test:agent-loop:channels": "node --conditions=import --import tsx scripts/test-agent-loop-channel-parity.ts",
     "test:agent-loop:mock": "node --import tsx scripts/test-agent-loop-mock.ts",
+    "test:agent-loop:registration": "node --conditions=import --import tsx scripts/test-agent-loop-registration.ts",
+    "test:shopping:e2e": "node scripts/test-shopping-session-e2e.mjs",
     "test:admin-db": "node scripts/test-admin-db.mjs",
     "test:segment-storage": "node scripts/test-segment-storage.mjs",
     "test:all": "node scripts/run-tests.mjs",

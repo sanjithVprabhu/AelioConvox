@@ -67,6 +67,7 @@ pub struct TaskRecord {
     pub mode: SpawnMode,
     pub parallel_ok: bool,
     pub resource_keys: Vec<String>,
+    pub return_schema: Option<Value>,
     pub effect_classes: Vec<EffectClass>,
     pub status: TaskStatus,
     pub summary: Option<String>,
@@ -197,9 +198,7 @@ impl TaskBoard {
         let parallel_ok = request.parallel_ok && effects_are_parallel_safe(&effect_classes);
         let task_id = format!("task-{}", self.next_seq);
         self.next_seq = self.next_seq.saturating_add(1);
-        self.remaining_tokens = self
-            .remaining_tokens
-            .saturating_sub(request.budget_tokens);
+        self.remaining_tokens = self.remaining_tokens.saturating_sub(request.budget_tokens);
         self.tasks.insert(
             task_id.clone(),
             TaskRecord {
@@ -214,6 +213,7 @@ impl TaskBoard {
                 mode: request.mode,
                 parallel_ok,
                 resource_keys: request.resource_keys,
+                return_schema: request.return_schema,
                 effect_classes,
                 status: TaskStatus::Running,
                 summary: None,
@@ -225,6 +225,12 @@ impl TaskBoard {
     }
 
     pub fn complete(&mut self, result: TaskResult) -> Result<(), String> {
+        if result.status == TaskStatus::Running {
+            return Err(format!(
+                "task `{}` executor returned a non-terminal result",
+                result.task_id
+            ));
+        }
         let task = self
             .tasks
             .get_mut(&result.task_id)
@@ -278,7 +284,10 @@ impl TaskBoard {
         self.tasks
             .values()
             .filter(|task| task.status == TaskStatus::Running)
-            .filter(|task| ids.map(|wanted| wanted.contains(&task.task_id)).unwrap_or(true))
+            .filter(|task| {
+                ids.map(|wanted| wanted.contains(&task.task_id))
+                    .unwrap_or(true)
+            })
             .cloned()
             .collect()
     }
@@ -324,4 +333,85 @@ impl TaskBoard {
 
 pub fn effects_are_parallel_safe(classes: &[EffectClass]) -> bool {
     classes.iter().all(|class| class == &EffectClass::Read)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn tool(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            version: "1".to_string(),
+            description: format!("Tenant capability for {name} operations."),
+            input_schema: json!({"type":"object"}),
+            effect_class: EffectClass::Read,
+        }
+    }
+
+    #[test]
+    fn spawned_task_retains_return_schema_for_executor_validation() {
+        let mut board = TaskBoard::new("root", 1_000, 0);
+        let schema = json!({
+            "type": "object",
+            "properties": { "answer": { "type": "string" } },
+            "required": ["answer"],
+            "additionalProperties": false
+        });
+        let (task_id, _, _) = board
+            .spawn(
+                SpawnRequest {
+                    goal: "Find one answer".to_string(),
+                    tool_allowlist: vec!["lookup".to_string()],
+                    budget_tokens: 100,
+                    max_turns: 3,
+                    mode: SpawnMode::Sync,
+                    parallel_ok: true,
+                    return_schema: Some(schema.clone()),
+                    resource_keys: Vec::new(),
+                },
+                &[tool("lookup")],
+                &HashSet::new(),
+            )
+            .expect("spawn");
+        assert_eq!(
+            board
+                .get(&task_id)
+                .and_then(|task| task.return_schema.as_ref()),
+            Some(&schema)
+        );
+    }
+
+    #[test]
+    fn task_board_rejects_executor_false_running_completion() {
+        let mut board = TaskBoard::new("root", 1_000, 0);
+        let (task_id, _, _) = board
+            .spawn(
+                SpawnRequest {
+                    goal: "Find one answer".to_string(),
+                    tool_allowlist: vec!["lookup".to_string()],
+                    budget_tokens: 100,
+                    max_turns: 3,
+                    mode: SpawnMode::Sync,
+                    parallel_ok: true,
+                    return_schema: None,
+                    resource_keys: Vec::new(),
+                },
+                &[tool("lookup")],
+                &HashSet::new(),
+            )
+            .expect("spawn");
+        let error = board
+            .complete(TaskResult {
+                task_id,
+                status: TaskStatus::Running,
+                summary: "not actually complete".to_string(),
+                data: None,
+                effects_performed: Vec::new(),
+                tokens_used: 0,
+            })
+            .expect_err("running is not terminal");
+        assert!(error.contains("non-terminal"));
+    }
 }

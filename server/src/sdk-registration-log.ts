@@ -4,8 +4,10 @@
  * `registered` ack, and appended to data/aelio-sdk-connect.log.
  */
 
+import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import type { RegisterMessage } from '@aelio/protocol';
 
 export type SdkRegistrationLogInput = {
   application: string;
@@ -119,6 +121,27 @@ export type CatalogNameSets = {
   flows: string[];
   policies: string[];
 };
+
+/** Content identity for the complete executable registration, not only its names. */
+export function catalogContentFingerprint(registration: RegisterMessage): string {
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalJson(registration)))
+    .digest('hex');
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalJson);
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalJson(item)]),
+    );
+  }
+  return value;
+}
 
 export function diffCatalogNames(before: CatalogNameSets, after: CatalogNameSets): {
   added: CatalogNameSets;

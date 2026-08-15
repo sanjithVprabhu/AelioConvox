@@ -109,6 +109,7 @@ export async function registerAelioHostRoutes(app: FastifyInstance, deps: Runtim
         return { outcome: 'ok', output: { vector }, usage_tokens: 0 };
       }
 
+      const toolStarted = Date.now();
       const args = ToolArgsSchema.parse(call.args);
       const externalNames = deps.sdkBridge
         .getFunctions()
@@ -124,6 +125,10 @@ export async function registerAelioHostRoutes(app: FastifyInstance, deps: Runtim
       const toolContext = args.context;
       const customerId = toolContext?.user_id ?? call.instance_id;
       const sdkFunction = externalNames[0]!;
+      // Kernel tool proxies currently emit a shared Call corr (`t0:proxy_call`). Dedup must
+      // key on the per-invocation instance_id or every user/session replays the first
+      // successful start_shopping / search and never advances lifecycle.
+      const invokeCorrelationId = call.instance_id;
       const result = await deps.sdkBridge.invokeCorrelated(sdkFunction, args.args, {
         customerId,
         sessionId: customerId,
@@ -135,8 +140,23 @@ export async function registerAelioHostRoutes(app: FastifyInstance, deps: Runtim
           turnId: call.turn_id,
           nodeId: call.nid,
           correlationId: call.corr,
+          instanceId: call.instance_id,
         },
-      }, call.corr);
+      }, invokeCorrelationId);
+      request.log.info(
+        {
+          corr: call.corr,
+          invokeCorrelationId,
+          target: call.target,
+          sdkFunction,
+          ok: result.ok,
+          durationMs: result.durationMs,
+          elapsedMs: Date.now() - toolStarted,
+          error: result.error ?? null,
+          argKeys: Object.keys(args.args).sort(),
+        },
+        'Aelio host tool invoke',
+      );
       if (!result.ok) {
         return {
           outcome: 'err',
@@ -144,6 +164,8 @@ export async function registerAelioHostRoutes(app: FastifyInstance, deps: Runtim
           usage_tokens: 0,
         };
       }
+      const lifecycleCommand =
+        call.nid === 'agent.invoke' ? result.lifecycleCommand : undefined;
       if (process.env.AELIO_DECISION_LOG === '1') {
         request.log.info(
           {
@@ -157,7 +179,21 @@ export async function registerAelioHostRoutes(app: FastifyInstance, deps: Runtim
           'Aelio host result shape',
         );
       }
-      return { outcome: 'ok', output: result.data ?? null, usage_tokens: 0 };
+      return {
+        outcome: 'ok',
+        output: lifecycleCommand
+          ? {
+              __aelio_host_envelope: 1,
+              data: result.data ?? null,
+              lifecycle: {
+                command_id: lifecycleCommand.commandId,
+                state_id: lifecycleCommand.stateId,
+                ...(lifecycleCommand.reason ? { reason: lifecycleCommand.reason } : {}),
+              },
+            }
+          : (result.data ?? null),
+        usage_tokens: 0,
+      };
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'host adapter failed';
       request.log.warn(

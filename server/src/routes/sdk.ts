@@ -11,7 +11,7 @@ import type { WebSocket } from '@fastify/websocket';
 import type { FastifyInstance } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { buildAgentCatalog } from '../aelio-agent-catalog.js';
-import { stableAgentUserId } from '../conversation-turn.js';
+import { stableAgentUserId, agentUserIdFromSdkCustomerId } from '../conversation-turn.js';
 import { secretsMatch } from '../auth.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 import {
@@ -20,6 +20,7 @@ import {
   logSdkDisconnected,
   logSdkHeartbeat,
   logSdkRegistrationSuccess,
+  catalogContentFingerprint,
   diffCatalogNames,
 } from '../sdk-registration-log.js';
 import { refreshCatalogBagAfterSync } from '../catalog-bag.js';
@@ -162,7 +163,9 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           policies: (message.policies ?? []).map((p) => p.id),
         };
         const { added, removed, changed } = diffCatalogNames(beforeNames, afterNames);
-        if (isUpdate && !changed) {
+        const nextCatalogFingerprint = catalogContentFingerprint(message);
+        const contentChanged = prior?.catalogFingerprint !== nextCatalogFingerprint;
+        if (isUpdate && !changed && !contentChanged) {
           // No capability delta — still ack so the SDK clears its sync timer.
           socket.send(
             JSON.stringify({
@@ -231,6 +234,7 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
           sdkVersion: message.sdkVersion,
           language: message.language,
           canSend: message.canSend ?? false,
+          catalogFingerprint: nextCatalogFingerprint,
           connectedAt: prior?.connectedAt ?? Date.now(),
           lastHeartbeatAt: Date.now(),
         });
@@ -344,10 +348,16 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
         const commandId = `sdk-state:${createHash('sha256')
           .update(`${message.customerId}\u001f${message.stateId}\u001f${message.reason ?? ''}`)
           .digest('hex')}`;
-        void Promise.all([
+        const agentUserId = agentUserIdFromSdkCustomerId(message.customerId);
+        sdkBridge.trackUserStateCommand(agentUserId, {
+          commandId,
+          stateId: message.stateId,
+          ...(message.reason ? { reason: message.reason } : {}),
+        });
+        const stateUpdate = Promise.all([
           deps.aelioRuntime.setAgentUserState({
             command_id: commandId,
-            user_id: stableAgentUserId(message.customerId),
+            user_id: agentUserId,
             state_id: message.stateId,
             ...(message.reason ? { reason: message.reason } : {}),
           }),
@@ -359,8 +369,10 @@ export async function registerSdkRoutes(app: FastifyInstance, deps: RuntimeDeps)
             message.reason,
             deps.customerStore,
           ),
-        ])
+        ]);
+        void stateUpdate
           .then(() => {
+            sdkBridge.clearUserStateCommand(agentUserId, commandId);
             socket.send(JSON.stringify({ type: 'ack', op: 'set_state' }));
           })
           .catch((error: unknown) => {

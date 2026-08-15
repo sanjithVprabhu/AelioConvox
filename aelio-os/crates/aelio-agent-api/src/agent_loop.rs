@@ -15,10 +15,11 @@ use aelio_agent::tenant::{
 use aelio_agent::{AelioError, ReasonCode};
 use aelio_agent_loop::{
     canonical_hash, is_kernel_tool, kernel_tool_definitions, ActionBinding, AgentLoop,
-    AgentModelRequestV2, AgentModelResponseV2, BudgetLimits, CacheHintsV2, Context, EffectClass,
-    EffectGate, GateDecision, LoopError, LoopManifest, LoopOutcome, Model, ModelRequest,
-    ModelResponse, OrchestrationState, ScriptedChildExecutor, ToolCall, ToolChoiceKindV2,
-    ToolChoiceV2, ToolDefinition, ToolError, ToolErrorClass, ToolHost,
+    AgentMessage, AgentModelRequestV2, AgentModelResponseV2, BudgetLimits, CacheHintsV2,
+    ChildExecutionRequest, ChildExecutor, Context, EffectClass, EffectGate, GateDecision,
+    LoopError, LoopManifest, LoopOutcome, Model, ModelRequest, ModelResponse, OrchestrationState,
+    TaskResult, TaskStatus, ToolCall, ToolChoiceKindV2, ToolChoiceV2, ToolDefinition, ToolError,
+    ToolErrorClass, ToolHost,
 };
 use async_trait::async_trait;
 use axum::Json;
@@ -293,6 +294,7 @@ fn allowed_tools_for(
         .collect()
 }
 
+#[derive(Clone)]
 struct RuntimeToolHost {
     runtime: Arc<Mutex<aelio_agent::runtime::DurableRuntime>>,
     os_store: Arc<Mutex<Box<dyn aelio_store::Store + Send>>>,
@@ -376,8 +378,21 @@ impl ToolHost for RuntimeToolHost {
             retryable: true,
             detail: "invocation identity lock is unavailable".to_string(),
         })?;
-        keys.clear();
-        keys.extend(invocation_keys);
+        for (call_id, invocation_key) in invocation_keys {
+            if keys
+                .get(&call_id)
+                .is_some_and(|existing| existing != &invocation_key)
+            {
+                return Err(ToolError {
+                    class: ToolErrorClass::NotAuthorized,
+                    retryable: false,
+                    detail: format!(
+                        "tool call id {call_id} was reused for a different durable invocation"
+                    ),
+                });
+            }
+            keys.insert(call_id, invocation_key);
+        }
         Ok(())
     }
 
@@ -518,12 +533,40 @@ impl ToolHost for RuntimeToolHost {
         let transition_key = idempotency_key.clone();
         tokio::task::spawn_blocking(move || {
             let mut runtime = runtime.blocking_lock();
-            let result = runtime
+            let mut result = runtime
                 .world
                 .tool_host
                 .call_with_context(&tool, &args, &idempotency_key, &user_id, &channel)
                 .map(|value| aelio_agent::ops::pure::value_to_json(&value))
                 .map_err(map_tool_error)?;
+            if result.get("__aelio_host_envelope").and_then(Value::as_u64) == Some(1) {
+                let lifecycle = result.get("lifecycle").ok_or_else(|| ToolError {
+                    class: ToolErrorClass::Handler,
+                    retryable: false,
+                    detail: "host lifecycle envelope omitted lifecycle".to_string(),
+                })?;
+                let command_id = lifecycle
+                    .get("command_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| ToolError {
+                        class: ToolErrorClass::Handler,
+                        retryable: false,
+                        detail: "host lifecycle envelope omitted command_id".to_string(),
+                    })?;
+                let state_id = lifecycle
+                    .get("state_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| ToolError {
+                        class: ToolErrorClass::Handler,
+                        retryable: false,
+                        detail: "host lifecycle envelope omitted state_id".to_string(),
+                    })?;
+                let reason = lifecycle.get("reason").and_then(Value::as_str);
+                runtime
+                    .set_user_state(command_id, &user_id, state_id, reason)
+                    .map_err(map_tool_error)?;
+                result = result.get("data").cloned().unwrap_or(Value::Null);
+            }
             if let Some(code) = result.get("error").and_then(Value::as_str) {
                 if let Some(declared) = tool.errors.iter().find(|error| error.match_code == code) {
                     return Err(ToolError {
@@ -544,6 +587,22 @@ impl ToolHost for RuntimeToolHost {
                 &tools,
                 &authority,
             )?;
+            // SDK setCustomerState updates DurableRuntime.user_state out-of-band.
+            // Adopt it so add_to_cart is admitted after start_shopping_session in-turn.
+            if let Some(current) = runtime.world.user_state.get(&user_id).cloned() {
+                if let Ok(mut auth) = authority.write() {
+                    if auth.state_id != current {
+                        if let Some(lifecycle) = states.iter().find(|state| state.id == current) {
+                            auth.state_id = current;
+                            auth.granted_capabilities =
+                                lifecycle.permission_envelope.iter().cloned().collect();
+                            auth.allowed_tools =
+                                allowed_tools_for(&tools, &auth.granted_capabilities);
+                            auth.continuation_capabilities.clear();
+                        }
+                    }
+                }
+            }
             Ok(result)
         })
         .await
@@ -694,6 +753,7 @@ fn agent_value_is_positive_evidence(value: &aelio_agent::Value) -> bool {
 
 /// Baseline admitted policy. Reads and explicitly reversible writes may run; higher-stakes
 /// effects require an invocation-bound confirmation.
+#[derive(Clone)]
 struct KernelPolicyGate {
     authority: SharedAuthority,
     tools: HashMap<String, ToolSpec>,
@@ -792,11 +852,281 @@ impl EffectGate for KernelPolicyGate {
     }
 }
 
+/// Production nested harness. Each task receives a fresh model context, an exact
+/// subset of the parent's pinned tools, the same lifecycle/policy gate, and the
+/// same durable invocation host. There is no synthetic success path.
+#[derive(Clone)]
+struct AgentLoopChildExecutor {
+    transport: Arc<dyn GatewayTransport>,
+    endpoint: String,
+    token: String,
+    model: String,
+    host: RuntimeToolHost,
+    gate: KernelPolicyGate,
+    system: String,
+    bootstrap: String,
+    pinned_tools: Vec<ToolDefinition>,
+    limits: BudgetLimits,
+}
+
+#[async_trait]
+impl ChildExecutor for AgentLoopChildExecutor {
+    async fn execute(&self, request: ChildExecutionRequest) -> TaskResult {
+        let task = request.task;
+        let allowed = task.tool_allowlist.iter().cloned().collect::<HashSet<_>>();
+        let tenant_tools = self
+            .pinned_tools
+            .iter()
+            .filter(|tool| allowed.contains(&tool.name))
+            .cloned()
+            .collect::<Vec<_>>();
+        if tenant_tools.len() != allowed.len() {
+            return TaskResult {
+                task_id: task.task_id,
+                status: TaskStatus::Failed,
+                summary: "child tool allowlist no longer matches the pinned parent manifest"
+                    .to_string(),
+                data: None,
+                effects_performed: Vec::new(),
+                tokens_used: 0,
+            };
+        }
+
+        let schema_instruction = task.return_schema.as_ref().map_or_else(
+            || "Return a concise result in finish.message.".to_string(),
+            |schema| {
+                format!(
+                    "Return ONLY JSON matching this schema in finish.message: {}",
+                    schema
+                )
+            },
+        );
+        let child_bootstrap = format!(
+            "{}\n\nSub-harness id: {}\nDepth: {}\nIsolated goal: {}\nAllowed tenant tools: {}\n{}\nDo not claim work performed by another task.",
+            self.bootstrap,
+            task.task_id,
+            task.depth,
+            task.goal,
+            task.tool_allowlist.join(", "),
+            schema_instruction,
+        );
+        let context = Context::new(
+            &self.system,
+            child_bootstrap,
+            kernel_tool_definitions(),
+            tenant_tools.clone(),
+        );
+        let model = GatewayModel {
+            transport: Arc::clone(&self.transport),
+            endpoint: self.endpoint.clone(),
+            token: self.token.clone(),
+            model: self.model.clone(),
+            sequence: 0,
+        };
+        let reserve_tokens = task.budget_tokens.min(1_000) / 4;
+        let mut limits = self.limits.clone();
+        limits.max_turns = task.max_turns;
+        limits.max_total_tokens = task.budget_tokens;
+        limits.reserve_tokens = reserve_tokens;
+        limits.max_tool_calls = limits
+            .max_tool_calls
+            .min(task.max_turns.saturating_mul(8).max(1));
+        let orchestration = OrchestrationState::new(
+            task.task_id.clone(),
+            task.budget_tokens.saturating_sub(reserve_tokens),
+            task.depth,
+        );
+        let run = AgentLoop::new(model, self.host.clone(), self.gate.clone(), context, limits)
+            .with_orchestration(orchestration)
+            .with_child_executor(Arc::new(self.clone()))
+            .run()
+            .await;
+
+        let (outcome, engine) = match run {
+            Ok(value) => value,
+            Err(error) => {
+                return TaskResult {
+                    task_id: task.task_id,
+                    status: TaskStatus::Failed,
+                    summary: format!("child harness failed: {error}"),
+                    data: None,
+                    effects_performed: Vec::new(),
+                    tokens_used: 0,
+                }
+            }
+        };
+        let tokens_used = engine.budget().total_tokens().min(task.budget_tokens);
+        let effects_performed = child_effects(engine.context().messages(), &tenant_tools);
+
+        match outcome {
+            LoopOutcome::Finished { message, status } => {
+                let (task_status, data, summary) = if status == "completed" {
+                    match child_result_data(&message, task.return_schema.as_ref()) {
+                        Ok(data) => (TaskStatus::Completed, Some(data), message),
+                        Err(detail) => (TaskStatus::Failed, None, detail),
+                    }
+                } else {
+                    (
+                        TaskStatus::Failed,
+                        Some(json!({ "message": message, "finish_status": status })),
+                        format!("child finished with status {status}"),
+                    )
+                };
+                TaskResult {
+                    task_id: task.task_id,
+                    status: task_status,
+                    summary,
+                    data,
+                    effects_performed,
+                    tokens_used,
+                }
+            }
+            LoopOutcome::WaitingForUser { message, .. } => TaskResult {
+                task_id: task.task_id,
+                status: TaskStatus::Failed,
+                summary: format!(
+                    "child requires user confirmation and was not allowed to report success: {message}"
+                ),
+                data: Some(json!({ "confirmation_required": true })),
+                effects_performed,
+                tokens_used,
+            },
+            LoopOutcome::WaitingForInput {
+                message,
+                missing_fields,
+                ..
+            } => TaskResult {
+                task_id: task.task_id,
+                status: TaskStatus::Failed,
+                summary: message,
+                data: Some(json!({ "missing_fields": missing_fields })),
+                effects_performed,
+                tokens_used,
+            },
+            LoopOutcome::Exhausted { reason, message } => TaskResult {
+                task_id: task.task_id,
+                status: TaskStatus::Exhausted,
+                summary: message,
+                data: Some(json!({ "reason": reason })),
+                effects_performed,
+                tokens_used,
+            },
+            LoopOutcome::Cancelled { message } => TaskResult {
+                task_id: task.task_id,
+                status: TaskStatus::Cancelled,
+                summary: message,
+                data: None,
+                effects_performed,
+                tokens_used,
+            },
+        }
+    }
+}
+
+fn child_effects(messages: &[AgentMessage], tools: &[ToolDefinition]) -> Vec<Value> {
+    let effects = tools
+        .iter()
+        .filter(|tool| tool.effect_class != EffectClass::Read)
+        .map(|tool| tool.name.as_str())
+        .collect::<HashSet<_>>();
+    messages
+        .iter()
+        .filter_map(|message| match message {
+            AgentMessage::ToolResult { result }
+                if result.error.is_none() && effects.contains(result.tool.as_str()) =>
+            {
+                Some(json!({
+                    "call_id": result.call_id,
+                    "tool": result.tool,
+                }))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn child_result_data(message: &str, schema: Option<&Value>) -> Result<Value, String> {
+    let Some(schema) = schema else {
+        return Ok(json!({ "message": message }));
+    };
+    let value: Value = serde_json::from_str(message)
+        .map_err(|error| format!("child return_schema required JSON finish.message: {error}"))?;
+    validate_child_schema(&value, schema, "$")?;
+    Ok(value)
+}
+
+fn validate_child_schema(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
+    if let Some(allowed) = schema.get("enum").and_then(Value::as_array) {
+        if !allowed.contains(value) {
+            return Err(format!(
+                "child result at {path} is outside return_schema enum"
+            ));
+        }
+    }
+    if let Some(kind) = schema.get("type").and_then(Value::as_str) {
+        let valid = match kind {
+            "null" => value.is_null(),
+            "boolean" => value.is_boolean(),
+            "number" => value.is_number(),
+            "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+            "string" => value.is_string(),
+            "array" => value.is_array(),
+            "object" => value.is_object(),
+            _ => false,
+        };
+        if !valid {
+            return Err(format!("child result at {path} does not match type {kind}"));
+        }
+    }
+    if let Some(object) = value.as_object() {
+        let properties = schema.get("properties").and_then(Value::as_object);
+        if let Some(required) = schema.get("required").and_then(Value::as_array) {
+            for name in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(name) {
+                    return Err(format!(
+                        "child result is missing required field {path}.{name}"
+                    ));
+                }
+            }
+        }
+        if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
+            if let Some(properties) = properties {
+                if let Some(name) = object.keys().find(|name| !properties.contains_key(*name)) {
+                    return Err(format!(
+                        "child result contains undeclared field {path}.{name}"
+                    ));
+                }
+            }
+        }
+        if let Some(properties) = properties {
+            for (name, child_schema) in properties {
+                if let Some(child) = object.get(name) {
+                    validate_child_schema(child, child_schema, &format!("{path}.{name}"))?;
+                }
+            }
+        }
+    }
+    if let (Some(items), Some(values)) = (schema.get("items"), value.as_array()) {
+        for (index, child) in values.iter().enumerate() {
+            validate_child_schema(child, items, &format!("{path}[{index}]"))?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) async fn process_agent_loop_turn(
     state: AppState,
     request: TurnApiRequest,
 ) -> Result<Json<aelio_agent::blocks::turn::TurnResult>, ApiError> {
-    let (tenant_id, tenant_tools, state_id, granted_capabilities, tenant_policies, tenant_states, personality_prompt) = {
+    let (
+        tenant_id,
+        tenant_tools,
+        state_id,
+        granted_capabilities,
+        tenant_policies,
+        tenant_states,
+        personality_prompt,
+    ) = {
         let runtime = state.runtime.lock().await;
         if runtime.world.tenant.states.is_empty() || runtime.world.tenant.personalities.is_empty() {
             return Err(ApiError(AelioError::new(
@@ -1056,6 +1386,31 @@ pub(crate) async fn process_agent_loop_turn(
                         "confirmation_consumed",
                         format!("confirmation {} was consumed once", pending.confirmation_id),
                     );
+                    context.append_notice(
+                        "confirmation_truth",
+                        "Report only what the confirmation tool result(s) show. If a tool returned an error, say it failed — never claim the action succeeded.".to_string(),
+                    );
+                    // setCustomerState from the SDK updates DurableRuntime during invoke.
+                    // Refresh conversation authority so follow-on tools in this same turn
+                    // (and the model) see the post-confirm lifecycle, not the anonymous snapshot.
+                    {
+                        let runtime = state.runtime.lock().await;
+                        if let Some(current) = runtime.world.user_state.get(&request.user_id) {
+                            if let Some(lifecycle) = tenant_states
+                                .iter()
+                                .find(|candidate| candidate.id == *current)
+                            {
+                                if let Ok(mut auth) = authority.write() {
+                                    auth.state_id = current.clone();
+                                    auth.granted_capabilities =
+                                        lifecycle.permission_envelope.iter().cloned().collect();
+                                    auth.allowed_tools =
+                                        allowed_tools_for(&tool_map, &auth.granted_capabilities);
+                                    auth.continuation_capabilities.clear();
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Consent::DenyOrExpired => {
@@ -1162,13 +1517,14 @@ pub(crate) async fn process_agent_loop_turn(
         batch_sequence: Arc::new(AtomicU64::new(0)),
         memory_gateway,
     };
+    let transport: Arc<dyn GatewayTransport> = Arc::new(ReqwestGatewayTransport {
+        client: model_client,
+    });
     let model = GatewayModel {
-        transport: Arc::new(ReqwestGatewayTransport {
-            client: model_client,
-        }),
-        endpoint: gateway.0,
-        token: gateway.1,
-        model: gateway.2,
+        transport: Arc::clone(&transport),
+        endpoint: gateway.0.clone(),
+        token: gateway.1.clone(),
+        model: gateway.2.clone(),
         sequence: 0,
     };
     let limits = BudgetLimits {
@@ -1185,9 +1541,21 @@ pub(crate) async fn process_agent_loop_turn(
             0,
         )
     });
+    let child_executor = AgentLoopChildExecutor {
+        transport,
+        endpoint: gateway.0,
+        token: gateway.1,
+        model: gateway.2,
+        host: host.clone(),
+        gate: gate.clone(),
+        system: conversation.system.clone(),
+        bootstrap: conversation.bootstrap.clone(),
+        pinned_tools: conversation.manifest.tools.clone(),
+        limits: limits.clone(),
+    };
     let run = AgentLoop::new(model, host, gate, context, limits)
         .with_orchestration(orchestration)
-        .with_child_executor(std::sync::Arc::new(ScriptedChildExecutor::new()))
+        .with_child_executor(Arc::new(child_executor))
         .run()
         .await;
     let (outcome, engine) = match run {
@@ -1385,7 +1753,10 @@ fn select_personality<'a>(
     requested_id: Option<&str>,
 ) -> &'a aelio_agent::tenant::PersonalitySpec {
     if let Some(id) = requested_id.map(str::trim).filter(|id| !id.is_empty()) {
-        if let Some(matched) = personalities.iter().find(|personality| personality.id == id) {
+        if let Some(matched) = personalities
+            .iter()
+            .find(|personality| personality.id == id)
+        {
             return matched;
         }
     }
@@ -1929,6 +2300,19 @@ mod tests {
             project_tool(&tool).effect_class,
             EffectClass::WriteIrreversible
         );
+    }
+
+    #[test]
+    fn child_return_schema_rejects_false_success_payloads() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "answer": { "type": "string" } },
+            "required": ["answer"],
+            "additionalProperties": false
+        });
+        assert!(child_result_data(r#"{"answer":"real"}"#, Some(&schema)).is_ok());
+        assert!(child_result_data(r#"{"status":"child completed"}"#, Some(&schema)).is_err());
+        assert!(child_result_data("child completed", Some(&schema)).is_err());
     }
 
     #[test]
